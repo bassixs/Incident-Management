@@ -23,7 +23,10 @@ services:
       - .env
     environment:
       # Inside the compose network Postgres is reachable by service name.
-      DATABASE_URL: postgresql://${POSTGRES_USER:-incident}:${POSTGRES_PASSWORD:-incident}@postgres:5432/${POSTGRES_DB:-incident}?schema=public
+      # connection_limit is set explicitly: Prisma would otherwise size the
+      # pool as num_cpus*2+1, which is 5 on a 2-core host — measured too small
+      # for a burst of simultaneous registrations. Postgres allows 100.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-incident}:${POSTGRES_PASSWORD:-incident}@postgres:5432/${POSTGRES_DB:-incident}?schema=public&connection_limit=${DB_CONNECTION_LIMIT:-20}&pool_timeout=20
       HTTP_HOST: 0.0.0.0
       HTTP_PORT: 3000
       # *.max.ru is signed by the Russian Trusted Root CA, which is not in the

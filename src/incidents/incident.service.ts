@@ -4,7 +4,7 @@ import type { ClassificationResult } from '../ai/classifier.interface';
 import type { ModerationResult } from '../ai/moderation.interface';
 import type { BanService } from '../bans/ban.service';
 import { getConfig } from '../config';
-import { acquireAdvisoryLock } from '../database/prisma';
+import { acquireAdvisoryLock, TRANSACTION_OPTIONS } from '../database/prisma';
 import type { IncomingMedia, MediaService, StoredMedia } from '../media/media.service';
 import type { UserService } from '../users/user.service';
 import { computeDeadline, dayBoundaries } from '../utils/datetime';
@@ -162,7 +162,7 @@ export class IncidentService {
       );
 
       return created;
-    });
+    }, TRANSACTION_OPTIONS);
 
     log.info(
       incidentLogFields({

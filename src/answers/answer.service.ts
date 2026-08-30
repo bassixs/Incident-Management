@@ -6,7 +6,7 @@ import {
   type PrismaClient,
 } from '@prisma/client';
 
-import { acquireAdvisoryLock } from '../database/prisma';
+import { acquireAdvisoryLock, TRANSACTION_OPTIONS } from '../database/prisma';
 import { HistoryAction, type IncidentHistoryService } from '../incidents/incident-history.service';
 import type { IncidentStateService } from '../incidents/incident-state.service';
 import type { IncidentRepository, IncidentWithRelations } from '../incidents/incident.repository';
@@ -146,7 +146,7 @@ export class AnswerService {
       );
 
       return created;
-    });
+    }, TRANSACTION_OPTIONS);
 
     await this.attachMedia(answer.id, media);
 

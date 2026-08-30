@@ -35,6 +35,21 @@ export async function disconnectDatabase(): Promise<void> {
 export type Tx = Prisma.TransactionClient;
 export type PrismaLike = PrismaClient | Tx;
 
+/**
+ * Options for the interactive transactions that guard incident creation and
+ * answer submission.
+ *
+ * Prisma defaults to maxWait = 2s, which is the time a request may spend
+ * queueing for a pooled connection. Measured on the target server, a burst of
+ * 500 simultaneous registrations exhausted that budget and about a third of
+ * them failed with "Unable to start a transaction in the given time" — even
+ * though the work itself takes ~60 ms. For a bot, waiting is strictly better
+ * than failing: MAX already has its 200 OK and the person is simply waiting
+ * for the confirmation message. `timeout` bounds the transaction itself, which
+ * is short by design, so it only ever fires if the database is truly stuck.
+ */
+export const TRANSACTION_OPTIONS = { maxWait: 15_000, timeout: 20_000 } as const;
+
 export const UNIQUE_VIOLATION = 'P2002';
 
 export function isUniqueViolation(error: unknown): boolean {
