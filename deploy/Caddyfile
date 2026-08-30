@@ -1,0 +1,20 @@
+# Reverse proxy terminating TLS for the MAX webhook.
+# The domain comes from PUBLIC_DOMAIN in .env; Caddy obtains and renews the
+# Let's Encrypt certificate on its own.
+{$PUBLIC_DOMAIN} {
+	encode zstd gzip
+
+	# Only the bot endpoints are exposed; everything else is a flat 404 so the
+	# host does not advertise what runs behind it.
+	handle /webhook/* {
+		reverse_proxy app:3000
+	}
+
+	handle /health {
+		reverse_proxy app:3000
+	}
+
+	handle {
+		respond "Not found" 404
+	}
+}

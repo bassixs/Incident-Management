@@ -1,0 +1,293 @@
+// Incident Management Bot for MAX — database schema.
+//
+// Design rules encoded here:
+//  * Incident.id (uuid) is the ONLY source of truth linking a request to its
+//    author, sector, answers and final delivery. publicCode is a human label.
+//  * Nothing important lives in process memory: sessions, dedup markers and
+//    SLA notification flags are all persisted so a restart changes nothing.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum IncidentStatus {
+  NEW
+  DISTRIBUTION
+  ASSIGNED
+  IN_PROGRESS
+  WAITING_REVIEW
+  REVISION_REQUIRED
+  REJECTED
+  RESOLVED
+}
+
+enum AnswerStatus {
+  DRAFT
+  WAITING_REVIEW
+  APPROVED
+  REVISION_REQUIRED
+}
+
+enum AttachmentType {
+  IMAGE
+  FILE
+}
+
+enum SessionType {
+  WAITING_INCIDENT_TEXT
+  WAITING_REJECTION_REASON
+  WAITING_REVISION_REASON
+  WAITING_FOR_ANSWER
+  WAITING_BAN_REASON
+  WAITING_REPORT_PERIOD
+}
+
+enum UserRole {
+  REQUESTER
+  DISPATCHER
+  RESPONDER
+  APPROVER
+  ADMIN
+}
+
+model User {
+  id          String     @id @default(uuid())
+  maxUserId   BigInt     @unique
+  displayName String
+  username    String?
+  roles       UserRole[] @default([])
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  incidents       Incident[]       @relation("IncidentRequester")
+  assignedByMe    Incident[]       @relation("IncidentAssignedBy")
+  respondingTo    Incident[]       @relation("IncidentResponder")
+  approvedByMe    Incident[]       @relation("IncidentApprover")
+  authoredAnswers IncidentAnswer[] @relation("AnswerAuthor")
+  approvedAnswers IncidentAnswer[] @relation("AnswerApprover")
+  bansIssued      Ban[]            @relation("BanAuthor")
+
+  @@index([maxUserId])
+}
+
+model Category {
+  id             String   @id @default(uuid())
+  code           String   @unique
+  name           String
+  maxChatId      BigInt?
+  answerTemplate String?
+  isActive       Boolean  @default(true)
+  sortOrder      Int      @default(100)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  userSelectedIncidents Incident[] @relation("UserSelectedCategory")
+  aiSuggestedIncidents  Incident[] @relation("AiSuggestedCategory")
+  assignedIncidents     Incident[] @relation("AssignedCategory")
+
+  @@index([isActive, sortOrder])
+}
+
+model Incident {
+  id         String @id @default(uuid())
+  publicCode String @unique
+
+  requesterId        String
+  requester          User   @relation("IncidentRequester", fields: [requesterId], references: [id])
+  requesterMaxUserId BigInt
+  requesterName      String
+
+  text String
+
+  userSelectedCategoryId String?
+  userSelectedCategory   Category? @relation("UserSelectedCategory", fields: [userSelectedCategoryId], references: [id])
+  aiSuggestedCategoryId  String?
+  aiSuggestedCategory    Category? @relation("AiSuggestedCategory", fields: [aiSuggestedCategoryId], references: [id])
+  assignedCategoryId     String?
+  assignedCategory       Category? @relation("AssignedCategory", fields: [assignedCategoryId], references: [id])
+
+  aiSuggestions      Json?
+  aiPossibleAbuse    Boolean @default(false)
+  aiPossibleOfftopic Boolean @default(false)
+  aiModerationReason String?
+
+  status IncidentStatus @default(DISTRIBUTION)
+
+  createdAt  DateTime  @default(now())
+  deadlineAt DateTime
+  answeredAt DateTime?
+  updatedAt  DateTime  @updatedAt
+
+  // MAX message ids of the cards published in the working chats.
+  distributionMessageId String?
+  sectorMessageId       String?
+  reviewMessageId       String?
+
+  assignedAt       DateTime?
+  assignedByUserId String?
+  assignedBy       User?     @relation("IncidentAssignedBy", fields: [assignedByUserId], references: [id])
+
+  currentResponderId String?
+  currentResponder   User?   @relation("IncidentResponder", fields: [currentResponderId], references: [id])
+
+  approvedByUserId String?
+  approvedBy       User?   @relation("IncidentApprover", fields: [approvedByUserId], references: [id])
+
+  revisionCount   Int     @default(0)
+  rejectionReason String?
+  revisionReason  String?
+
+  isOverdue         Boolean   @default(false)
+  slaWarn24SentAt   DateTime?
+  slaWarn6SentAt    DateTime?
+  overdueNotifiedAt DateTime?
+
+  attachments IncidentAttachment[]
+  answers     IncidentAnswer[]
+  history     IncidentHistory[]
+  sessions    OperatorSession[]
+
+  @@index([requesterId, createdAt])
+  @@index([requesterMaxUserId, createdAt])
+  @@index([status])
+  @@index([deadlineAt])
+  @@index([assignedCategoryId])
+  @@index([createdAt])
+}
+
+model IncidentAttachment {
+  id           String         @id @default(uuid())
+  incidentId   String
+  incident     Incident       @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  type         AttachmentType
+  storageKey   String
+  mimeType     String?
+  originalName String?
+  size         Int?
+  sourceUrl    String?
+  maxToken     String?
+  createdAt    DateTime       @default(now())
+
+  @@index([incidentId])
+}
+
+model IncidentAnswer {
+  id         String   @id @default(uuid())
+  incidentId String
+  incident   Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  version    Int
+  text       String
+
+  createdByUserId String
+  createdBy       User     @relation("AnswerAuthor", fields: [createdByUserId], references: [id])
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  status AnswerStatus @default(DRAFT)
+
+  approvedAt       DateTime?
+  approvedByUserId String?
+  approvedBy       User?     @relation("AnswerApprover", fields: [approvedByUserId], references: [id])
+
+  revisionReason String?
+  deliveredAt    DateTime?
+
+  attachments AnswerAttachment[]
+
+  @@unique([incidentId, version])
+  @@index([incidentId, status])
+}
+
+model AnswerAttachment {
+  id           String         @id @default(uuid())
+  answerId     String
+  answer       IncidentAnswer @relation(fields: [answerId], references: [id], onDelete: Cascade)
+  type         AttachmentType
+  storageKey   String
+  mimeType     String?
+  originalName String?
+  size         Int?
+  sourceUrl    String?
+  maxToken     String?
+  createdAt    DateTime       @default(now())
+
+  @@index([answerId])
+}
+
+model IncidentHistory {
+  id         String   @id @default(uuid())
+  incidentId String
+  incident   Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  action     String
+  fromStatus IncidentStatus?
+  toStatus   IncidentStatus?
+
+  actorMaxUserId BigInt?
+  actorRole      String?
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([incidentId, createdAt])
+  @@index([action])
+}
+
+model Ban {
+  id        String  @id @default(uuid())
+  maxUserId BigInt
+  reason    String
+  isActive  Boolean @default(true)
+
+  createdById String?
+  createdBy   User?     @relation("BanAuthor", fields: [createdById], references: [id])
+  createdAt   DateTime  @default(now())
+  revokedAt   DateTime?
+  updatedAt   DateTime  @updatedAt
+
+  @@index([maxUserId, isActive])
+}
+
+model OperatorSession {
+  id         String      @id @default(uuid())
+  maxUserId  BigInt
+  chatId     BigInt
+  type       SessionType
+  incidentId String?
+  incident   Incident?   @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  data       Json?
+  expiresAt  DateTime
+  createdAt  DateTime    @default(now())
+
+  @@unique([maxUserId, chatId])
+  @@index([maxUserId, chatId])
+  @@index([expiresAt])
+}
+
+model SystemSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+/// Atomic per-day counter backing Incident.publicCode (INC-YYYYMMDD-NNNN).
+model IncidentCounter {
+  day        String @id
+  lastNumber Int    @default(0)
+}
+
+/// Webhook idempotency: an update whose key is already here is never replayed.
+model ProcessedUpdate {
+  id                String   @id @default(uuid())
+  externalUpdateKey String   @unique
+  updateType        String
+  processedAt       DateTime @default(now())
+
+  @@index([processedAt])
+}

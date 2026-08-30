@@ -1,0 +1,94 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-incident}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-incident}
+      POSTGRES_DB: ${POSTGRES_DB:-incident}
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-incident} -d ${POSTGRES_DB:-incident}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Inside the compose network Postgres is reachable by service name.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-incident}:${POSTGRES_PASSWORD:-incident}@postgres:5432/${POSTGRES_DB:-incident}?schema=public
+      HTTP_HOST: 0.0.0.0
+      HTTP_PORT: 3000
+      # *.max.ru is signed by the Russian Trusted Root CA, which is not in the
+      # default trust store, so the MAX API is unreachable without it. Scoped
+      # deliberately to this process: it does not touch the host trust store
+      # and does not affect any other container.
+      NODE_EXTRA_CA_CERTS: /etc/ssl/max/russian-trusted-ca.pem
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      # Loopback only: the public entrance is Caddy, which terminates TLS.
+      # Drop the 127.0.0.1 prefix if you front the bot with something else.
+      - '127.0.0.1:${HTTP_PORT:-3000}:3000'
+    volumes:
+      - uploads:/app/data/uploads
+      - ./deploy/russian-trusted-ca.pem:/etc/ssl/max/russian-trusted-ca.pem:ro
+    # Migrations are applied on start so a fresh volume comes up ready.
+    command: sh -c "npx prisma migrate deploy && node dist/index.js"
+
+  # TLS termination for the webhook. Start with:
+  #   docker compose --profile tls up -d
+  # PUBLIC_DOMAIN must resolve to this host before the first start, otherwise
+  # Let's Encrypt cannot validate it.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ['tls']
+    restart: unless-stopped
+    environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?PUBLIC_DOMAIN is required for the tls profile}
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+
+  # Optional S3-compatible storage for MEDIA_STORAGE=s3.
+  # Start with: docker compose --profile s3 up -d
+  minio:
+    image: minio/minio:latest
+    profiles: ['s3']
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-minioadmin}
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
+  uploads:
+  minio-data:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,153 @@
+import { Keyboard } from '@maxhub/max-bot-api';
+import type { Button } from '../../max/max-types';
+import type { Category } from '@prisma/client';
+
+import {
+  incidentCallback,
+  NOOP_CALLBACK,
+  reportCallback,
+  sessionCallback,
+  userCallback,
+} from '../../max/callback-payload';
+import { PRESET_LABELS } from '../../reports/report-range';
+
+const { button } = Keyboard;
+
+/** Requester main menu (§53). */
+export function mainMenuKeyboard(): Button[][] {
+  return [
+    [button.callback('📝 Создать обращение', userCallback('new'))],
+    [button.callback('🔎 Мои обращения', userCallback('my-incidents'))],
+    [button.callback('ℹ️ Правила', userCallback('rules'))],
+  ];
+}
+
+/** Сферы shown per page of the requester's picker. */
+export const CATEGORY_PAGE_SIZE = 6;
+
+export function categoryPageCount(total: number): number {
+  return Math.max(1, Math.ceil(total / CATEGORY_PAGE_SIZE));
+}
+
+/**
+ * Paged сфера picker (§7).
+ *
+ * With two dozen сферы a single list is a long scroll on a phone, so the page
+ * shows a handful at a time with arrows. "Не знаю" stays pinned on top: it is
+ * the honest answer for most people and the shortest path, and the choice is
+ * only a hint for the dispatcher anyway.
+ */
+export function requesterCategoryKeyboard(categories: Category[], page = 0): Button[][] {
+  const pages = categoryPageCount(categories.length);
+  const current = Math.min(Math.max(page, 0), pages - 1);
+  const slice = categories.slice(current * CATEGORY_PAGE_SIZE, (current + 1) * CATEGORY_PAGE_SIZE);
+
+  const rows: Button[][] = [
+    [button.callback('Не знаю', userCallback('category', 'none'))],
+    ...slice.map((category) => [button.callback(category.name, userCallback('category', category.id))]),
+  ];
+
+  if (pages > 1) {
+    const nav: Button[] = [];
+    if (current > 0) nav.push(button.callback('⬅️ Назад', userCallback('page', String(current - 1))));
+    nav.push(button.callback(`${current + 1} / ${pages}`, NOOP_CALLBACK));
+    if (current < pages - 1) nav.push(button.callback('Вперёд ➡️', userCallback('page', String(current + 1))));
+    rows.push(nav);
+  }
+
+  return rows;
+}
+
+/** Buttons under the distribution-chat card (§16). */
+export function distributionKeyboard(incidentId: string): Button[][] {
+  return [
+    [button.callback('Распределить', incidentCallback('assign', incidentId), { intent: 'positive' })],
+    [button.callback('Отклонить', incidentCallback('reject', incidentId), { intent: 'negative' })],
+    [button.callback('Заблокировать автора', incidentCallback('ban', incidentId), { intent: 'negative' })],
+  ];
+}
+
+/**
+ * Sector picker for a dispatcher (§17). The AI-recommended сфера is marked and
+ * listed first, but it carries no special power — the operator still chooses.
+ */
+export function assignCategoryKeyboard(
+  incidentId: string,
+  categories: Category[],
+  recommendedCategoryId?: string | null,
+): Button[][] {
+  const ordered = [...categories].sort((left, right) => {
+    if (left.id === recommendedCategoryId) return -1;
+    if (right.id === recommendedCategoryId) return 1;
+    return 0;
+  });
+  const rows = ordered.map((category) => [
+    button.callback(
+      category.id === recommendedCategoryId ? `⭐ ${category.name}` : category.name,
+      incidentCallback('assign-category', incidentId, category.id),
+    ),
+  ]);
+  rows.push([button.callback('Отмена', incidentCallback('cancel', incidentId))]);
+  return rows;
+}
+
+/** Buttons under the sector-chat card (§21). */
+export function sectorKeyboard(incidentId: string, options: { aiEnabled: boolean; hasTemplate: boolean }): Button[][] {
+  const rows: Button[][] = [
+    [button.callback('Взять в работу', incidentCallback('take', incidentId), { intent: 'positive' })],
+    [button.callback('Подготовить ответ', incidentCallback('answer', incidentId))],
+  ];
+  if (options.hasTemplate) {
+    rows.push([button.callback('Использовать шаблон', incidentCallback('template', incidentId))]);
+  }
+  if (options.aiEnabled) {
+    rows.push([button.callback('AI-черновик', incidentCallback('ai-draft', incidentId))]);
+  }
+  return rows;
+}
+
+/** Buttons under the review-chat card (§29). */
+export function reviewKeyboard(incidentId: string): Button[][] {
+  return [
+    [button.callback('✅ Согласовать', incidentCallback('approve', incidentId), { intent: 'positive' })],
+    [button.callback('↩️ На доработку', incidentCallback('revision', incidentId), { intent: 'negative' })],
+  ];
+}
+
+/** Button under the "returned for revision" card in the sector chat (§32). */
+export function revisionKeyboard(incidentId: string): Button[][] {
+  return [[button.callback('Исправить ответ', incidentCallback('fix', incidentId), { intent: 'positive' })]];
+}
+
+/** Choices offered after an AI draft is generated (§26). */
+export function aiDraftKeyboard(incidentId: string): Button[][] {
+  return [
+    [button.callback('Использовать', incidentCallback('ai-draft-use', incidentId), { intent: 'positive' })],
+    [button.callback('Перегенерировать', incidentCallback('ai-draft-regen', incidentId))],
+    [button.callback('Отмена', incidentCallback('cancel', incidentId))],
+  ];
+}
+
+/** Period picker shown by a bare `/report` (§40). */
+export function reportPeriodKeyboard(): Button[][] {
+  return [
+    [
+      button.callback(PRESET_LABELS.today, reportCallback('today')),
+      button.callback(PRESET_LABELS['7d'], reportCallback('7d')),
+    ],
+    [
+      button.callback(PRESET_LABELS['30d'], reportCallback('30d')),
+      button.callback(PRESET_LABELS.month, reportCallback('month')),
+    ],
+    [button.callback(PRESET_LABELS.all, reportCallback('all'))],
+    [button.callback('📅 Указать период', reportCallback('custom'))],
+  ];
+}
+
+/** Offered when an operator starts a new action with one already pending (§37). */
+export function sessionConflictKeyboard(): Button[][] {
+  return [
+    [button.callback('Продолжить', sessionCallback('continue'), { intent: 'positive' })],
+    [button.callback('Отменить', sessionCallback('cancel'), { intent: 'negative' })],
+  ];
+}

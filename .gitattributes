@@ -1,0 +1,9 @@
+# The project is developed on Windows and runs on Linux in Docker: store
+# everything with LF so the Dockerfile, Caddyfile and shell snippets stay
+# usable after a checkout on either platform.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.webp binary
+*.xlsx binary

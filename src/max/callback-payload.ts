@@ -1,0 +1,110 @@
+/**
+ * Structured callback payloads.
+ *
+ * Rules:
+ *  * никогда free text - only a fixed verb plus opaque ids;
+ *  * the payload is a *routing hint only*. Every handler re-loads the incident
+ *    from the database and re-checks status, role and chat before acting.
+ */
+
+export const INCIDENT_ACTIONS = [
+  'assign',
+  'assign-category',
+  'reject',
+  'ban',
+  'take',
+  'answer',
+  'ai-draft',
+  'ai-draft-regen',
+  'ai-draft-use',
+  'template',
+  'approve',
+  'revision',
+  'fix',
+  'cancel',
+] as const;
+
+export type IncidentAction = (typeof INCIDENT_ACTIONS)[number];
+
+export const USER_ACTIONS = ['new', 'category', 'page', 'my-incidents', 'rules', 'menu'] as const;
+export type UserAction = (typeof USER_ACTIONS)[number];
+
+export const SESSION_ACTIONS = ['continue', 'cancel'] as const;
+export type SessionAction = (typeof SESSION_ACTIONS)[number];
+
+/** Period buttons under `/report`; `custom` asks the operator to type dates. */
+export const REPORT_ACTIONS = ['today', '7d', '30d', 'month', 'all', 'custom'] as const;
+export type ReportAction = (typeof REPORT_ACTIONS)[number];
+
+export type CallbackPayload =
+  | { kind: 'incident'; action: IncidentAction; incidentId: string; argument?: string }
+  | { kind: 'user'; action: UserAction; argument?: string }
+  | { kind: 'session'; action: SessionAction }
+  | { kind: 'report'; action: ReportAction }
+  | { kind: 'noop' };
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isUuid(value: string): boolean {
+  return UUID_RE.test(value);
+}
+
+export function incidentCallback(action: IncidentAction, incidentId: string, argument?: string): string {
+  return argument === undefined
+    ? `incident:${action}:${incidentId}`
+    : `incident:${action}:${incidentId}:${argument}`;
+}
+
+export function userCallback(action: UserAction, argument?: string): string {
+  return argument === undefined ? `user:${action}` : `user:${action}:${argument}`;
+}
+
+export function sessionCallback(action: SessionAction): string {
+  return `session:${action}`;
+}
+
+export function reportCallback(action: ReportAction): string {
+  return `report:${action}`;
+}
+
+export const NOOP_CALLBACK = 'noop';
+
+/** Returns null for anything malformed; callers answer with a generic notice. */
+export function parseCallbackPayload(raw: string | undefined | null): CallbackPayload | null {
+  if (!raw) return null;
+  if (raw === NOOP_CALLBACK) return { kind: 'noop' };
+
+  const parts = raw.split(':');
+  const [namespace, action, ...rest] = parts;
+
+  if (namespace === 'incident') {
+    if (!action || !INCIDENT_ACTIONS.includes(action as IncidentAction)) return null;
+    const incidentId = rest[0];
+    if (!incidentId || !isUuid(incidentId)) return null;
+    const argument = rest[1];
+    return {
+      kind: 'incident',
+      action: action as IncidentAction,
+      incidentId,
+      ...(argument === undefined ? {} : { argument }),
+    };
+  }
+
+  if (namespace === 'user') {
+    if (!action || !USER_ACTIONS.includes(action as UserAction)) return null;
+    const argument = rest[0];
+    return { kind: 'user', action: action as UserAction, ...(argument === undefined ? {} : { argument }) };
+  }
+
+  if (namespace === 'session') {
+    if (!action || !SESSION_ACTIONS.includes(action as SessionAction)) return null;
+    return { kind: 'session', action: action as SessionAction };
+  }
+
+  if (namespace === 'report') {
+    if (!action || !REPORT_ACTIONS.includes(action as ReportAction)) return null;
+    return { kind: 'report', action: action as ReportAction };
+  }
+
+  return null;
+}
