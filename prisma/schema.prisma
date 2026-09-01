@@ -80,6 +80,10 @@ model Category {
   code           String   @unique
   name           String
   maxChatId      BigInt?
+  /// Официальное название ведомства для подписи под ответом жителю.
+  /// Отличается от name: name — тема для маршрутизации («Дороги»), здесь —
+  /// организация, которая отвечает («Министерство транспорта Калужской области»).
+  authorityName  String?
   answerTemplate String?
   isActive       Boolean  @default(true)
   sortOrder      Int      @default(100)

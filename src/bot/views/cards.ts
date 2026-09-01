@@ -167,6 +167,11 @@ export function reviewCard(
     '',
     'Ответ:',
     answer.text,
+    // The approver must see the signature the requester will get, since it is
+    // added automatically and is not part of the text under review.
+    ...(category?.authorityName
+      ? ['', 'Уйдёт за подписью:', category.authorityName]
+      : ['', '⚠️ Ведомство для подписи не задано — ответ уйдёт без подписи.']),
     ...(attachmentLines.length ? ['', '📎 Вложения ответа:', ...attachmentLines] : []),
     '',
     'Первоначальная дата:',
@@ -201,8 +206,21 @@ export function revisionCard(incident: Incident, answerVersion: number, reason: 
   ].join('\n');
 }
 
-/** §31 — the final answer, delivered to the incident's own requester. */
-export function finalAnswerToRequester(incident: Incident, answer: IncidentAnswer, answeredAt: Date): string {
+/**
+ * §31 — the final answer, delivered to the incident's own requester.
+ *
+ * The authority signature is filled in from the сфера, never typed by the
+ * responder: it cannot be forgotten, mistyped or attributed to the wrong body.
+ * When a сфера has no authority set yet, the block is omitted entirely rather
+ * than falling back to the topic name — «Ответ подготовлен Здравоохранением»
+ * would read as nonsense.
+ */
+export function finalAnswerToRequester(
+  incident: Incident,
+  answer: IncidentAnswer,
+  answeredAt: Date,
+  authorityName?: string | null,
+): string {
   return [
     '✅ Получен ответ по вашему обращению.',
     '',
@@ -213,6 +231,7 @@ export function finalAnswerToRequester(incident: Incident, answer: IncidentAnswe
     '',
     'Ответ:',
     answer.text,
+    ...(authorityName ? ['', 'Ответ подготовлен:', authorityName] : []),
     '',
     'Дата ответа:',
     formatDate(answeredAt),

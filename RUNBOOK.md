@@ -265,6 +265,7 @@ docker compose --profile tls up -d --build app
 /categories                       список с группировкой по готовности
 /category_chat ROADS <CHAT_ID>    привязать чат
 /category_name ROADS Дороги       переименовать (код не меняется)
+/category_authority ROADS <Ведомство>   ведомство для подписи под ответом
 /category_off ROADS               скрыть из выбора
 /category_add NEWCODE Название    добавить новую
 ```
@@ -294,6 +295,9 @@ docker compose exec -T postgres pg_dump -U incident -d incident -Fc > backup-$(d
 - [ ] Раздать роли реальным сотрудникам: DISPATCHER на распределение, APPROVER на согласование
 - [ ] Настроить регулярный бэкап БД
 - [ ] При росте объёма вложений перевести `MEDIA_STORAGE` на `s3`
+- [ ] Задать ведомства для оставшихся 9 сфер: `SECURITY`, `IMPROVEMENT`,
+      `MILITARY`, `PROPERTY`, `ETHNIC`, `WASTE`, `AUTHORITIES`, `AGRICULTURE`,
+      `ENERGY` — до этого их ответы уходят без подписи
 
 Безопасность:
 

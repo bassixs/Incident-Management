@@ -92,6 +92,17 @@ export class CategoryService {
     return this.prisma.category.update({ where: { code: code.toUpperCase() }, data: { name } });
   }
 
+  /**
+   * Official body that signs answers for this сфера.
+   * `null` clears it, and an unset authority simply omits the signature.
+   */
+  async setAuthority(code: string, authorityName: string | null): Promise<Category> {
+    return this.prisma.category.update({
+      where: { code: code.toUpperCase() },
+      data: { authorityName },
+    });
+  }
+
   async setTemplate(code: string, answerTemplate: string | null): Promise<Category> {
     return this.prisma.category.update({ where: { code: code.toUpperCase() }, data: { answerTemplate } });
   }

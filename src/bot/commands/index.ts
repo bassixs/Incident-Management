@@ -40,6 +40,7 @@ const STAFF_HELP = [
   '/category_chat <КОД> <CHAT_ID>',
   '/category_on <КОД> | /category_off <КОД>',
   '/category_name <КОД> <Новое название>',
+  '/category_authority <КОД> <Ведомство для подписи | ->',
   '/category_template <КОД> <шаблон|-> ',
   '/role <MAX_USER_ID> <ADMIN,DISPATCHER,...|-> ',
   '/sla_check — принудительная проверка сроков',
@@ -188,7 +189,8 @@ export const COMMANDS: Record<string, CommandHandler> = {
     }
 
     const describe = (category: (typeof categories)[number]): string =>
-      `${category.code} — ${category.name}${category.answerTemplate ? ' 📄' : ''}`;
+      `${category.code} — ${category.name}${category.answerTemplate ? ' 📄' : ''}\n` +
+      `     ${category.authorityName ?? '⚠️ ведомство не задано'}`;
 
     const ready = categories.filter((item) => item.isActive && item.maxChatId !== null);
     const noChat = categories.filter((item) => item.isActive && item.maxChatId === null);
@@ -215,6 +217,9 @@ export const COMMANDS: Record<string, CommandHandler> = {
           : []),
         ...(disabled.length ? ['', `⛔ Отключены (${disabled.length}):`, ...disabled.map(describe)] : []),
         '',
+        `Без ведомства для подписи: ${categories.filter((item) => item.isActive && !item.authorityName).length}`,
+        'Задать: /category_authority <КОД> <Название ведомства>',
+        '',
         '📄 — задан шаблон ответа',
       ].join('\n'),
     );
@@ -239,6 +244,32 @@ export const COMMANDS: Record<string, CommandHandler> = {
 
   category_on: async (context) => setCategoryActive(context, true),
   category_off: async (context) => setCategoryActive(context, false),
+
+  /**
+   * Sets the body that signs answers for a сфера. The signature is added to
+   * the answer automatically, so responders never type it.
+   */
+  category_authority: async ({ services, actor, chatId, isDialog, args }) => {
+    requirePermission(actor, 'admin.manage');
+    const [code, ...nameParts] = args;
+    if (!code) {
+      throw new ValidationError('Использование: /category_authority <КОД> <Название ведомства | ->');
+    }
+    const authority = nameParts.join(' ').trim();
+    const category = await services.categories.setAuthority(
+      code,
+      authority === '' || authority === '-' ? null : authority,
+    );
+    await reply(
+      services,
+      chatId,
+      isDialog,
+      actor,
+      category.authorityName
+        ? `Сфера ${category.code}: ответы будут подписаны «${category.authorityName}».`
+        : `Сфера ${category.code}: подпись ведомства убрана.`,
+    );
+  },
 
   /** Renames the display label; the code stays put so history keeps matching. */
   category_name: async ({ services, actor, chatId, isDialog, args }) => {

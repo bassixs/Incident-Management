@@ -118,7 +118,7 @@ export class ReviewService {
       await this.delivery.deliverAnswer(
         incidentId,
         answer.id,
-        finalAnswerToRequester(incident, answer, answeredAt),
+        finalAnswerToRequester(incident, answer, answeredAt, incident.assignedCategory?.authorityName),
       );
     } catch (error) {
       // The incident stays RESOLVED (it was approved), but the answer is not
@@ -247,7 +247,12 @@ export class ReviewService {
     return this.delivery.deliverAnswer(
       incidentId,
       answer.id,
-      finalAnswerToRequester(incident, answer, incident.answeredAt ?? answer.approvedAt ?? new Date()),
+      finalAnswerToRequester(
+        incident,
+        answer,
+        incident.answeredAt ?? answer.approvedAt ?? new Date(),
+        incident.assignedCategory?.authorityName,
+      ),
     );
   }
 
