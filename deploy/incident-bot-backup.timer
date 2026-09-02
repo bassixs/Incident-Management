@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily Incident Management Bot backup
+
+[Timer]
+OnCalendar=*-*-* 00:30:00 UTC
+RandomizedDelaySec=10m
+AccuracySec=1m
+Persistent=true
+Unit=incident-bot-backup.service
+
+[Install]
+WantedBy=timers.target

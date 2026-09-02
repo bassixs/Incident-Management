@@ -1,0 +1,17 @@
+[Unit]
+Description=Incident Management Bot verified backup
+Requires=docker.service
+After=docker.service network-online.target
+ConditionPathExists=/opt/incident-bot/docker-compose.yml
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+EnvironmentFile=-/etc/incident-bot-backup.conf
+ExecStart=/opt/incident-bot/deploy/backup.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+

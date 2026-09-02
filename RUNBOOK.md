@@ -266,13 +266,46 @@ docker compose --profile tls up -d --build app
 
 ### Резервное копирование
 
-Настроить регулярный дамп (сейчас его нет):
+Ежедневный проверяемый бэкап запускает systemd-таймер
+`incident-bot-backup.timer`. Расписание — `00:30 UTC` (03:30 МСК) плюс
+случайная задержка до 10 минут; `Persistent=true` догоняет пропущенный запуск
+после включения сервера.
+
+Скрипт `deploy/backup.sh` атомарно создаёт в `/opt/incident-bot/backups/`:
+
+* PostgreSQL custom dump (`incident.dump`);
+* архив локальных вложений (`uploads.tar.gz`);
+* закрытые копии `.env` и `docker-compose.yml`;
+* метаданные и `SHA256SUMS`.
+
+До публикации каталога скрипт проверяет все SHA-256, читает дамп через
+`pg_restore --list` и архив через `tar -tzf`. Незавершённый каталог удаляется,
+а `latest` указывает только на полностью проверенную копию. Права каталога —
+`700`, файлов — `600`.
+
+Хранение: 14 дней ежедневных, 70 дней еженедельных и 400 дней ежемесячных
+копий. Недельная копия создаётся по воскресеньям, месячная — первого числа;
+они используют hard links и не дублируют неизменившиеся файлы на диске.
+
+Проверка и ручной запуск:
 
 ```bash
-docker compose exec -T postgres pg_dump -U incident -d incident -Fc > backup-$(date +%F).dump
+systemctl list-timers incident-bot-backup.timer --all
+systemctl status incident-bot-backup.timer
+systemctl start incident-bot-backup.service
+journalctl -u incident-bot-backup.service -n 100 --no-pager
+
+cd /opt/incident-bot/backups/latest
+sha256sum -c SHA256SUMS
+cd /opt/incident-bot
+docker compose exec -T postgres pg_restore --list \
+  < backups/latest/incident.dump >/dev/null
 ```
 
-Отдельно — каталог вложений (`MEDIA_STORAGE=local`, том `incident-bot_uploads`).
+Первый прогон `daily-20260902-112610` успешно проверен: 96 объектов в дампе,
+архив вложений читается, приложение осталось `ready`, все 11 обращений на
+месте. Локальная автоматизация не заменяет внешнюю копию: до production нужно
+настроить отправку проверенного комплекта на отдельный сервер или S3.
 
 ---
 
@@ -284,7 +317,9 @@ docker compose exec -T postgres pg_dump -U incident -d incident -Fc > backup-$(d
 - [ ] `LOG_LEVEL` вернуть с `debug` на `info`
 - [ ] Роли перенести из `.env` в БД: `/role <MAX_ID> ADMIN` — сейчас доступ держится на `ADMINS` в `.env`
 - [ ] Раздать роли реальным сотрудникам: DISPATCHER на распределение, APPROVER на согласование
-- [ ] Настроить регулярный бэкап БД
+- [x] Настроить ежедневный локальный бэкап БД, вложений и конфигурации с
+      проверкой целостности и ротацией
+- [ ] Настроить автоматическую внешнюю копию бэкапов на другой сервер или S3
 - [ ] При росте объёма вложений перевести `MEDIA_STORAGE` на `s3`
 - [ ] Задать ведомства для оставшихся 9 сфер: `SECURITY`, `IMPROVEMENT`,
       `MILITARY`, `PROPERTY`, `ETHNIC`, `WASTE`, `AUTHORITIES`, `AGRICULTURE`,
