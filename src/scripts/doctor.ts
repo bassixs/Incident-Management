@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { Bot } from '@maxhub/max-bot-api';
-import { PrismaClient, UserRole } from '@prisma/client';
+import { InboxStatus, OutboxStatus, PrismaClient, UserRole } from '@prisma/client';
 
 import { getConfig } from '../config';
 import { createMaxClient, type MaxClient } from '../max/max-client';
@@ -224,6 +224,25 @@ async function checkRoles(prisma: PrismaClient): Promise<void> {
   );
 }
 
+async function checkDeliveryQueues(prisma: PrismaClient): Promise<void> {
+  try {
+    const [outPending, outSending, outFailed, inPending, inProcessing, inFailed] = await Promise.all([
+      prisma.outboundMessage.count({ where: { status: OutboxStatus.PENDING } }),
+      prisma.outboundMessage.count({ where: { status: OutboxStatus.SENDING } }),
+      prisma.outboundMessage.count({ where: { status: OutboxStatus.FAILED } }),
+      prisma.inboundUpdate.count({ where: { status: InboxStatus.PENDING } }),
+      prisma.inboundUpdate.count({ where: { status: InboxStatus.PROCESSING } }),
+      prisma.inboundUpdate.count({ where: { status: InboxStatus.FAILED } }),
+    ]);
+    const detail =
+      `Исходящие — ждут: ${outPending}, отправляются: ${outSending}, ошибки: ${outFailed}; ` +
+      `входящие — ждут: ${inPending}, обрабатываются: ${inProcessing}, ошибки: ${inFailed}`;
+    record('Очереди доставки', outFailed > 0 || inFailed > 0 ? 'fail' : 'ok', detail);
+  } catch (error) {
+    record('Очереди доставки', 'fail', `Не удалось прочитать очереди: ${describeError(error)}`);
+  }
+}
+
 async function sendProbes(prisma: PrismaClient, max: MaxClient): Promise<void> {
   const config = getConfig();
   const targets: Array<{ label: string; chatId: bigint }> = [];
@@ -275,6 +294,7 @@ async function main(): Promise<void> {
 
   await checkMediaStorage();
   await checkRoles(prisma);
+  await checkDeliveryQueues(prisma);
 
   if (process.argv.includes('--send') && botOk) {
     process.stdout.write('\nОтправка проверочных сообщений в рабочие чаты…\n');

@@ -18,6 +18,8 @@ async function main(): Promise<void> {
   const services: AppServices = buildServices(prisma);
 
   registerHandlers(services);
+  services.messages.start();
+  await services.actionGuard.purgeExpired();
 
   const me = await services.max.getMe();
   log.info({ botId: me.user_id, username: me.username, mode: config.BOT_MODE }, 'connected to MAX');
@@ -25,6 +27,7 @@ async function main(): Promise<void> {
   warnAboutMissingChats(services);
 
   const dispatcher = new UpdateDispatcher(prisma, services.max);
+  await dispatcher.start();
 
   let server: FastifyInstance | undefined;
   let polling: PollingRunner | undefined;
@@ -49,9 +52,12 @@ async function main(): Promise<void> {
   const shutdown = async (signal: string): Promise<void> => {
     log.info({ signal }, 'shutting down');
     services.sla.stop();
+    services.messages.stop();
+    dispatcher.stop();
     polling?.stop();
     services.bot.stop();
     await server?.close().catch(() => undefined);
+    await services.messages.flush().catch(() => undefined);
     await disconnectDatabase();
     process.exit(0);
   };

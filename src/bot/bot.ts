@@ -20,8 +20,9 @@ const BOT_COMMANDS = [
  * Wire the update handlers.
  *
  * Handlers stay thin on purpose: validate → call a service → render. The
- * default error handler of the library sets `process.exitCode` and rethrows,
- * which would take the whole bot down on one bad update, so it is replaced.
+ * The durable inbox owns retry/attention state, so the library error hook logs
+ * and rethrows to that boundary instead of silently treating a failed update
+ * as processed.
  */
 export function registerHandlers(services: AppServices): Bot {
   const bot = services.bot;
@@ -35,6 +36,7 @@ export function registerHandlers(services: AppServices): Bot {
       },
       'unhandled error while processing update',
     );
+    throw error;
   });
 
   bot.on('message_created', (ctx) => handleMessageUpdate(services, ctx));

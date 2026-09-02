@@ -55,6 +55,27 @@ enum UserRole {
   ADMIN
 }
 
+enum InboxStatus {
+  PENDING
+  PROCESSING
+  PROCESSED
+  FAILED
+}
+
+enum OutboxStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+}
+
+enum DeliveryTrackingType {
+  DISTRIBUTION_CARD
+  SECTOR_CARD
+  REVIEW_CARD
+  ANSWER_TO_REQUESTER
+}
+
 model User {
   id          String     @id @default(uuid())
   maxUserId   BigInt     @unique
@@ -286,4 +307,72 @@ model ProcessedUpdate {
   processedAt       DateTime @default(now())
 
   @@index([processedAt])
+}
+
+/// Durable copy of every accepted webhook update. Unlike ProcessedUpdate,
+/// this row keeps the payload and processing state so a restart cannot lose
+/// work after the HTTP 200 response has already been returned to MAX.
+model InboundUpdate {
+  id                String      @id @default(uuid())
+  externalUpdateKey String      @unique
+  updateType        String
+  payload           Json
+  status            InboxStatus @default(PENDING)
+  attempts          Int         @default(0)
+  nextAttemptAt     DateTime     @default(now())
+  lockedAt          DateTime?
+  lastError         String?
+  receivedAt        DateTime     @default(now())
+  processedAt       DateTime?
+  updatedAt         DateTime     @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([lockedAt])
+  @@index([receivedAt])
+}
+
+/// Persistent outgoing MAX message. The logical message and staged attachment
+/// references survive process restarts; a worker keeps retrying until SENT or
+/// the bounded failure threshold is reached.
+model OutboundMessage {
+  id              String                @id @default(uuid())
+  dedupeKey       String?               @unique
+  targetType      String
+  targetId        BigInt
+  payload         Json
+  attachments     Json
+  status          OutboxStatus          @default(PENDING)
+  attempts        Int                   @default(0)
+  nextAttemptAt   DateTime              @default(now())
+  lockedAt        DateTime?
+  lastError       String?
+  firstMessageId  String?
+  trackingType    DeliveryTrackingType?
+  incidentId      String?
+  answerId        String?
+  trackingApplied Boolean               @default(false)
+  createdAt       DateTime              @default(now())
+  sentAt          DateTime?
+  updatedAt       DateTime              @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([lockedAt])
+  @@index([incidentId])
+  @@index([createdAt])
+}
+
+/// Short database-backed lease used to debounce repeated button presses. A
+/// crashed process cannot leave a permanent lock because every row expires.
+model ActionLock {
+  key         String   @id
+  maxUserId   BigInt
+  incidentId String?
+  action      String
+  lockedUntil DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([lockedUntil])
+  @@index([maxUserId])
+  @@index([incidentId])
 }

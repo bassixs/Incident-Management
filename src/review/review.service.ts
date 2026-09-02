@@ -48,17 +48,23 @@ export class ReviewService {
     const answer = incident.answers.find((item) => item.id === answerId);
     if (!answer) throw new NotFoundError(`Answer ${answerId} not found on ${incidentId}`);
 
-    const { firstMessageId } = await this.messages.send(
+    const result = await this.messages.send(
       { chatId: this.chatId() },
       {
         text: reviewCard(incident, answer, incident.assignedCategory),
         label: codeLabel(incident),
         keyboard: reviewKeyboard(incident.id),
         attachments: await loadOutboundAttachments(this.media, answer.attachments),
+        delivery: {
+          dedupeKey: `review-card:${answer.id}`,
+          tracking: { type: 'REVIEW_CARD', incidentId: incident.id, answerId: answer.id },
+        },
       },
     );
 
-    await this.incidents.setReviewMessageId(incident.id, firstMessageId);
+    if (result.state === 'sent' && !result.trackingApplied) {
+      await this.incidents.setReviewMessageId(incident.id, result.firstMessageId);
+    }
     log.info(
       incidentLogFields({
         incidentId,

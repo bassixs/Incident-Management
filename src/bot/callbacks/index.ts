@@ -1,3 +1,5 @@
+import { setTimeout as delay } from 'node:timers/promises';
+
 import type { Context } from '@maxhub/max-bot-api';
 
 import type { AppServices } from '../../app/container';
@@ -31,26 +33,30 @@ export async function handleCallbackUpdate(services: AppServices, ctx: Context):
     chatIdOf(update.message ?? undefined) ??
     (update.message?.recipient?.chat_type === 'dialog' ? BigInt(callback.user.user_id) : undefined);
 
+  const lease = actionLease(payload, actor.maxUserId, chatId, messageId);
+  let acknowledged = false;
   try {
-    let notice: string | undefined;
-    switch (payload.kind) {
-      case 'user':
-        notice = await handleUserCallback({ services, actor, chatId, messageId }, payload);
-        break;
-      case 'incident':
-        notice = await handleIncidentCallback({ services, actor, chatId }, payload);
-        break;
-      case 'session':
-        notice = await handleSessionCallback(services, actor.maxUserId, chatId, payload.action);
-        break;
-      case 'report':
-        notice = await handleReportCallback({ services, actor, chatId }, payload);
-        break;
-      case 'noop':
-        break;
+    if (lease && !(await services.actionGuard.acquire(lease))) {
+      await answerCallback(services, callback.callback_id, 'Уже обрабатывается. Пожалуйста, подождите.');
+      return;
     }
-    await answerCallback(services, callback.callback_id, notice);
+
+    const operation = dispatchCallback(services, actor, chatId, messageId, payload);
+    const raced = await Promise.race([
+      operation.then((notice) => ({ kind: 'done' as const, notice })),
+      delay(600).then(() => ({ kind: 'pending' as const })),
+    ]);
+
+    if (raced.kind === 'done') {
+      await answerCallback(services, callback.callback_id, raced.notice);
+      return;
+    }
+
+    acknowledged = true;
+    await answerCallback(services, callback.callback_id, 'Принято, обрабатываю…');
+    await operation;
   } catch (error) {
+    if (lease) await services.actionGuard.release(lease.key).catch(() => undefined);
     log.warn(
       incidentLogFields({
         maxUserId: actor.maxUserId,
@@ -60,8 +66,70 @@ export async function handleCallbackUpdate(services: AppServices, ctx: Context):
       }),
       `callback failed: ${error instanceof Error ? error.message : String(error)}`,
     );
-    await answerCallback(services, callback.callback_id, errorNotice(error));
+    if (acknowledged) {
+      const target =
+        update.message?.recipient?.chat_type === 'dialog' || chatId === undefined
+          ? ({ userId: actor.maxUserId } as const)
+          : ({ chatId } as const);
+      await services.messages.send(target, { text: `⚠️ ${errorNotice(error)}` });
+    } else {
+      await answerCallback(services, callback.callback_id, errorNotice(error));
+    }
   }
+}
+
+async function dispatchCallback(
+  services: AppServices,
+  actor: Awaited<ReturnType<typeof resolveActor>>,
+  chatId: bigint | undefined,
+  messageId: string | undefined,
+  payload: NonNullable<ReturnType<typeof parseCallbackPayload>>,
+): Promise<string | undefined> {
+  switch (payload.kind) {
+    case 'user':
+      return handleUserCallback({ services, actor, chatId, messageId }, payload);
+    case 'incident':
+      return handleIncidentCallback({ services, actor, chatId }, payload);
+    case 'session':
+      return handleSessionCallback(services, actor.maxUserId, chatId, payload.action);
+    case 'report':
+      return handleReportCallback({ services, actor, chatId }, payload);
+    case 'noop':
+      return undefined;
+  }
+}
+
+function actionLease(
+  payload: NonNullable<ReturnType<typeof parseCallbackPayload>>,
+  maxUserId: bigint,
+  chatId: bigint | undefined,
+  messageId: string | undefined,
+) {
+  if (payload.kind === 'noop') return undefined;
+
+  if (payload.kind === 'incident') {
+    const globallyExclusive = ['assign-category', 'take', 'approve'].includes(payload.action);
+    return {
+      key: [
+        globallyExclusive ? 'incident-global' : `user:${maxUserId.toString()}`,
+        payload.incidentId,
+        payload.action,
+        globallyExclusive ? '-' : payload.argument ?? '-',
+      ].join(':'),
+      maxUserId,
+      incidentId: payload.incidentId,
+      action: payload.action,
+      ttlMs: 120_000,
+    };
+  }
+
+  const scope = `user:${maxUserId.toString()}:chat:${chatId?.toString() ?? '-'}:message:${messageId ?? '-'}`;
+  return {
+    key: `${scope}:${payload.kind}:${payload.action}:${'argument' in payload ? payload.argument ?? '-' : '-'}`,
+    maxUserId,
+    action: `${payload.kind}:${payload.action}`,
+    ttlMs: payload.kind === 'report' ? 300_000 : payload.kind === 'user' ? 2_000 : 10_000,
+  };
 }
 
 async function handleSessionCallback(

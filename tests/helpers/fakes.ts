@@ -1,4 +1,4 @@
-import type { CompositeMessage, SendTarget } from '../../src/max/max-message.service';
+import type { CompositeMessage, MessageSendResult, SendTarget } from '../../src/max/max-message.service';
 
 export type RecordedSend = { target: SendTarget; message: CompositeMessage };
 export type RecordedEdit = { messageId: string; text: string; mode: 'text' | 'finalize' };
@@ -8,9 +8,9 @@ export class FakeMessageService {
   readonly sent: RecordedSend[] = [];
   readonly edits: RecordedEdit[] = [];
 
-  async send(target: SendTarget, message: CompositeMessage): Promise<{ firstMessageId?: string }> {
+  async send(target: SendTarget, message: CompositeMessage): Promise<MessageSendResult> {
     this.sent.push({ target, message });
-    return { firstMessageId: `mid-${this.sent.length}` };
+    return { firstMessageId: `mid-${this.sent.length}`, state: 'sent', trackingApplied: false };
   }
 
   async editCardText(messageId: string, text: string): Promise<boolean> {

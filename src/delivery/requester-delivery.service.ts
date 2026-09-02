@@ -45,10 +45,23 @@ export class RequesterDeliveryService {
   }
 
   /** Status notices: rejection, informational updates. */
-  async notify(incidentId: string, text: string, attachments: OutboundAttachment[] = []): Promise<void> {
+  async notify(
+    incidentId: string,
+    text: string,
+    attachments: OutboundAttachment[] = [],
+    dedupeKey?: string,
+  ): Promise<void> {
     const incident = await this.loadIncident(incidentId);
     const userId = this.recipientOf(incident);
-    await this.messages.send({ userId }, { text, label: codeLabel(incident), attachments });
+    const result = await this.messages.send(
+      { userId },
+      {
+        text,
+        label: codeLabel(incident),
+        attachments,
+        ...(dedupeKey ? { delivery: { dedupeKey } } : {}),
+      },
+    );
     log.info(
       incidentLogFields({
         incidentId: incident.id,
@@ -56,7 +69,7 @@ export class RequesterDeliveryService {
         maxUserId: userId,
         action: 'REQUESTER_NOTIFIED',
       }),
-      'requester notified',
+      result.state === 'sent' ? 'requester notified' : 'requester notification queued',
     );
   }
 
@@ -79,22 +92,35 @@ export class RequesterDeliveryService {
     const userId = this.recipientOf(incident);
     const attachments = await loadOutboundAttachments(this.media, answer.attachments);
 
-    await this.messages.send({ userId }, { text, label: codeLabel(incident), attachments });
-
-    await this.prisma.incidentAnswer.update({
-      where: { id: answer.id },
-      data: { deliveredAt: new Date() },
-    });
-    await this.history.record({
-      incidentId,
-      action: HistoryAction.ANSWER_SENT,
-      metadata: {
-        answerId: answer.id,
-        version: answer.version,
-        recipientMaxUserId: userId.toString(),
-        attachments: attachments.length,
+    const result = await this.messages.send(
+      { userId },
+      {
+        text,
+        label: codeLabel(incident),
+        attachments,
+        delivery: {
+          dedupeKey: `answer:${answer.id}`,
+          tracking: { type: 'ANSWER_TO_REQUESTER', incidentId, answerId: answer.id },
+        },
       },
-    });
+    );
+
+    if (result.state === 'sent' && !result.trackingApplied) {
+      await this.prisma.incidentAnswer.update({
+        where: { id: answer.id },
+        data: { deliveredAt: new Date() },
+      });
+      await this.history.record({
+        incidentId,
+        action: HistoryAction.ANSWER_SENT,
+        metadata: {
+          answerId: answer.id,
+          version: answer.version,
+          recipientMaxUserId: userId.toString(),
+          attachments: attachments.length,
+        },
+      });
+    }
 
     log.info(
       incidentLogFields({
@@ -103,7 +129,7 @@ export class RequesterDeliveryService {
         maxUserId: userId,
         action: HistoryAction.ANSWER_SENT,
       }),
-      'answer delivered to requester',
+      result.state === 'sent' ? 'answer delivered to requester' : 'answer queued for requester delivery',
     );
     return true;
   }

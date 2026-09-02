@@ -1,4 +1,4 @@
-import { UserRole } from '@prisma/client';
+import { InboxStatus, OutboxStatus, UserRole } from '@prisma/client';
 
 import type { AppServices } from '../../app/container';
 import { parseReportRange, REPORT_USAGE } from '../../reports/report-range';
@@ -44,6 +44,8 @@ const STAFF_HELP = [
   '/category_template <КОД> <шаблон|-> ',
   '/role <MAX_USER_ID> <ADMIN,DISPATCHER,...|-> ',
   '/sla_check — принудительная проверка сроков',
+  '/delivery_status — состояние очередей сообщений',
+  '/delivery_retry — повторить неудачные исходящие доставки',
 ].join('\n');
 
 const USER_HELP = [
@@ -341,6 +343,53 @@ export const COMMANDS: Record<string, CommandHandler> = {
         `Просрочено: ${result.overdue}`,
         `Сессий очищено: ${result.sessionsPurged}`,
       ].join('\n'),
+    );
+  },
+
+  delivery_status: async ({ services, actor, chatId, isDialog }) => {
+    requirePermission(actor, 'admin.manage');
+    const [outPending, outSending, outFailed, inPending, inProcessing, inFailed] = await Promise.all([
+      services.prisma.outboundMessage.count({ where: { status: OutboxStatus.PENDING } }),
+      services.prisma.outboundMessage.count({ where: { status: OutboxStatus.SENDING } }),
+      services.prisma.outboundMessage.count({ where: { status: OutboxStatus.FAILED } }),
+      services.prisma.inboundUpdate.count({ where: { status: InboxStatus.PENDING } }),
+      services.prisma.inboundUpdate.count({ where: { status: InboxStatus.PROCESSING } }),
+      services.prisma.inboundUpdate.count({ where: { status: InboxStatus.FAILED } }),
+    ]);
+    await reply(
+      services,
+      chatId,
+      isDialog,
+      actor,
+      [
+        'Очереди доставки:',
+        `Исходящие — ждут: ${outPending}, отправляются: ${outSending}, требуют внимания: ${outFailed}`,
+        `Входящие — ждут: ${inPending}, обрабатываются: ${inProcessing}, требуют внимания: ${inFailed}`,
+      ].join('\n'),
+    );
+  },
+
+  delivery_retry: async ({ services, actor, chatId, isDialog }) => {
+    requirePermission(actor, 'admin.manage');
+    const retried = await services.prisma.outboundMessage.updateMany({
+      where: { status: OutboxStatus.FAILED },
+      data: {
+        status: OutboxStatus.PENDING,
+        attempts: 0,
+        nextAttemptAt: new Date(),
+        lockedAt: null,
+        lastError: null,
+      },
+    });
+    await services.messages.flush();
+    await reply(
+      services,
+      chatId,
+      isDialog,
+      actor,
+      retried.count > 0
+        ? `Повторно поставлено в исходящую очередь: ${retried.count}.`
+        : 'Неудачных исходящих доставок нет.',
     );
   },
 };

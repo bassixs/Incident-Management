@@ -52,22 +52,28 @@ export class DistributionService {
     const incident = await this.repository.findById(incidentId);
     if (!incident) throw new NotFoundError(`Incident ${incidentId} not found`);
 
-    const { firstMessageId } = await this.messages.send(
+    const result = await this.messages.send(
       { chatId: this.chatId() },
       {
         text: distributionCard(incident),
         label: codeLabel(incident),
         keyboard: distributionKeyboard(incident.id),
         attachments: await loadOutboundAttachments(this.media, incident.attachments),
+        delivery: {
+          dedupeKey: `distribution-card:${incident.id}`,
+          tracking: { type: 'DISTRIBUTION_CARD', incidentId: incident.id },
+        },
       },
     );
 
-    await this.incidents.setDistributionMessageId(incident.id, firstMessageId);
-    await this.history.record({
-      incidentId: incident.id,
-      action: HistoryAction.DISTRIBUTION_CARD_SENT,
-      metadata: { messageId: firstMessageId ?? null },
-    });
+    if (result.state === 'sent' && !result.trackingApplied) {
+      await this.incidents.setDistributionMessageId(incident.id, result.firstMessageId);
+      await this.history.record({
+        incidentId: incident.id,
+        action: HistoryAction.DISTRIBUTION_CARD_SENT,
+        metadata: { messageId: result.firstMessageId ?? null },
+      });
+    }
     log.info(
       incidentLogFields({
         incidentId: incident.id,
@@ -187,7 +193,12 @@ export class DistributionService {
       metadata: { reason, dispatcher: actor.displayName },
     });
 
-    await this.delivery.notify(incidentId, rejectionToRequester(incident, reason));
+    await this.delivery.notify(
+      incidentId,
+      rejectionToRequester(incident, reason),
+      [],
+      `rejection:${incident.id}`,
+    );
 
     if (incident.distributionMessageId) {
       await this.messages.finalizeCard(

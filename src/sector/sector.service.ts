@@ -39,7 +39,7 @@ export class SectorService {
     const chatId = this.categories.requireChatId(incident.assignedCategory);
     const config = getConfig();
 
-    const { firstMessageId } = await this.messages.send(
+    const result = await this.messages.send(
       { chatId },
       {
         text: sectorCard(incident, incident.assignedCategory),
@@ -48,15 +48,21 @@ export class SectorService {
           hasTemplate: Boolean(incident.assignedCategory.answerTemplate),
         }),
         attachments: await loadOutboundAttachments(this.media, incident.attachments),
+        delivery: {
+          dedupeKey: `sector-card:${incident.id}`,
+          tracking: { type: 'SECTOR_CARD', incidentId: incident.id },
+        },
       },
     );
 
-    await this.incidents.setSectorMessageId(incident.id, firstMessageId);
-    await this.history.record({
-      incidentId: incident.id,
-      action: HistoryAction.SECTOR_CARD_SENT,
-      metadata: { chatId: chatId.toString(), messageId: firstMessageId ?? null },
-    });
+    if (result.state === 'sent' && !result.trackingApplied) {
+      await this.incidents.setSectorMessageId(incident.id, result.firstMessageId);
+      await this.history.record({
+        incidentId: incident.id,
+        action: HistoryAction.SECTOR_CARD_SENT,
+        metadata: { chatId: chatId.toString(), messageId: result.firstMessageId ?? null },
+      });
+    }
     log.info(
       incidentLogFields({
         incidentId: incident.id,

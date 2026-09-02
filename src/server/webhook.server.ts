@@ -91,9 +91,7 @@ export async function createWebhookServer(
 
     await reply.code(200).send({ ok: true });
 
-    setImmediate(() => {
-      void dispatcher.process(body, reservation);
-    });
+    setImmediate(() => void dispatcher.kick());
     return reply;
   });
 

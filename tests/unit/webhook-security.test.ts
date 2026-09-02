@@ -31,6 +31,7 @@ describe('webhook endpoint', () => {
   let app: FastifyInstance;
   const reserved: string[] = [];
   const processed: string[] = [];
+  const pending: Update[] = [];
   const seen = new Set<string>();
 
   const dispatcher = {
@@ -39,10 +40,13 @@ describe('webhook endpoint', () => {
       reserved.push(key);
       const fresh = !seen.has(key);
       seen.add(key);
+      if (fresh) pending.push(update);
       return { key, fresh };
     },
-    process: async (update: Update) => {
-      processed.push(buildUpdateKey(update));
+    kick: async () => {
+      while (pending.length > 0) {
+        processed.push(buildUpdateKey(pending.shift()!));
+      }
     },
   } as unknown as UpdateDispatcher;
 

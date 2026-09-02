@@ -126,7 +126,7 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
 
     expect((await dispatcher.reserve(update)).fresh).toBe(true);
     expect((await dispatcher.reserve(update)).fresh).toBe(false);
-    expect(await prisma.processedUpdate.count()).toBe(1);
+    expect(await prisma.inboundUpdate.count()).toBe(1);
   });
 
   it('does not create a second incident when the same message arrives twice', async () => {
