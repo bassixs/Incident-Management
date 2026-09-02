@@ -1,6 +1,7 @@
 import { InboxStatus, OutboxStatus, UserRole } from '@prisma/client';
 
 import type { AppServices } from '../../app/container';
+import { AuditAction } from '../../audit/admin-audit.service';
 import { parseReportRange, REPORT_USAGE } from '../../reports/report-range';
 import { AppError, ForbiddenError, ValidationError } from '../../utils/errors';
 import { moduleLogger } from '../../utils/logger';
@@ -11,6 +12,7 @@ import { sendReport } from '../views/report';
 import { incidentLookupCard, myIncidentsText, rulesText } from '../views/cards';
 import { sendMainMenu } from '../handlers/requester.handler';
 import type { ResolvedActor } from '../handlers/helpers';
+import { adminAuditText, incidentHistoryText } from '../views/history';
 
 const log = moduleLogger('bot-commands');
 
@@ -28,6 +30,7 @@ const STAFF_HELP = [
   'Команды для сотрудников:',
   '',
   '/incident <НОМЕР> — карточка обращения',
+  '/history <НОМЕР> — история обращения',
   '/report — выбрать период кнопками; можно и сразу: /report 7d, /report 01.08.2026 - 10.08.2026',
   '/resend <НОМЕР> — повторить доставку согласованного ответа',
   '/chatid — показать ID текущего чата',
@@ -47,6 +50,7 @@ const STAFF_HELP = [
   '/delivery_status — состояние очередей сообщений',
   '/delivery_errors — последние проблемы доставки',
   '/delivery_retry [КОД] — повторить одну или все неудачные исходящие доставки',
+  '/audit — последние административные изменения',
 ].join('\n');
 
 const USER_HELP = [
@@ -118,6 +122,27 @@ export const COMMANDS: Record<string, CommandHandler> = {
     await services.messages.send({ chatId }, { text: incidentLookupCard(incident) });
   },
 
+  history: async ({ services, actor, chatId, isDialog, args }) => {
+    requirePermission(actor, 'incident.lookup');
+    assertWorkingChat(isDialog);
+    const code = args[0];
+    if (!code) throw new ValidationError('Использование: /history INC-20260823-0001');
+    const incident = await services.incidents.findByPublicCode(code);
+    if (!incident) throw new AppError(`Обращение ${code.toUpperCase()} не найдено.`, 'NOT_FOUND');
+    const entries = await services.history.listForIncident(incident.id);
+    const actorIds = [...new Set(entries.flatMap((entry) => (entry.actorMaxUserId ? [entry.actorMaxUserId] : [])))];
+    const users = actorIds.length
+      ? await services.prisma.user.findMany({
+          where: { maxUserId: { in: actorIds } },
+          select: { maxUserId: true, displayName: true },
+        })
+      : [];
+    await services.messages.send(
+      { chatId },
+      { text: incidentHistoryText(incident, entries, users, services.config.APP_TIMEZONE) },
+    );
+  },
+
   /**
    * A bare `/report` offers the period as buttons; arguments still work for
    * anyone who prefers typing (`/report 7d`, `/report 01.08.2026 - 10.08.2026`).
@@ -162,6 +187,13 @@ export const COMMANDS: Record<string, CommandHandler> = {
     if (!rawId || !reason) throw new ValidationError('Использование: /ban <MAX_USER_ID> <причина>');
     const maxUserId = parseMaxId(rawId);
     await services.bans.ban({ maxUserId, reason, createdById: actor.userId });
+    await recordAudit(services, actor, {
+      action: AuditAction.USER_BANNED,
+      targetType: 'пользователь',
+      targetId: maxUserId.toString(),
+      summary: `Заблокирован пользователь ${maxUserId.toString()}: ${reason}`,
+      metadata: { reason },
+    });
     await reply(services, chatId, isDialog, actor, `🚫 Пользователь ${maxUserId.toString()} заблокирован.`);
   },
 
@@ -171,6 +203,14 @@ export const COMMANDS: Record<string, CommandHandler> = {
     if (!rawId) throw new ValidationError('Использование: /unban <MAX_USER_ID>');
     const maxUserId = parseMaxId(rawId);
     const lifted = await services.bans.unban(maxUserId);
+    if (lifted > 0) {
+      await recordAudit(services, actor, {
+        action: AuditAction.USER_UNBANNED,
+        targetType: 'пользователь',
+        targetId: maxUserId.toString(),
+        summary: `Снята блокировка пользователя ${maxUserId.toString()}`,
+      });
+    }
     await reply(
       services,
       chatId,
@@ -234,6 +274,12 @@ export const COMMANDS: Record<string, CommandHandler> = {
     const name = nameParts.join(' ').trim();
     if (!code || !name) throw new ValidationError('Использование: /category_add <КОД> <Название>');
     const category = await services.categories.create({ code, name });
+    await recordAudit(services, actor, {
+      action: AuditAction.CATEGORY_CREATED,
+      targetType: 'сфера',
+      targetId: category.code,
+      summary: `Создана сфера ${category.code} — ${category.name}`,
+    });
     await reply(services, chatId, isDialog, actor, `Сфера ${category.code} создана. Задайте чат: /category_chat ${category.code} <CHAT_ID>`);
   },
 
@@ -242,6 +288,13 @@ export const COMMANDS: Record<string, CommandHandler> = {
     const [code, rawChatId] = args;
     if (!code || !rawChatId) throw new ValidationError('Использование: /category_chat <КОД> <CHAT_ID>');
     const category = await services.categories.setChatId(code, parseMaxId(rawChatId));
+    await recordAudit(services, actor, {
+      action: AuditAction.CATEGORY_CHAT_SET,
+      targetType: 'сфера',
+      targetId: category.code,
+      summary: `Для сферы ${category.code} задан чат ${category.maxChatId?.toString()}`,
+      metadata: { chatId: category.maxChatId?.toString() },
+    });
     await reply(services, chatId, isDialog, actor, `Сфера ${category.code} → чат ${category.maxChatId?.toString()}`);
   },
 
@@ -263,6 +316,14 @@ export const COMMANDS: Record<string, CommandHandler> = {
       code,
       authority === '' || authority === '-' ? null : authority,
     );
+    await recordAudit(services, actor, {
+      action: AuditAction.CATEGORY_AUTHORITY_SET,
+      targetType: 'сфера',
+      targetId: category.code,
+      summary: category.authorityName
+        ? `Для сферы ${category.code} задано ведомство «${category.authorityName}»`
+        : `Для сферы ${category.code} удалено ведомство`,
+    });
     await reply(
       services,
       chatId,
@@ -281,6 +342,12 @@ export const COMMANDS: Record<string, CommandHandler> = {
     const name = nameParts.join(' ').trim();
     if (!code || !name) throw new ValidationError('Использование: /category_name <КОД> <Новое название>');
     const category = await services.categories.rename(code, name);
+    await recordAudit(services, actor, {
+      action: AuditAction.CATEGORY_RENAMED,
+      targetType: 'сфера',
+      targetId: category.code,
+      summary: `Сфера ${category.code} переименована в «${category.name}»`,
+    });
     await reply(services, chatId, isDialog, actor, `Сфера ${category.code} → «${category.name}»`);
   },
 
@@ -290,6 +357,14 @@ export const COMMANDS: Record<string, CommandHandler> = {
     if (!code) throw new ValidationError('Использование: /category_template <КОД> <шаблон | ->');
     const raw = templateParts.join(' ').trim();
     const category = await services.categories.setTemplate(code, raw === '-' || raw === '' ? null : raw);
+    await recordAudit(services, actor, {
+      action: AuditAction.CATEGORY_TEMPLATE_SET,
+      targetType: 'сфера',
+      targetId: category.code,
+      summary: category.answerTemplate
+        ? `Для сферы ${category.code} обновлён шаблон ответа`
+        : `Для сферы ${category.code} удалён шаблон ответа`,
+    });
     await reply(
       services,
       chatId,
@@ -319,6 +394,13 @@ export const COMMANDS: Record<string, CommandHandler> = {
             });
     await services.users.upsertFromMax({ user_id: Number(maxUserId), name: `User ${maxUserId}`, username: null });
     await services.users.setRoles(maxUserId, roles);
+    await recordAudit(services, actor, {
+      action: AuditAction.ROLES_SET,
+      targetType: 'пользователь',
+      targetId: maxUserId.toString(),
+      summary: `Роли пользователя ${maxUserId.toString()}: ${roles.length ? roles.join(', ') : 'сняты'}`,
+      metadata: { roles },
+    });
     await reply(
       services,
       chatId,
@@ -331,6 +413,11 @@ export const COMMANDS: Record<string, CommandHandler> = {
   sla_check: async ({ services, actor, chatId, isDialog }) => {
     requirePermission(actor, 'admin.manage');
     const result = await services.sla.sweep();
+    await recordAudit(services, actor, {
+      action: AuditAction.SLA_SWEEP,
+      summary: `Запущена ручная SLA-проверка: проверено ${result.checked}, просрочено ${result.overdue}`,
+      metadata: result,
+    });
     await reply(
       services,
       chatId,
@@ -401,6 +488,20 @@ export const COMMANDS: Record<string, CommandHandler> = {
     const label = result.reference
       ? `Ошибка ${result.reference}${result.incidentCode ? ` (${result.incidentCode})` : ''}`
       : 'Все неудачные исходящие сообщения';
+    if (result.count > 0) {
+      await recordAudit(services, actor, {
+        action: AuditAction.DELIVERY_RETRIED,
+        targetType: result.reference ? 'ошибка доставки' : 'очередь доставки',
+        targetId: result.reference,
+        summary: result.reference
+          ? `Повторно запущена доставка ${result.reference}${result.incidentCode ? ` (${result.incidentCode})` : ''}`
+          : `Повторно запущены все неудачные исходящие сообщения: ${result.count}`,
+        metadata: {
+          count: result.count,
+          ...(result.incidentCode ? { incidentCode: result.incidentCode } : {}),
+        },
+      });
+    }
     await reply(
       services,
       chatId,
@@ -410,6 +511,12 @@ export const COMMANDS: Record<string, CommandHandler> = {
         ? `${label}: повторно поставлено в очередь.`
         : 'Неудачных исходящих доставок нет.',
     );
+  },
+
+  audit: async ({ services, actor, chatId, isDialog }) => {
+    requirePermission(actor, 'admin.manage');
+    const entries = await services.audit.recent(20);
+    await reply(services, chatId, isDialog, actor, adminAuditText(entries, services.config.APP_TIMEZONE));
   },
 };
 
@@ -480,6 +587,12 @@ async function setCategoryActive(context: CommandContext, isActive: boolean): Pr
   const code = args[0];
   if (!code) throw new ValidationError(`Использование: /category_${isActive ? 'on' : 'off'} <КОД>`);
   const category = await services.categories.setActive(code, isActive);
+  await recordAudit(services, actor, {
+    action: isActive ? AuditAction.CATEGORY_ENABLED : AuditAction.CATEGORY_DISABLED,
+    targetType: 'сфера',
+    targetId: category.code,
+    summary: `Сфера ${category.code} ${isActive ? 'включена' : 'отключена'}`,
+  });
   await reply(
     services,
     chatId,
@@ -487,6 +600,24 @@ async function setCategoryActive(context: CommandContext, isActive: boolean): Pr
     actor,
     `Сфера ${category.code} ${isActive ? 'включена' : 'отключена'}.`,
   );
+}
+
+async function recordAudit(
+  services: AppServices,
+  actor: ResolvedActor,
+  entry: {
+    action: string;
+    summary: string;
+    targetType?: string | undefined;
+    targetId?: string | undefined;
+    metadata?: Record<string, unknown> | undefined;
+  },
+): Promise<void> {
+  await services.audit.record({
+    ...entry,
+    actorMaxUserId: actor.maxUserId,
+    actorName: actor.displayName,
+  });
 }
 
 /** Dialogs are addressed by user id, working chats by chat id. */

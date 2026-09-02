@@ -256,6 +256,25 @@ model IncidentHistory {
   @@index([action])
 }
 
+/// Append-only record of successful administrative commands. It is separate
+/// from IncidentHistory because role, category and delivery operations may not
+/// belong to one incident.
+model AdminAuditLog {
+  id             String   @id @default(uuid())
+  action         String
+  actorMaxUserId BigInt
+  actorName      String
+  targetType     String?
+  targetId       String?
+  summary        String
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorMaxUserId, createdAt])
+  @@index([action])
+}
+
 model Ban {
   id        String  @id @default(uuid())
   maxUserId BigInt

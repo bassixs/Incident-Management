@@ -39,6 +39,7 @@ export function createTestPrisma(): PrismaClient {
 export async function resetDatabase(prisma: PrismaClient): Promise<void> {
   await prisma.$executeRawUnsafe(`
     TRUNCATE TABLE
+      "AdminAuditLog",
       "IncidentHistory",
       "AnswerAttachment",
       "IncidentAnswer",

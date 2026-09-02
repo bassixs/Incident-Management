@@ -2,6 +2,7 @@ import { Bot } from '@maxhub/max-bot-api';
 import type { PrismaClient } from '@prisma/client';
 
 import { AnswerService } from '../answers/answer.service';
+import { AdminAuditService } from '../audit/admin-audit.service';
 import { ActionGuardService } from '../actions/action-guard.service';
 import { BanService } from '../bans/ban.service';
 import { CategoryService } from '../categories/category.service';
@@ -39,6 +40,7 @@ export type AppServices = {
   messages: MaxMessageService;
   media: MediaService;
   actionGuard: ActionGuardService;
+  audit: AdminAuditService;
 
   users: UserService;
   categories: CategoryService;
@@ -82,6 +84,7 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
   const messages = overrides.messages ?? new MaxMessageService(max, { prisma, storage });
   const media = overrides.media ?? new MediaService(storage, max);
   const actionGuard = new ActionGuardService(prisma);
+  const audit = new AdminAuditService(prisma);
 
   const users = new UserService(prisma);
   const categories = new CategoryService(prisma);
@@ -144,6 +147,7 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
     messages,
     media,
     actionGuard,
+    audit,
     users,
     categories,
     bans,
