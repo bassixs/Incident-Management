@@ -19,6 +19,7 @@ async function main(): Promise<void> {
 
   registerHandlers(services);
   services.messages.start();
+  services.deliveryAlerts.start();
   await services.actionGuard.purgeExpired();
 
   const me = await services.max.getMe();
@@ -53,6 +54,7 @@ async function main(): Promise<void> {
     log.info({ signal }, 'shutting down');
     services.sla.stop();
     services.messages.stop();
+    services.deliveryAlerts.stop();
     dispatcher.stop();
     polling?.stop();
     services.bot.stop();
@@ -105,6 +107,9 @@ function warnAboutMissingChats(services: AppServices): void {
   }
   if (services.config.REVIEW_CHAT_ID === undefined) {
     log.warn('REVIEW_CHAT_ID is not set — answers cannot be sent for approval');
+  }
+  if (services.config.DELIVERY_ALERT_CHAT_ID === undefined) {
+    log.warn('DELIVERY_ALERT_CHAT_ID is not set — delivery failures will not be reported to MAX');
   }
 }
 

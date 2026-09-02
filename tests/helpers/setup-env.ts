@@ -21,6 +21,7 @@ process.env.WEBHOOK_AUTO_REGISTER = 'false';
 
 process.env.DISTRIBUTION_CHAT_ID = '-1001';
 process.env.REVIEW_CHAT_ID = '-1002';
+process.env.DELIVERY_ALERT_CHAT_ID = '-1005';
 
 process.env.DAILY_INCIDENT_LIMIT = '2';
 process.env.INCIDENT_MAX_LENGTH = '150';

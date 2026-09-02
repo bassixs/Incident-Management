@@ -252,6 +252,9 @@ async function sendProbes(prisma: PrismaClient, max: MaxClient): Promise<void> {
   if (config.REVIEW_CHAT_ID !== undefined) {
     targets.push({ label: 'чат согласования', chatId: config.REVIEW_CHAT_ID });
   }
+  if (config.DELIVERY_ALERT_CHAT_ID !== undefined) {
+    targets.push({ label: 'чат технических предупреждений', chatId: config.DELIVERY_ALERT_CHAT_ID });
+  }
   for (const category of await prisma.category.findMany({ where: { isActive: true } })) {
     if (category.maxChatId !== null) {
       targets.push({ label: `профильный чат ${category.code}`, chatId: category.maxChatId });
@@ -288,6 +291,12 @@ async function main(): Promise<void> {
   if (botOk) {
     await checkChat(max, 'Чат распределения', config.DISTRIBUTION_CHAT_ID, 'Задайте DISTRIBUTION_CHAT_ID.');
     await checkChat(max, 'Чат согласования', config.REVIEW_CHAT_ID, 'Задайте REVIEW_CHAT_ID.');
+    await checkChat(
+      max,
+      'Чат технических предупреждений',
+      config.DELIVERY_ALERT_CHAT_ID,
+      'Задайте DELIVERY_ALERT_CHAT_ID, чтобы получать сообщения о проблемах доставки.',
+    );
     await checkCategories(prisma, max);
     await checkWebhook(max);
   }

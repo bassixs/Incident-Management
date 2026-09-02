@@ -379,6 +379,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
         nextAttemptAt: new Date(),
         lockedAt: null,
         lastError: null,
+        deliveryAlertedAt: null,
       },
     });
     await services.messages.flush();

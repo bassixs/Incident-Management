@@ -6,6 +6,7 @@ import { ActionGuardService } from '../actions/action-guard.service';
 import { BanService } from '../bans/ban.service';
 import { CategoryService } from '../categories/category.service';
 import { getConfig, type AppConfig } from '../config';
+import { DeliveryAlertService } from '../delivery/delivery-alert.service';
 import { RequesterDeliveryService } from '../delivery/requester-delivery.service';
 import { DistributionService } from '../distribution/distribution.service';
 import { IncidentHistoryService } from '../incidents/incident-history.service';
@@ -53,6 +54,7 @@ export type AppServices = {
   review: ReviewService;
   answers: AnswerService;
   delivery: RequesterDeliveryService;
+  deliveryAlerts: DeliveryAlertService;
 
   sla: SlaService;
   reports: ExcelReportService;
@@ -90,6 +92,7 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
   const incidents = new IncidentService(prisma, repository, history, users, bans, media);
 
   const delivery = new RequesterDeliveryService(prisma, repository, history, messages, media);
+  const deliveryAlerts = new DeliveryAlertService(prisma, max, config.DELIVERY_ALERT_CHAT_ID);
   const sector = new SectorService(
     prisma,
     repository,
@@ -151,6 +154,7 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
     review,
     answers,
     delivery,
+    deliveryAlerts,
     sla,
     reports,
   };

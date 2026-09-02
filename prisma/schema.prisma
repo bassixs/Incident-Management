@@ -319,14 +319,16 @@ model InboundUpdate {
   payload           Json
   status            InboxStatus @default(PENDING)
   attempts          Int         @default(0)
-  nextAttemptAt     DateTime     @default(now())
+  nextAttemptAt     DateTime    @default(now())
   lockedAt          DateTime?
   lastError         String?
-  receivedAt        DateTime     @default(now())
+  receivedAt        DateTime    @default(now())
   processedAt       DateTime?
-  updatedAt         DateTime     @updatedAt
+  deliveryAlertedAt DateTime?
+  updatedAt         DateTime    @updatedAt
 
   @@index([status, nextAttemptAt])
+  @@index([status, deliveryAlertedAt])
   @@index([lockedAt])
   @@index([receivedAt])
 }
@@ -335,27 +337,29 @@ model InboundUpdate {
 /// references survive process restarts; a worker keeps retrying until SENT or
 /// the bounded failure threshold is reached.
 model OutboundMessage {
-  id              String                @id @default(uuid())
-  dedupeKey       String?               @unique
-  targetType      String
-  targetId        BigInt
-  payload         Json
-  attachments     Json
-  status          OutboxStatus          @default(PENDING)
-  attempts        Int                   @default(0)
-  nextAttemptAt   DateTime              @default(now())
-  lockedAt        DateTime?
-  lastError       String?
-  firstMessageId  String?
-  trackingType    DeliveryTrackingType?
-  incidentId      String?
-  answerId        String?
-  trackingApplied Boolean               @default(false)
-  createdAt       DateTime              @default(now())
-  sentAt          DateTime?
-  updatedAt       DateTime              @updatedAt
+  id                String                @id @default(uuid())
+  dedupeKey         String?               @unique
+  targetType        String
+  targetId          BigInt
+  payload           Json
+  attachments       Json
+  status            OutboxStatus          @default(PENDING)
+  attempts          Int                   @default(0)
+  nextAttemptAt     DateTime              @default(now())
+  lockedAt          DateTime?
+  lastError         String?
+  firstMessageId    String?
+  trackingType      DeliveryTrackingType?
+  incidentId        String?
+  answerId          String?
+  trackingApplied   Boolean               @default(false)
+  createdAt         DateTime              @default(now())
+  sentAt            DateTime?
+  deliveryAlertedAt DateTime?
+  updatedAt         DateTime              @updatedAt
 
   @@index([status, nextAttemptAt])
+  @@index([status, deliveryAlertedAt])
   @@index([lockedAt])
   @@index([incidentId])
   @@index([createdAt])
@@ -366,7 +370,7 @@ model OutboundMessage {
 model ActionLock {
   key         String   @id
   maxUserId   BigInt
-  incidentId String?
+  incidentId  String?
   action      String
   lockedUntil DateTime
   createdAt   DateTime @default(now())
