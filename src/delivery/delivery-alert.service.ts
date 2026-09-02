@@ -105,7 +105,7 @@ export class DeliveryAlertService {
       for (const row of inbound.slice(0, 5)) lines.push(`• ${row.updateType}`);
       if (inbound.length > 5) lines.push(`• и ещё ${inbound.length - 5}`);
     }
-    lines.push('', 'Проверка: /delivery_status', 'Повтор исходящих: /delivery_retry');
+    lines.push('', 'Подробности: /delivery_errors', 'Состояние очередей: /delivery_status');
 
     try {
       await this.max.sendToChat(chatId, lines.join('\n'));

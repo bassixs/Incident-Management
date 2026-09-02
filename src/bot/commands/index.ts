@@ -45,7 +45,8 @@ const STAFF_HELP = [
   '/role <MAX_USER_ID> <ADMIN,DISPATCHER,...|-> ',
   '/sla_check — принудительная проверка сроков',
   '/delivery_status — состояние очередей сообщений',
-  '/delivery_retry — повторить неудачные исходящие доставки',
+  '/delivery_errors — последние проблемы доставки',
+  '/delivery_retry [КОД] — повторить одну или все неудачные исходящие доставки',
 ].join('\n');
 
 const USER_HELP = [
@@ -369,31 +370,109 @@ export const COMMANDS: Record<string, CommandHandler> = {
     );
   },
 
-  delivery_retry: async ({ services, actor, chatId, isDialog }) => {
+  delivery_errors: async ({ services, actor, chatId, isDialog }) => {
     requirePermission(actor, 'admin.manage');
-    const retried = await services.prisma.outboundMessage.updateMany({
-      where: { status: OutboxStatus.FAILED },
-      data: {
-        status: OutboxStatus.PENDING,
-        attempts: 0,
-        nextAttemptAt: new Date(),
-        lockedAt: null,
-        lastError: null,
-        deliveryAlertedAt: null,
-      },
-    });
-    await services.messages.flush();
+    const problems = await services.deliveryProblems.recent(10);
     await reply(
       services,
       chatId,
       isDialog,
       actor,
-      retried.count > 0
-        ? `Повторно поставлено в исходящую очередь: ${retried.count}.`
+      problems.length > 0
+        ? formatDeliveryProblems(problems, services.config)
+        : 'Проблем доставки, требующих внимания, нет.',
+    );
+  },
+
+  delivery_retry: async ({ services, actor, chatId, isDialog, args }) => {
+    requirePermission(actor, 'admin.manage');
+    const reference = args[0]?.trim().toLowerCase();
+    if (reference && !/^[a-f0-9-]{6,36}$/.test(reference)) {
+      throw new ValidationError('Код ошибки некорректен. Скопируйте его из /delivery_errors.');
+    }
+    const result = await services.deliveryProblems.retryFailedOutbound(reference);
+    if (result.status === 'not_found') {
+      throw new ValidationError('Исходящая ошибка с таким кодом не найдена или уже исправлена.');
+    }
+    if (result.status === 'ambiguous') {
+      throw new ValidationError('Код совпал с несколькими ошибками. Укажите больше символов кода.');
+    }
+    if (result.count > 0) await services.messages.flush();
+    const label = result.reference
+      ? `Ошибка ${result.reference}${result.incidentCode ? ` (${result.incidentCode})` : ''}`
+      : 'Все неудачные исходящие сообщения';
+    await reply(
+      services,
+      chatId,
+      isDialog,
+      actor,
+      result.count > 0
+        ? `${label}: повторно поставлено в очередь.`
         : 'Неудачных исходящих доставок нет.',
     );
   },
 };
+
+export function formatDeliveryProblems(
+  problems: import('../../delivery/delivery-problem.service').DeliveryProblem[],
+  config: AppServices['config'],
+): string {
+  const formatter = new Intl.DateTimeFormat('ru-RU', {
+    timeZone: config.APP_TIMEZONE,
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  const blocks = problems.map((problem) => {
+    const lines = [
+      `${problem.direction === 'outbound' ? '📤' : '📥'} Ошибка ${problem.reference}`,
+      `Когда: ${formatter.format(problem.occurredAt)}`,
+      `Что: ${problem.description}`,
+      ...(problem.incidentCode ? [`Обращение: ${problem.incidentCode}`] : []),
+      ...(problem.targetId
+        ? [`Получатель: ${problem.targetType === 'user' ? 'пользователь' : 'чат'} ${problem.targetId.toString()}`]
+        : []),
+      `Попыток: ${problem.attempts}`,
+      ...(problem.textPreview ? [`Контекст: ${problem.textPreview}`] : []),
+      ...(problem.error ? [`Причина: ${redactSecrets(problem.error, config)}`] : []),
+      problem.direction === 'outbound'
+        ? `Повторить: /delivery_retry ${problem.reference}`
+        : 'Входящее событие автоматически не повторять — сначала нужна ручная проверка.',
+    ];
+    return lines.join('\n');
+  });
+  return ['Последние проблемы доставки:', '', ...blocks.flatMap((block, index) => (index ? ['', block] : [block]))].join(
+    '\n',
+  );
+}
+
+function redactSecrets(value: string, config: AppServices['config']): string {
+  let result = value;
+  const secrets = [
+    config.BOT_TOKEN,
+    config.WEBHOOK_SECRET,
+    config.S3_ACCESS_KEY_ID,
+    config.S3_SECRET_ACCESS_KEY,
+    config.DATABASE_URL,
+  ];
+  try {
+    secrets.push(new URL(config.DATABASE_URL).password);
+  } catch {
+    // Configuration validation reports an invalid URL elsewhere.
+  }
+  for (const secret of secrets) {
+    if (!secret || secret.length < 4) continue;
+    result = result.replace(new RegExp(escapeRegExp(secret), 'g'), '[скрыто]');
+  }
+  result = result.replace(/\b(authorization|token|password|secret)(\s*[:=]\s*)[^\s,;]+/gi, '$1$2[скрыто]');
+  return Array.from(result).length <= 300 ? result : `${Array.from(result).slice(0, 299).join('')}…`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 async function setCategoryActive(context: CommandContext, isActive: boolean): Promise<void> {
   const { services, actor, chatId, isDialog, args } = context;
