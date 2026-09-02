@@ -55,7 +55,7 @@ export async function handleRequesterMessage(
 
     // A failure to publish the card must never hide the fact that the incident
     // exists: the registration is already committed and the number is final.
-    await services.distribution.processNewIncident(incident.id).catch((error) =>
+    await services.distribution.publishCard(incident.id).catch((error) =>
       log.error(
         incidentLogFields({
           incidentId: incident.id,

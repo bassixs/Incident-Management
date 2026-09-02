@@ -14,7 +14,6 @@ const REDACT_PATHS = [
   'access_token',
   'secret',
   'WEBHOOK_SECRET',
-  'AI_API_KEY',
   'apiKey',
   'authorization',
   'Authorization',

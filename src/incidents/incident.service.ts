@@ -1,7 +1,5 @@
 import { AttachmentType, type Incident, IncidentStatus, type PrismaClient } from '@prisma/client';
 
-import type { ClassificationResult } from '../ai/classifier.interface';
-import type { ModerationResult } from '../ai/moderation.interface';
 import type { BanService } from '../bans/ban.service';
 import { getConfig } from '../config';
 import { acquireAdvisoryLock, TRANSACTION_OPTIONS } from '../database/prisma';
@@ -197,39 +195,6 @@ export class IncidentService {
         sourceUrl: item.sourceUrl ?? null,
         maxToken: item.maxToken ?? null,
       })),
-    });
-  }
-
-  async applyClassification(incidentId: string, result: ClassificationResult): Promise<void> {
-    const top = result.suggestions[0];
-    await this.prisma.incident.update({
-      where: { id: incidentId },
-      data: {
-        aiSuggestions: result.suggestions as never,
-        aiSuggestedCategoryId: top?.categoryId ?? null,
-      },
-    });
-    await this.history.record({
-      incidentId,
-      action: HistoryAction.AI_CLASSIFIED,
-      metadata: { suggestions: result.suggestions },
-    });
-  }
-
-  async applyModeration(incidentId: string, result: ModerationResult): Promise<void> {
-    if (!result.possibleAbuse && !result.possibleOfftopic) return;
-    await this.prisma.incident.update({
-      where: { id: incidentId },
-      data: {
-        aiPossibleAbuse: result.possibleAbuse,
-        aiPossibleOfftopic: result.possibleOfftopic,
-        aiModerationReason: result.reason ?? null,
-      },
-    });
-    await this.history.record({
-      incidentId,
-      action: HistoryAction.AI_MODERATED,
-      metadata: { ...result },
     });
   }
 

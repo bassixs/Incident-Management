@@ -1,12 +1,6 @@
 import { Bot } from '@maxhub/max-bot-api';
 import type { PrismaClient } from '@prisma/client';
 
-import type { AnswerDraftGenerator } from '../ai/answer-draft.interface';
-import { createAnswerDraftGenerator } from '../ai/answer-draft.service';
-import type { IncidentClassifier } from '../ai/classifier.interface';
-import { createIncidentClassifier } from '../ai/classifier.service';
-import type { ModerationService } from '../ai/moderation.interface';
-import { createModerationService } from '../ai/moderation.service';
 import { AnswerService } from '../answers/answer.service';
 import { BanService } from '../bans/ban.service';
 import { CategoryService } from '../categories/category.service';
@@ -60,22 +54,15 @@ export type AppServices = {
 
   sla: SlaService;
   reports: ExcelReportService;
-
-  classifier: IncidentClassifier;
-  draftGenerator: AnswerDraftGenerator;
-  moderation: ModerationService;
 };
 
 /**
- * Seams for tests: the MAX transport and the AI providers can be swapped for
+ * Seams for tests: the MAX transport and the media storage can be swapped for
  * fakes without touching a single line of business code.
  */
 export type ServiceOverrides = {
   messages?: MaxMessageService;
   media?: MediaService;
-  classifier?: IncidentClassifier;
-  draftGenerator?: AnswerDraftGenerator;
-  moderation?: ModerationService;
 };
 
 export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides = {}): AppServices {
@@ -123,10 +110,6 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
   );
   const answers = new AnswerService(prisma, repository, history, state, media, review, sector);
 
-  const classifier = overrides.classifier ?? createIncidentClassifier();
-  const draftGenerator = overrides.draftGenerator ?? createAnswerDraftGenerator();
-  const moderation = overrides.moderation ?? createModerationService();
-
   const distribution = new DistributionService(
     prisma,
     repository,
@@ -138,8 +121,6 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
     media,
     sector,
     delivery,
-    classifier,
-    moderation,
   );
 
   const sla = new SlaService(prisma, repository, history, sector, distribution, sessions);
@@ -167,8 +148,5 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
     delivery,
     sla,
     reports,
-    classifier,
-    draftGenerator,
-    moderation,
   };
 }

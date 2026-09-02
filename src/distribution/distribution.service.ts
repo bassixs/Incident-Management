@@ -1,7 +1,5 @@
 import { type Category, IncidentStatus, type PrismaClient } from '@prisma/client';
 
-import type { IncidentClassifier } from '../ai/classifier.interface';
-import type { ModerationService } from '../ai/moderation.interface';
 import { distributionKeyboard } from '../bot/keyboards';
 import { codeLabel, distributionCard, distributionResolvedNotice, rejectionToRequester } from '../bot/views/cards';
 import type { CategoryService } from '../categories/category.service';
@@ -40,8 +38,6 @@ export class DistributionService {
     private readonly media: MediaService,
     private readonly sector: SectorService,
     private readonly delivery: RequesterDeliveryService,
-    private readonly classifier: IncidentClassifier,
-    private readonly moderation: ModerationService,
   ) {}
 
   chatId(): bigint {
@@ -52,44 +48,14 @@ export class DistributionService {
     return chatId;
   }
 
-  /**
-   * Run classification + moderation, then publish the card.
-   *
-   * AI failures are swallowed inside the services themselves, so a dead LLM
-   * simply produces a card with "AI-подсказка: нет предположений".
-   */
-  async processNewIncident(incidentId: string): Promise<void> {
-    const categories = await this.categories.listActive();
-
-    if (this.classifier.enabled) {
-      const incident = await this.repository.findById(incidentId);
-      if (incident) {
-        const result = await this.classifier.classify(incident.text, categories);
-        if (result.suggestions.length > 0) {
-          await this.incidents.applyClassification(incidentId, result);
-        }
-      }
-    }
-
-    if (this.moderation.enabled) {
-      const incident = await this.repository.findById(incidentId);
-      if (incident) {
-        await this.incidents.applyModeration(incidentId, await this.moderation.analyze(incident.text));
-      }
-    }
-
-    await this.publishCard(incidentId);
-  }
-
   async publishCard(incidentId: string): Promise<void> {
     const incident = await this.repository.findById(incidentId);
     if (!incident) throw new NotFoundError(`Incident ${incidentId} not found`);
-    const categoriesById = new Map((await this.categories.listAll()).map((item) => [item.id, item]));
 
     const { firstMessageId } = await this.messages.send(
       { chatId: this.chatId() },
       {
-        text: distributionCard(incident, { categoriesById, aiEnabled: getConfig().AI_ENABLED }),
+        text: distributionCard(incident),
         label: codeLabel(incident),
         keyboard: distributionKeyboard(incident.id),
         attachments: await loadOutboundAttachments(this.media, incident.attachments),
@@ -114,24 +80,18 @@ export class DistributionService {
   }
 
   /**
-   * Sector list for the "Распределить" step, with the AI pick highlighted.
+   * Sector list for the "Распределить" step.
    *
    * Only сферы with a configured chat are offered: routing into a сфера with
    * nowhere to publish would fail after the click, which is worse than not
    * showing it. `hiddenCount` lets the caller say so out loud.
    */
-  async assignmentOptions(
-    incident: IncidentWithRelations,
-  ): Promise<{ categories: Category[]; recommendedId: string | null; hiddenCount: number }> {
+  async assignmentOptions(): Promise<{ categories: Category[]; hiddenCount: number }> {
     const [routable, active] = await Promise.all([
       this.categories.listRoutable(),
       this.categories.listActive(),
     ]);
-    return {
-      categories: routable,
-      recommendedId: incident.aiSuggestedCategoryId,
-      hiddenCount: active.length - routable.length,
-    };
+    return { categories: routable, hiddenCount: active.length - routable.length };
   }
 
   /**

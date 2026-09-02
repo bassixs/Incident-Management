@@ -45,7 +45,6 @@ export class SectorService {
         text: sectorCard(incident, incident.assignedCategory),
         label: codeLabel(incident),
         keyboard: sectorKeyboard(incident.id, {
-          aiEnabled: config.AI_ENABLED,
           hasTemplate: Boolean(incident.assignedCategory.answerTemplate),
         }),
         attachments: await loadOutboundAttachments(this.media, incident.attachments),

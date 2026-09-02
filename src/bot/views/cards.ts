@@ -1,6 +1,5 @@
 import type { Category, Incident, IncidentAnswer } from '@prisma/client';
 
-import type { ClassificationSuggestion } from '../../ai/classifier.interface';
 import { getConfig } from '../../config';
 import { describeStatus } from '../../incidents/incident-state.service';
 import type { IncidentWithRelations } from '../../incidents/incident.repository';
@@ -39,44 +38,9 @@ export function registrationConfirmation(incident: Incident): string {
   ].join('\n');
 }
 
-function renderAiHint(
-  suggestions: ClassificationSuggestion[],
-  categoriesById: Map<string, Category>,
-  aiEnabled: boolean,
-): string[] {
-  if (!aiEnabled) return ['🤖 AI-подсказка:', 'не используется'];
-  if (suggestions.length === 0) return ['🤖 AI-подсказка:', 'нет предположений'];
-  return [
-    '🤖 AI-подсказка:',
-    ...suggestions.map((suggestion, index) => {
-      const name = categoriesById.get(suggestion.categoryId)?.name ?? 'Неизвестная сфера';
-      return `${index + 1}. ${name} — ${Math.round(suggestion.confidence * 100)}%`;
-    }),
-  ];
-}
-
 /** §16 — the card every new incident gets in the distribution chat. */
-export function distributionCard(
-  incident: IncidentWithRelations,
-  options: { categoriesById: Map<string, Category>; aiEnabled: boolean },
-): string {
-  const suggestions = (incident.aiSuggestions ?? []) as ClassificationSuggestion[];
+export function distributionCard(incident: IncidentWithRelations): string {
   const photoCount = incident.attachments.filter((item) => item.type === 'IMAGE').length;
-  const moderation: string[] = [];
-  if (incident.aiPossibleAbuse || incident.aiPossibleOfftopic) {
-    moderation.push(
-      '',
-      '⚠️ AI-модерация:',
-      [
-        incident.aiPossibleAbuse ? 'возможное злоупотребление' : null,
-        incident.aiPossibleOfftopic ? 'возможно не по теме' : null,
-      ]
-        .filter(Boolean)
-        .join(', '),
-      ...(incident.aiModerationReason ? [incident.aiModerationReason] : []),
-      'Решение принимает сотрудник.',
-    );
-  }
 
   return [
     '🆕 НОВОЕ ОБРАЩЕНИЕ',
@@ -95,9 +59,6 @@ export function distributionCard(
     'Обращение:',
     incident.text,
     ...(photoCount > 0 ? ['', ...attachmentLine(photoCount)] : []),
-    '',
-    ...renderAiHint(suggestions, options.categoriesById, options.aiEnabled),
-    ...moderation,
     '',
     '⏱ Срок:',
     `до ${formatDateTime(incident.deadlineAt)}`,

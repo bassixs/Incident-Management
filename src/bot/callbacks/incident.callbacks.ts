@@ -6,7 +6,7 @@ import type { IncidentWithRelations } from '../../incidents/incident.repository'
 import { AppError, ForbiddenError, NotFoundError } from '../../utils/errors';
 import { incidentLogFields, moduleLogger } from '../../utils/logger';
 import { assertApprover, assertDispatcher, assertResponder, requirePermission } from '../middleware/authorize';
-import { aiDraftKeyboard, assignCategoryKeyboard } from '../keyboards';
+import { assignCategoryKeyboard } from '../keyboards';
 import { codeLabel } from '../views/cards';
 import type { ResolvedActor } from '../handlers/helpers';
 import { ensureFreeSession } from '../handlers/session-guard';
@@ -68,13 +68,6 @@ export async function handleIncidentCallback(
     case 'template':
       return startTemplateAnswer(services, actor, chatId, incident);
 
-    case 'ai-draft':
-    case 'ai-draft-regen':
-      return generateDraft(services, actor, chatId, incident);
-
-    case 'ai-draft-use':
-      return useDraft(services, actor, chatId, incident);
-
     case 'approve':
       return approve(services, actor, chatId, incident);
 
@@ -101,7 +94,7 @@ async function startAssignment(
   if (incident.status !== IncidentStatus.DISTRIBUTION) {
     return `${incident.publicCode} уже обработано.`;
   }
-  const { categories, recommendedId, hiddenCount } = await services.distribution.assignmentOptions(incident);
+  const { categories, hiddenCount } = await services.distribution.assignmentOptions();
   if (categories.length === 0) {
     return 'Ни для одной сферы не настроен рабочий чат.';
   }
@@ -115,7 +108,7 @@ async function startAssignment(
           ? ['', `⚠️ Скрыто сфер без рабочего чата: ${hiddenCount}. Список — /categories.`]
           : []),
       ].join('\n'),
-      keyboard: assignCategoryKeyboard(incident.id, categories, recommendedId),
+      keyboard: assignCategoryKeyboard(incident.id, categories),
     },
   );
   return undefined;
@@ -255,71 +248,6 @@ async function startTemplateAnswer(
     },
   );
   return started;
-}
-
-async function generateDraft(
-  services: AppServices,
-  actor: ResolvedActor,
-  chatId: bigint,
-  incident: IncidentWithRelations,
-): Promise<string | undefined> {
-  assertResponder(actor, incident, chatId);
-  if (!services.draftGenerator.enabled) return 'AI-черновик отключён.';
-  if (!incident.assignedCategory) return 'Обращение ещё не распределено.';
-  if (!(await ensureFreeSession(services, actor, chatId, incident.id))) return undefined;
-
-  const draft = await services.draftGenerator.generate(
-    incident,
-    incident.assignedCategory,
-    incident.assignedCategory.answerTemplate,
-  );
-
-  // The draft is parked on the session; only an explicit "Использовать" turns
-  // it into an answer version, and even then it still goes to review (§26).
-  await services.sessions.start({
-    maxUserId: actor.maxUserId,
-    chatId,
-    type: SessionType.WAITING_FOR_ANSWER,
-    incidentId: incident.id,
-    data: { prefillText: draft },
-  });
-
-  await services.history.record({
-    incidentId: incident.id,
-    action: 'ANSWER_DRAFT_GENERATED',
-    actorMaxUserId: actor.maxUserId,
-    actorRole: actor.role,
-  });
-
-  await services.messages.send(
-    { chatId },
-    {
-      text: ['🤖 Черновик', '', draft, '', 'Черновик подготовлен ИИ и требует проверки.'].join('\n'),
-      label: codeLabel(incident),
-      keyboard: aiDraftKeyboard(incident.id),
-    },
-  );
-  return undefined;
-}
-
-async function useDraft(
-  services: AppServices,
-  actor: ResolvedActor,
-  chatId: bigint,
-  incident: IncidentWithRelations,
-): Promise<string> {
-  assertResponder(actor, incident, chatId);
-  const session = await services.sessions.find(actor.maxUserId, chatId);
-  const prefill = session && session.incidentId === incident.id
-    ? services.sessions.readData(session).prefillText
-    : undefined;
-  if (!prefill) {
-    return 'Черновик устарел. Сгенерируйте его заново.';
-  }
-
-  const { answer } = await services.answers.submit(incident.id, actor, prefill);
-  await services.sessions.clear(actor.maxUserId, chatId);
-  return `${incident.publicCode}: ответ v${answer.version} отправлен на согласование`;
 }
 
 async function approve(

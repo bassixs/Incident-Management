@@ -31,7 +31,6 @@ process.env.SESSION_TTL_MINUTES = '10';
 process.env.MEDIA_STORAGE = 'local';
 process.env.MEDIA_LOCAL_PATH = './data/test-uploads';
 
-process.env.AI_ENABLED = 'false';
 
 process.env.ADMINS = '9001';
 process.env.DISPATCHERS = '9002';

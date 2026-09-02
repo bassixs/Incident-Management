@@ -96,21 +96,6 @@ const envSchema = z
     S3_SECRET_ACCESS_KEY: z.string().optional(),
     S3_FORCE_PATH_STYLE: boolean(true),
 
-    AI_ENABLED: boolean(false),
-    /**
-     * Which vendor implements the AI interfaces.
-     * `openai` covers any OpenAI-compatible gateway (AITunnel, OpenRouter,
-     * a self-hosted vLLM, ...) — point AI_BASE_URL at it.
-     */
-    AI_PROVIDER: z.enum(['anthropic', 'openai']).default('anthropic'),
-    /** Required for `openai`; for `anthropic` only to reach a proxy. */
-    AI_BASE_URL: z.string().optional(),
-    AI_API_KEY: z.string().optional(),
-    AI_MODEL: z.string().default('claude-opus-5'),
-    AI_TIMEOUT_MS: int(20000),
-    AI_MAX_SUGGESTIONS: int(3),
-    AI_MODERATION_ENABLED: boolean(false),
-
     ADMINS: bigIntList,
     DISPATCHERS: bigIntList,
     APPROVERS: bigIntList,
@@ -150,20 +135,6 @@ const envSchema = z
           });
         }
       }
-    }
-    if (value.AI_ENABLED && !value.AI_API_KEY) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['AI_API_KEY'],
-        message: 'AI_API_KEY is required when AI_ENABLED=true.',
-      });
-    }
-    if (value.AI_ENABLED && value.AI_PROVIDER === 'openai' && !value.AI_BASE_URL) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['AI_BASE_URL'],
-        message: 'AI_BASE_URL is required for AI_PROVIDER=openai (e.g. https://api.aitunnel.ru/v1).',
-      });
     }
     try {
       new Intl.DateTimeFormat('ru-RU', { timeZone: value.APP_TIMEZONE });

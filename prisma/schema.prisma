@@ -91,7 +91,6 @@ model Category {
   updatedAt      DateTime @updatedAt
 
   userSelectedIncidents Incident[] @relation("UserSelectedCategory")
-  aiSuggestedIncidents  Incident[] @relation("AiSuggestedCategory")
   assignedIncidents     Incident[] @relation("AssignedCategory")
 
   @@index([isActive, sortOrder])
@@ -110,15 +109,8 @@ model Incident {
 
   userSelectedCategoryId String?
   userSelectedCategory   Category? @relation("UserSelectedCategory", fields: [userSelectedCategoryId], references: [id])
-  aiSuggestedCategoryId  String?
-  aiSuggestedCategory    Category? @relation("AiSuggestedCategory", fields: [aiSuggestedCategoryId], references: [id])
   assignedCategoryId     String?
   assignedCategory       Category? @relation("AssignedCategory", fields: [assignedCategoryId], references: [id])
-
-  aiSuggestions      Json?
-  aiPossibleAbuse    Boolean @default(false)
-  aiPossibleOfftopic Boolean @default(false)
-  aiModerationReason String?
 
   status IncidentStatus @default(DISTRIBUTION)
 

@@ -6,7 +6,6 @@ import { formatCounterDay } from '../utils/datetime';
 export const INCIDENT_INCLUDE = {
   requester: true,
   userSelectedCategory: true,
-  aiSuggestedCategory: true,
   assignedCategory: true,
   currentResponder: true,
   assignedBy: true,

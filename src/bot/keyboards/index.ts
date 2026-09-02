@@ -67,41 +67,23 @@ export function distributionKeyboard(incidentId: string): Button[][] {
   ];
 }
 
-/**
- * Sector picker for a dispatcher (§17). The AI-recommended сфера is marked and
- * listed first, but it carries no special power — the operator still chooses.
- */
-export function assignCategoryKeyboard(
-  incidentId: string,
-  categories: Category[],
-  recommendedCategoryId?: string | null,
-): Button[][] {
-  const ordered = [...categories].sort((left, right) => {
-    if (left.id === recommendedCategoryId) return -1;
-    if (right.id === recommendedCategoryId) return 1;
-    return 0;
-  });
-  const rows = ordered.map((category) => [
-    button.callback(
-      category.id === recommendedCategoryId ? `⭐ ${category.name}` : category.name,
-      incidentCallback('assign-category', incidentId, category.id),
-    ),
+/** Sector picker for a dispatcher (§17). The operator chooses — nothing is preselected. */
+export function assignCategoryKeyboard(incidentId: string, categories: Category[]): Button[][] {
+  const rows = categories.map((category) => [
+    button.callback(category.name, incidentCallback('assign-category', incidentId, category.id)),
   ]);
   rows.push([button.callback('Отмена', incidentCallback('cancel', incidentId))]);
   return rows;
 }
 
 /** Buttons under the sector-chat card (§21). */
-export function sectorKeyboard(incidentId: string, options: { aiEnabled: boolean; hasTemplate: boolean }): Button[][] {
+export function sectorKeyboard(incidentId: string, options: { hasTemplate: boolean }): Button[][] {
   const rows: Button[][] = [
     [button.callback('Взять в работу', incidentCallback('take', incidentId), { intent: 'positive' })],
     [button.callback('Подготовить ответ', incidentCallback('answer', incidentId))],
   ];
   if (options.hasTemplate) {
     rows.push([button.callback('Использовать шаблон', incidentCallback('template', incidentId))]);
-  }
-  if (options.aiEnabled) {
-    rows.push([button.callback('AI-черновик', incidentCallback('ai-draft', incidentId))]);
   }
   return rows;
 }
@@ -117,15 +99,6 @@ export function reviewKeyboard(incidentId: string): Button[][] {
 /** Button under the "returned for revision" card in the sector chat (§32). */
 export function revisionKeyboard(incidentId: string): Button[][] {
   return [[button.callback('Исправить ответ', incidentCallback('fix', incidentId), { intent: 'positive' })]];
-}
-
-/** Choices offered after an AI draft is generated (§26). */
-export function aiDraftKeyboard(incidentId: string): Button[][] {
-  return [
-    [button.callback('Использовать', incidentCallback('ai-draft-use', incidentId), { intent: 'positive' })],
-    [button.callback('Перегенерировать', incidentCallback('ai-draft-regen', incidentId))],
-    [button.callback('Отмена', incidentCallback('cancel', incidentId))],
-  ];
 }
 
 /** Period picker shown by a bare `/report` (§40). */
