@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { Bot } from '@maxhub/max-bot-api';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, UserRole } from '@prisma/client';
 
 import { getConfig } from '../config';
 import { createMaxClient, type MaxClient } from '../max/max-client';
@@ -185,21 +185,42 @@ async function checkMediaStorage(): Promise<void> {
   }
 }
 
-function checkRoles(): void {
+async function checkRoles(prisma: PrismaClient): Promise<void> {
   const config = getConfig();
-  if (config.ADMINS.length === 0) {
+  let stored: Record<Exclude<UserRole, 'REQUESTER'>, number>;
+  try {
+    const [admins, dispatchers, approvers, responders] = await Promise.all([
+      prisma.user.count({ where: { roles: { has: UserRole.ADMIN } } }),
+      prisma.user.count({ where: { roles: { has: UserRole.DISPATCHER } } }),
+      prisma.user.count({ where: { roles: { has: UserRole.APPROVER } } }),
+      prisma.user.count({ where: { roles: { has: UserRole.RESPONDER } } }),
+    ]);
+    stored = {
+      ADMIN: admins,
+      DISPATCHER: dispatchers,
+      APPROVER: approvers,
+      RESPONDER: responders,
+    };
+  } catch (error) {
+    record('Роли', 'fail', `Не удалось прочитать роли из базы: ${describeError(error)}`);
+    return;
+  }
+
+  if (stored.ADMIN === 0 && config.ADMINS.length === 0) {
     record(
       'Роли',
       'fail',
-      'ADMINS пуст. Узнайте свой MAX ID командой /whoami в диалоге с ботом и впишите его в .env.',
+      'Нет ни одного ADMIN в базе или ADMINS в .env. Узнайте свой MAX ID командой /whoami и временно добавьте его в ADMINS.',
     );
     return;
   }
   record(
     'Роли',
     'ok',
-    `ADMINS: ${config.ADMINS.length}, DISPATCHERS: ${config.DISPATCHERS.length}, ` +
-      `APPROVERS: ${config.APPROVERS.length}, RESPONDERS: ${config.RESPONDERS.length}`,
+    `БД — ADMIN: ${stored.ADMIN}, DISPATCHER: ${stored.DISPATCHER}, ` +
+      `APPROVER: ${stored.APPROVER}, RESPONDER: ${stored.RESPONDER}; ` +
+      `bootstrap .env — ADMIN: ${config.ADMINS.length}, DISPATCHER: ${config.DISPATCHERS.length}, ` +
+      `APPROVER: ${config.APPROVERS.length}, RESPONDER: ${config.RESPONDERS.length}`,
   );
 }
 
@@ -253,7 +274,7 @@ async function main(): Promise<void> {
   }
 
   await checkMediaStorage();
-  checkRoles();
+  await checkRoles(prisma);
 
   if (process.argv.includes('--send') && botOk) {
     process.stdout.write('\nОтправка проверочных сообщений в рабочие чаты…\n');
