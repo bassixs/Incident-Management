@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily Incident Management Bot 90-day retention cleanup
+
+[Timer]
+OnCalendar=*-*-* 00:00:00 UTC
+RandomizedDelaySec=2m
+AccuracySec=1m
+Persistent=true
+Unit=incident-bot-retention.service
+
+[Install]
+WantedBy=timers.target

@@ -15,6 +15,7 @@ export const AuditAction = {
   CATEGORY_TEMPLATE_SET: 'CATEGORY_TEMPLATE_SET',
   SLA_SWEEP: 'SLA_SWEEP',
   DELIVERY_RETRIED: 'DELIVERY_RETRIED',
+  RETENTION_RUN: 'RETENTION_RUN',
 } as const;
 
 export type AuditEntry = {

@@ -18,7 +18,9 @@ import { IncidentService } from '../incidents/incident.service';
 import { createMaxClient, MaxClient } from '../max/max-client';
 import { MaxMessageService } from '../max/max-message.service';
 import { createMediaStorage, MediaService } from '../media/media.service';
+import type { MediaStorage } from '../media/media-storage.interface';
 import { ExcelReportService } from '../reports/excel-report.service';
+import { RetentionService } from '../retention/retention.service';
 import { ReviewService } from '../review/review.service';
 import { SectorService } from '../sector/sector.service';
 import { OperatorSessionService } from '../sessions/operator-session.service';
@@ -39,8 +41,10 @@ export type AppServices = {
   max: MaxClient;
   messages: MaxMessageService;
   media: MediaService;
+  storage: MediaStorage;
   actionGuard: ActionGuardService;
   audit: AdminAuditService;
+  retention: RetentionService;
 
   users: UserService;
   categories: CategoryService;
@@ -71,6 +75,7 @@ export type AppServices = {
 export type ServiceOverrides = {
   messages?: MaxMessageService;
   media?: MediaService;
+  storage?: MediaStorage;
 };
 
 export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides = {}): AppServices {
@@ -80,11 +85,12 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
     clientOptions: { baseUrl: config.MAX_API_BASE_URL },
   });
   const max = createMaxClient(bot);
-  const storage = createMediaStorage();
+  const storage = overrides.storage ?? createMediaStorage();
   const messages = overrides.messages ?? new MaxMessageService(max, { prisma, storage });
   const media = overrides.media ?? new MediaService(storage, max);
   const actionGuard = new ActionGuardService(prisma);
   const audit = new AdminAuditService(prisma);
+  const retention = new RetentionService(prisma, storage);
 
   const users = new UserService(prisma);
   const categories = new CategoryService(prisma);
@@ -146,8 +152,10 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
     max,
     messages,
     media,
+    storage,
     actionGuard,
     audit,
+    retention,
     users,
     categories,
     bans,

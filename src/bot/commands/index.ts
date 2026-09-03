@@ -3,6 +3,7 @@ import { InboxStatus, OutboxStatus, UserRole } from '@prisma/client';
 import type { AppServices } from '../../app/container';
 import { AuditAction } from '../../audit/admin-audit.service';
 import { parseReportRange, REPORT_USAGE } from '../../reports/report-range';
+import { formatRetentionPreview, formatRetentionRun } from '../../retention/retention.service';
 import { AppError, ForbiddenError, ValidationError } from '../../utils/errors';
 import { moduleLogger } from '../../utils/logger';
 import { hasPermission } from '../../users/roles';
@@ -50,6 +51,8 @@ const STAFF_HELP = [
   '/delivery_status — состояние очередей сообщений',
   '/delivery_errors — последние проблемы доставки',
   '/delivery_retry [КОД] — повторить одну или все неудачные исходящие доставки',
+  '/retention_preview — показать, что удалится по правилу 90 дней',
+  '/retention_run УДАЛИТЬ — запустить очистку после предварительной проверки',
   '/audit — последние административные изменения',
 ].join('\n');
 
@@ -511,6 +514,49 @@ export const COMMANDS: Record<string, CommandHandler> = {
         ? `${label}: повторно поставлено в очередь.`
         : 'Неудачных исходящих доставок нет.',
     );
+  },
+
+  retention_preview: async ({ services, actor, chatId, isDialog }) => {
+    requirePermission(actor, 'admin.manage');
+    assertWorkingChat(isDialog);
+    const preview = await services.retention.preview();
+    await reply(
+      services,
+      chatId,
+      isDialog,
+      actor,
+      [
+        formatRetentionPreview(preview),
+        '',
+        preview.incidents > 0
+          ? 'Для запуска: /retention_run УДАЛИТЬ'
+          : 'Сейчас удалять нечего.',
+      ].join('\n'),
+    );
+  },
+
+  retention_run: async ({ services, actor, chatId, isDialog, args }) => {
+    requirePermission(actor, 'admin.manage');
+    assertWorkingChat(isDialog);
+    if (args.join(' ').trim().toUpperCase() !== 'УДАЛИТЬ') {
+      throw new ValidationError('Сначала выполните /retention_preview, затем подтвердите: /retention_run УДАЛИТЬ');
+    }
+    const result = await services.retention.run();
+    await recordAudit(services, actor, {
+      action: AuditAction.RETENTION_RUN,
+      targetType: 'завершённые обращения',
+      summary: `Очистка хранения: удалено ${result.deletedIncidents}, ошибок ${result.failures.length}`,
+      metadata: {
+        cutoff: result.preview.cutoff.toISOString(),
+        deletedIncidents: result.deletedIncidents,
+        deletedFiles: result.deletedFiles,
+        deletedBytes: result.deletedBytes,
+        deletedRequesterProfiles: result.deletedRequesterProfiles,
+        failures: result.failures.length,
+        skippedBecauseLocked: result.skippedBecauseLocked,
+      },
+    });
+    await reply(services, chatId, isDialog, actor, formatRetentionRun(result));
   },
 
   audit: async ({ services, actor, chatId, isDialog }) => {

@@ -7,7 +7,7 @@ PROJECT_DIR="${PROJECT_DIR:-/opt/incident-bot}"
 BACKUP_ROOT="${BACKUP_ROOT:-$PROJECT_DIR/backups}"
 DAILY_RETENTION_DAYS="${DAILY_RETENTION_DAYS:-14}"
 WEEKLY_RETENTION_DAYS="${WEEKLY_RETENTION_DAYS:-70}"
-MONTHLY_RETENTION_DAYS="${MONTHLY_RETENTION_DAYS:-400}"
+MONTHLY_RETENTION_DAYS="${MONTHLY_RETENTION_DAYS:-90}"
 
 fail() {
   printf 'backup_error=%s\n' "$1" >&2
@@ -118,4 +118,3 @@ prune monthly- "$MONTHLY_RETENTION_DAYS"
 
 printf 'backup_created=%s\n' "$FINAL_DIR"
 printf 'backup_bytes=%s\n' "$(du -sb "$FINAL_DIR" | cut -f 1)"
-

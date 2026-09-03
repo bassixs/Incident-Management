@@ -172,6 +172,7 @@ model Incident {
   @@index([requesterId, createdAt])
   @@index([requesterMaxUserId, createdAt])
   @@index([status])
+  @@index([status, answeredAt])
   @@index([deadlineAt])
   @@index([assignedCategoryId])
   @@index([createdAt])

@@ -517,6 +517,8 @@ TRUNCATE TABLE "IncidentHistory","AnswerAttachment","IncidentAnswer",
 - [ ] В `.env` не осталось ключей внешних сервисов (`AI_*` больше не читаются)
 - [ ] `MEDIA_STORAGE=s3` и бакет настроены (если вложений будет много)
 - [ ] Настроено резервное копирование БД (раздел 14 README)
+- [ ] Установлен и включён `incident-bot-retention.timer`; ручной
+      `npm run retention:preview` не показывает неожиданных обращений
 - [ ] Роли переведены в БД (`/role <id> ...`), боевые администраторы заданы
 
 ---

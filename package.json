@@ -24,6 +24,8 @@
     "webhook:register": "tsx src/scripts/register-webhook.ts",
     "webhook:info": "tsx src/scripts/webhook-info.ts",
     "webhook:delete": "tsx src/scripts/delete-webhook.ts",
+    "retention:preview": "node dist/scripts/retention.js preview",
+    "retention:run": "node dist/scripts/retention.js run --confirm",
     "test": "vitest run",
     "test:watch": "vitest"
   },
