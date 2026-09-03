@@ -1,0 +1,524 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from docx import Document
+from docx.enum.section import WD_SECTION
+from docx.enum.style import WD_STYLE_TYPE
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Cm, Pt, RGBColor
+
+
+OUTPUT_DIR = Path("legal")
+FONT = "Times New Roman"
+BODY_SIZE = 11
+NOTE_SIZE = 9.5
+BLACK = RGBColor(0, 0, 0)
+GRAY = RGBColor(95, 95, 95)
+YELLOW = "FFF2CC"
+ACCENT = "5B6573"
+
+
+def set_run_font(run, size=BODY_SIZE, bold=None, italic=None, color=BLACK):
+    run.font.name = FONT
+    run._element.get_or_add_rPr().rFonts.set(qn("w:ascii"), FONT)
+    run._element.get_or_add_rPr().rFonts.set(qn("w:hAnsi"), FONT)
+    run._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), FONT)
+    run.font.size = Pt(size)
+    run.font.color.rgb = color
+    if bold is not None:
+        run.bold = bold
+    if italic is not None:
+        run.italic = italic
+    return run
+
+
+def shade_run(run, fill=YELLOW):
+    rpr = run._element.get_or_add_rPr()
+    shd = rpr.find(qn("w:shd"))
+    if shd is None:
+        shd = OxmlElement("w:shd")
+        rpr.append(shd)
+    shd.set(qn("w:fill"), fill)
+
+
+def add_field(paragraph, instruction: str):
+    begin = OxmlElement("w:fldChar")
+    begin.set(qn("w:fldCharType"), "begin")
+    instr = OxmlElement("w:instrText")
+    instr.set(qn("xml:space"), "preserve")
+    instr.text = instruction
+    separate = OxmlElement("w:fldChar")
+    separate.set(qn("w:fldCharType"), "separate")
+    display = OxmlElement("w:t")
+    display.text = "1"
+    end = OxmlElement("w:fldChar")
+    end.set(qn("w:fldCharType"), "end")
+    run = paragraph.add_run()
+    run._element.extend([begin, instr, separate, display, end])
+    set_run_font(run, size=9, color=GRAY)
+
+
+def set_cell_margins(cell, top=90, start=120, bottom=90, end=120):
+    tc = cell._tc
+    tc_pr = tc.get_or_add_tcPr()
+    tc_mar = tc_pr.first_child_found_in("w:tcMar")
+    if tc_mar is None:
+        tc_mar = OxmlElement("w:tcMar")
+        tc_pr.append(tc_mar)
+    for name, value in (("top", top), ("start", start), ("bottom", bottom), ("end", end)):
+        node = tc_mar.find(qn(f"w:{name}"))
+        if node is None:
+            node = OxmlElement(f"w:{name}")
+            tc_mar.append(node)
+        node.set(qn("w:w"), str(value))
+        node.set(qn("w:type"), "dxa")
+
+
+def configure_document(title: str, short_title: str) -> Document:
+    doc = Document()
+    section = doc.sections[0]
+    section.page_width = Cm(21)
+    section.page_height = Cm(29.7)
+    section.top_margin = Cm(1.8)
+    section.bottom_margin = Cm(1.8)
+    section.left_margin = Cm(2.2)
+    section.right_margin = Cm(1.7)
+    section.header_distance = Cm(0.9)
+    section.footer_distance = Cm(0.9)
+
+    styles = doc.styles
+    normal = styles["Normal"]
+    normal.font.name = FONT
+    normal._element.rPr.rFonts.set(qn("w:ascii"), FONT)
+    normal._element.rPr.rFonts.set(qn("w:hAnsi"), FONT)
+    normal.font.size = Pt(BODY_SIZE)
+    normal.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    normal.paragraph_format.space_before = Pt(0)
+    normal.paragraph_format.space_after = Pt(4)
+    normal.paragraph_format.line_spacing = 1.1
+    normal.paragraph_format.first_line_indent = Cm(1.25)
+
+    for name, size, before, after in (
+        ("Heading 1", 13.5, 11, 6),
+        ("Heading 2", 12, 8, 4),
+    ):
+        style = styles[name]
+        style.font.name = FONT
+        style._element.rPr.rFonts.set(qn("w:ascii"), FONT)
+        style._element.rPr.rFonts.set(qn("w:hAnsi"), FONT)
+        style.font.size = Pt(size)
+        style.font.bold = True
+        style.font.color.rgb = BLACK
+        style.paragraph_format.space_before = Pt(before)
+        style.paragraph_format.space_after = Pt(after)
+        style.paragraph_format.keep_with_next = True
+        style.paragraph_format.first_line_indent = Cm(0)
+
+    for style_name in ("List Bullet", "List Number"):
+        style = styles[style_name]
+        style.font.name = FONT
+        style._element.rPr.rFonts.set(qn("w:ascii"), FONT)
+        style._element.rPr.rFonts.set(qn("w:hAnsi"), FONT)
+        style.font.size = Pt(BODY_SIZE)
+        style.paragraph_format.left_indent = Cm(1.15)
+        style.paragraph_format.first_line_indent = Cm(-0.55)
+        style.paragraph_format.space_after = Pt(2)
+        style.paragraph_format.line_spacing = 1.1
+
+    if "Legal Note" not in [s.name for s in styles]:
+        note = styles.add_style("Legal Note", WD_STYLE_TYPE.PARAGRAPH)
+        note.font.name = FONT
+        note._element.rPr.rFonts.set(qn("w:ascii"), FONT)
+        note._element.rPr.rFonts.set(qn("w:hAnsi"), FONT)
+        note.font.size = Pt(NOTE_SIZE)
+        note.font.italic = True
+        note.font.color.rgb = RGBColor(80, 80, 80)
+        note.paragraph_format.first_line_indent = Cm(0)
+        note.paragraph_format.space_after = Pt(6)
+        note.paragraph_format.line_spacing = 1.1
+
+    header = section.header
+    hp = header.paragraphs[0]
+    hp.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    hp.paragraph_format.space_after = Pt(0)
+    set_run_font(hp.add_run("ИСКРА  •  ЮРИДИЧЕСКИЕ ДОКУМЕНТЫ"), size=8.5, bold=True, color=GRAY)
+
+    footer = section.footer
+    fp = footer.paragraphs[0]
+    fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    fp.paragraph_format.space_before = Pt(0)
+    set_run_font(fp.add_run("Страница "), size=9, color=GRAY)
+    add_field(fp, "PAGE")
+
+    title_p = doc.add_paragraph()
+    title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title_p.paragraph_format.first_line_indent = Cm(0)
+    title_p.paragraph_format.space_before = Pt(6)
+    title_p.paragraph_format.space_after = Pt(4)
+    title_p.paragraph_format.keep_with_next = True
+    set_run_font(title_p.add_run(title.upper()), size=16, bold=True)
+
+    subtitle = doc.add_paragraph()
+    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    subtitle.paragraph_format.first_line_indent = Cm(0)
+    subtitle.paragraph_format.space_after = Pt(9)
+    set_run_font(subtitle.add_run("чат-бот «Искра» в мессенджере MAX"), size=10.5, italic=True, color=GRAY)
+
+    callout = doc.add_table(rows=1, cols=1)
+    callout.autofit = False
+    callout.columns[0].width = Cm(17)
+    cell = callout.cell(0, 0)
+    cell.width = Cm(17)
+    set_cell_margins(cell)
+    tc_pr = cell._tc.get_or_add_tcPr()
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:fill"), YELLOW)
+    tc_pr.append(shd)
+    borders = OxmlElement("w:tcBorders")
+    for side in ("top", "left", "bottom", "right"):
+        edge = OxmlElement(f"w:{side}")
+        edge.set(qn("w:val"), "single")
+        edge.set(qn("w:sz"), "6")
+        edge.set(qn("w:color"), "D6B656")
+        borders.append(edge)
+    tc_pr.append(borders)
+    cp = cell.paragraphs[0]
+    cp.paragraph_format.first_line_indent = Cm(0)
+    cp.paragraph_format.space_after = Pt(0)
+    set_run_font(cp.add_run("ПРОЕКТ. "), size=9.5, bold=True)
+    set_run_font(
+        cp.add_run(
+            "Перед публикацией заполнить все жёлтые поля, согласовать документ с юристом и проверить, "
+            "что фактическая работа Чат-бота соответствует тексту."
+        ),
+        size=9.5,
+    )
+    doc.add_paragraph().paragraph_format.space_after = Pt(0)
+
+    doc.core_properties.title = title
+    doc.core_properties.subject = f"Юридический документ для чат-бота «Искра»: {short_title}"
+    doc.core_properties.author = "Проект «Искра»"
+    doc.core_properties.keywords = "Искра, MAX, чат-бот, персональные данные"
+    return doc
+
+
+def add_body(doc: Document, text: str, *, bold_prefix: str | None = None, note=False):
+    p = doc.add_paragraph(style="Legal Note" if note else None)
+    if bold_prefix and text.startswith(bold_prefix):
+        set_run_font(p.add_run(bold_prefix), bold=True, size=NOTE_SIZE if note else BODY_SIZE, color=GRAY if note else BLACK)
+        set_run_font(p.add_run(text[len(bold_prefix):]), size=NOTE_SIZE if note else BODY_SIZE, italic=note, color=GRAY if note else BLACK)
+    else:
+        set_run_font(p.add_run(text), size=NOTE_SIZE if note else BODY_SIZE, italic=note, color=GRAY if note else BLACK)
+    return p
+
+
+def add_placeholder(doc: Document, label: str, value: str):
+    p = doc.add_paragraph()
+    p.paragraph_format.first_line_indent = Cm(0)
+    set_run_font(p.add_run(f"{label}: "), bold=True, size=BODY_SIZE)
+    r = set_run_font(p.add_run(value), bold=True, size=BODY_SIZE)
+    shade_run(r)
+    return p
+
+
+def add_bullet(doc: Document, text: str):
+    p = doc.add_paragraph(style="List Bullet")
+    p.paragraph_format.first_line_indent = Cm(-0.55)
+    set_run_font(p.add_run(text), size=BODY_SIZE)
+    return p
+
+
+def add_heading(doc: Document, text: str, level=1, *, page_break_before=False):
+    p = doc.add_paragraph(text, style=f"Heading {level}")
+    p.paragraph_format.page_break_before = page_break_before
+    for run in p.runs:
+        set_run_font(run, size=13.5 if level == 1 else 12, bold=True)
+    return p
+
+
+def add_definition(doc: Document, term: str, definition: str):
+    p = doc.add_paragraph()
+    p.paragraph_format.first_line_indent = Cm(0)
+    set_run_font(p.add_run(f"{term} — "), bold=True, size=BODY_SIZE)
+    set_run_font(p.add_run(definition), size=BODY_SIZE)
+    return p
+
+
+def add_signature_block(doc: Document):
+    add_heading(doc, "Реквизиты и контакты", 1)
+    add_placeholder(doc, "Оператор/владелец", "[ПОЛНОЕ НАИМЕНОВАНИЕ ИЛИ ФИО]")
+    add_placeholder(doc, "ИНН", "[ЗАПОЛНИТЬ]")
+    add_placeholder(doc, "ОГРН/ОГРНИП", "[ЗАПОЛНИТЬ, ЕСЛИ ПРИМЕНИМО]")
+    add_placeholder(doc, "Адрес", "[ЗАПОЛНИТЬ]")
+    add_placeholder(doc, "Электронная почта", "[ЗАПОЛНИТЬ ПОСЛЕ СОЗДАНИЯ]")
+    add_placeholder(doc, "Телефон поддержки", "[ЗАПОЛНИТЬ ИЛИ УДАЛИТЬ ПУНКТ]")
+    add_placeholder(doc, "Дата вступления в силу", "[ДД.ММ.ГГГГ]")
+
+
+def build_agreement() -> Path:
+    doc = configure_document("Пользовательское соглашение", "пользовательское соглашение")
+    add_body(
+        doc,
+        "Настоящее Пользовательское соглашение является публичной офертой и определяет условия "
+        "использования чат-бота «Искра», размещённого в мессенджере MAX (далее — «Чат-бот»).",
+    )
+
+    add_heading(doc, "1. Термины и стороны")
+    add_definition(doc, "Сервис MAX", "мессенджер MAX, через который Пользователь получает доступ к Чат-боту.")
+    add_definition(doc, "Чат-бот", "программное обеспечение «Искра», обеспечивающее автоматизированный приём, регистрацию, маршрутизацию и сопровождение обращений.")
+    add_definition(doc, "Пользователь", "физическое лицо, использующее Чат-бот и направляющее обращение.")
+    add_definition(doc, "Оператор", "лицо, владеющее и управляющее Чат-ботом, сведения о котором указаны в разделе 11 Соглашения.")
+    add_definition(doc, "Обращение", "сообщение Пользователя о проблеме, направленное через Чат-бот вместе с предоставленными сведениями и материалами.")
+
+    add_heading(doc, "2. Назначение Чат-бота")
+    add_body(
+        doc,
+        "2.1. Чат-бот предназначен для автоматизации, систематизации и направления обращений граждан "
+        "уполномоченным сотрудникам, государственным органам и органам местного самоуправления, "
+        "компетентным рассматривать соответствующее обращение.",
+    )
+    add_body(doc, "2.2. Чат-бот позволяет создать обращение, приложить необходимые материалы, получать уведомления о ходе его обработки и получить ответ.")
+    p = doc.add_paragraph()
+    p.paragraph_format.first_line_indent = Cm(0)
+    r = set_run_font(p.add_run("[ЮРИСТУ: определить, признаётся ли сообщение через Чат-бот официальным обращением в смысле Федерального закона № 59-ФЗ и иных применимых норм.]"), bold=True)
+    shade_run(r)
+    add_body(doc, "2.3. Чат-бот не является службой экстренной помощи. При непосредственной угрозе жизни, здоровью или безопасности следует обратиться по номеру 112 либо в соответствующую экстренную службу.")
+
+    add_heading(doc, "3. Принятие Соглашения")
+    add_body(doc, "3.1. До начала использования Чат-бота Пользователь знакомится с настоящим Соглашением и Политикой обработки персональных данных.")
+    add_body(doc, "3.2. Нажатие отдельной кнопки «Принимаю пользовательское соглашение» означает полное и безоговорочное принятие Соглашения. Если Пользователь не согласен с его условиями, он не должен использовать Чат-бот.")
+    add_body(doc, "3.3. Согласие на обработку персональных данных запрашивается и фиксируется отдельно от принятия настоящего Соглашения.")
+
+    add_heading(doc, "4. Создание и рассмотрение обращения")
+    add_body(doc, "4.1. Для создания обращения Пользователь предоставляет:")
+    for item in (
+        "фамилию, имя и отчество (при наличии);",
+        "контактный номер телефона;",
+        "муниципальный округ, на территории которого находится указанная в обращении проблема;",
+        "текст обращения;",
+        "фотографии, геолокацию и/или точный адрес проблемы — при наличии и необходимости.",
+    ):
+        add_bullet(doc, item)
+    add_body(doc, "4.2. Пользователь обязан предоставлять достоверные сведения, относящиеся к существу обращения, и по возможности не указывать избыточные персональные данные свои или третьих лиц.")
+    add_body(doc, "4.3. Пользователь подтверждает, что обладает законными основаниями для передачи сведений и материалов о третьих лицах, если они содержатся в обращении.")
+    add_body(doc, "4.4. Обращение может быть направлено уполномоченным сотрудникам и компетентным государственным органам или органам местного самоуправления.")
+
+    add_heading(doc, "5. Права и обязанности Пользователя")
+    add_body(doc, "5.1. Пользователь вправе использовать Чат-бот по назначению, получать доступную информацию о своём обращении и направлять вопросы по контактам Оператора.")
+    add_body(doc, "5.2. Пользователю запрещается:")
+    for item in (
+        "направлять заведомо ложные сведения, незаконный или оскорбительный контент;",
+        "загружать вредоносные файлы или пытаться нарушить работу Чат-бота;",
+        "использовать автоматизированные средства для массовой отправки обращений;",
+        "нарушать права третьих лиц, законодательство Российской Федерации и правила Сервиса MAX.",
+    ):
+        add_bullet(doc, item)
+
+    add_heading(doc, "6. Права и обязанности Оператора")
+    add_body(doc, "6.1. Оператор обеспечивает работу Чат-бота, организует маршрутизацию обращений, принимает разумные меры защиты информации и предоставляет канал для связи.")
+    add_body(doc, "6.2. Оператор вправе ограничить доступ Пользователя при злоупотреблении функциональностью, массовой рассылке, попытках вмешательства в работу системы или ином существенном нарушении Соглашения.")
+    add_body(doc, "6.3. Оператор вправе изменять функциональность Чат-бота, временно приостанавливать его работу для обновления или устранения неисправностей.")
+
+    add_heading(doc, "7. Персональные данные")
+    add_body(doc, "7.1. Обработка персональных данных регулируется отдельной Политикой обработки персональных данных и отдельным согласием Пользователя.")
+    add_body(doc, "7.2. Непредоставление обязательных данных может сделать создание и рассмотрение обращения невозможным. Необязательные фотографии, геолокация и точный адрес предоставляются только при наличии и необходимости.")
+
+    add_heading(doc, "8. Интеллектуальная собственность")
+    add_body(doc, "8.1. Исключительные права на Чат-бот, его программный код и элементы оформления принадлежат правообладателю либо используются им на законном основании.")
+    add_placeholder(doc, "Правообладатель/владелец Чат-бота", "[ЗАПОЛНИТЬ]")
+    add_body(doc, "8.2. Пользователь сохраняет права на созданные им материалы и предоставляет Оператору право использовать их исключительно в объёме, необходимом для обработки и направления обращения.")
+
+    add_heading(doc, "9. Ограничение ответственности")
+    add_body(doc, "9.1. Чат-бот предоставляется с учётом возможных технических перерывов в работе Сервиса MAX, каналов связи и оборудования. Оператор принимает разумные меры для восстановления работы и доставки сообщений.")
+    add_body(doc, "9.2. Оператор не отвечает за недоступность или действия Сервиса MAX и иных внешних систем, находящихся вне его контроля, но это не освобождает Оператора от обязанностей, прямо установленных законодательством.")
+
+    add_heading(doc, "10. Несовершеннолетние и дееспособность")
+    add_body(doc, "10.1. Пользователь подтверждает наличие необходимого объёма дееспособности. Если Пользователь не обладает им в полном объёме, использование Чат-бота и предоставление персональных данных осуществляются с участием законного представителя в случаях, предусмотренных законодательством.")
+
+    add_heading(doc, "11. Заключительные положения")
+    add_body(doc, "11.1. К отношениям сторон применяется законодательство Российской Федерации. Споры разрешаются путём переговоров, а при недостижении соглашения — в установленном законом порядке.")
+    add_body(doc, "11.2. Оператор может изменять Соглашение. Новая редакция применяется с указанной в ней даты и должна быть доступна Пользователю в Чат-боте до продолжения использования.")
+    add_signature_block(doc)
+
+    path = OUTPUT_DIR / "Пользовательское_соглашение_Искра_черновик.docx"
+    doc.save(path)
+    return path
+
+
+def build_consent() -> Path:
+    doc = configure_document("Согласие на обработку персональных данных", "согласие на обработку персональных данных")
+    add_body(
+        doc,
+        "Пользователь чат-бота «Искра» в мессенджере MAX, действуя свободно, своей волей и в своём "
+        "интересе, даёт конкретное, предметное, информированное, сознательное и однозначное согласие "
+        "на обработку своих персональных данных на следующих условиях.",
+    )
+
+    add_heading(doc, "1. Оператор персональных данных")
+    add_placeholder(doc, "Полное наименование или ФИО Оператора", "[ЗАПОЛНИТЬ]")
+    add_placeholder(doc, "ИНН", "[ЗАПОЛНИТЬ]")
+    add_placeholder(doc, "ОГРН/ОГРНИП", "[ЗАПОЛНИТЬ, ЕСЛИ ПРИМЕНИМО]")
+    add_placeholder(doc, "Адрес Оператора", "[ЗАПОЛНИТЬ]")
+    add_placeholder(doc, "Электронная почта для обращений и отзыва согласия", "[ЗАПОЛНИТЬ ПОСЛЕ СОЗДАНИЯ]")
+
+    add_heading(doc, "2. Цели обработки")
+    for item in (
+        "создание, регистрация, маршрутизация и рассмотрение обращения Пользователя;",
+        "связь с Пользователем, уточнение сведений и направление уведомлений и ответа;",
+        "передача обращения компетентным уполномоченным сотрудникам, государственным органам и органам местного самоуправления;",
+        "контроль сроков и качества рассмотрения обращений, ведение истории действий;",
+        "обеспечение безопасности, предотвращение злоупотреблений и устранение технических ошибок;",
+        "формирование внутренней статистики и отчётности без распространения персональных данных неограниченному кругу лиц.",
+    ):
+        add_bullet(doc, item)
+
+    add_heading(doc, "3. Перечень персональных данных", page_break_before=True)
+    for item in (
+        "фамилия, имя, отчество (при наличии);",
+        "контактный номер телефона;",
+        "идентификатор Пользователя в MAX, отображаемое имя и короткое имя профиля (при наличии);",
+        "идентификатор чата, необходимые технические идентификаторы сообщений и время взаимодействия;",
+        "муниципальный округ, на территории которого находится проблема;",
+        "текст обращения;",
+        "фотографии, геолокация и/или точный адрес проблемы — если Пользователь предоставил их по своему решению;",
+        "сведения о ходе и результате рассмотрения обращения, включая статусы, уведомления и ответы;",
+        "технические сведения о доставке и обработке сообщений, необходимые для надёжной работы Чат-бота.",
+    ):
+        add_bullet(doc, item)
+    add_body(doc, "Фотографии не используются Оператором для биометрической идентификации Пользователя.")
+
+    add_heading(doc, "4. Действия и способы обработки")
+    add_body(doc, "Оператор вправе осуществлять с указанными данными сбор, запись, систематизацию, накопление, хранение, уточнение, извлечение, использование, передачу (предоставление, доступ), обезличивание, блокирование, удаление и уничтожение.")
+    add_body(doc, "Обработка осуществляется автоматизированным способом и без использования средств автоматизации. Распространение персональных данных неограниченному кругу лиц настоящим согласием не разрешается.")
+
+    add_heading(doc, "5. Получатели и инфраструктура")
+    add_body(doc, "Доступ к данным в пределах указанных целей может предоставляться:")
+    for item in (
+        "уполномоченным сотрудникам Оператора;",
+        "государственным органам и органам местного самоуправления, компетентным рассматривать обращение;",
+        "поставщику услуг размещения серверной инфраструктуры Timeweb — в объёме, необходимом для размещения и технической эксплуатации системы;",
+        "оператору Сервиса MAX — в рамках передачи сообщений и функционирования мессенджера на условиях документов Сервиса MAX.",
+    ):
+        add_bullet(doc, item)
+    add_placeholder(doc, "Точное юридическое наименование поставщика Timeweb по договору", "[ЗАПОЛНИТЬ]")
+    add_body(doc, "Серверная инфраструктура, используемая Оператором для первичной записи и хранения данных, заявлена как расположенная на территории Российской Федерации.")
+
+    add_heading(doc, "6. Срок обработки и хранения")
+    add_body(doc, "Персональные данные обрабатываются в течение срока рассмотрения обращения и одного месяца после направления окончательного ответа, отклонения или иного завершения обращения, если более длительное хранение не требуется законодательством Российской Федерации.")
+    p = doc.add_paragraph()
+    p.paragraph_format.first_line_indent = Cm(0)
+    r = set_run_font(p.add_run("[ДО ПУБЛИКАЦИИ: настроить удаление данных из рабочей базы и резервных копий в соответствии с указанным сроком либо согласовать с юристом иной реальный срок.]"), bold=True)
+    shade_run(r)
+
+    add_heading(doc, "7. Отзыв согласия")
+    add_body(doc, "Согласие может быть отозвано путём направления заявления Оператору:")
+    add_placeholder(doc, "по электронной почте", "[АДРЕС ЭЛЕКТРОННОЙ ПОЧТЫ]")
+    add_placeholder(doc, "или по почтовому адресу", "[АДРЕС ОПЕРАТОРА]")
+    add_body(doc, "Заявление должно позволять идентифицировать Пользователя и содержать требование об отзыве согласия. После получения отзыва Оператор прекращает обработку и уничтожает данные в сроки, установленные законом, кроме случаев, когда обработка может быть продолжена на ином законном основании.")
+
+    add_heading(doc, "8. Способ предоставления согласия")
+    add_body(doc, "Согласие предоставляется отдельно от Пользовательского соглашения посредством нажатия Пользователем кнопки «Даю согласие на обработку персональных данных» до передачи обязательных данных.")
+    add_body(doc, "Оператор фиксирует идентификатор Пользователя в MAX, дату и время предоставления согласия и редакцию документа для подтверждения факта его получения.")
+    add_placeholder(doc, "Дата начала действия редакции", "[ДД.ММ.ГГГГ]")
+
+    path = OUTPUT_DIR / "Согласие_на_обработку_ПДн_Искра_черновик.docx"
+    doc.save(path)
+    return path
+
+
+def build_policy() -> Path:
+    doc = configure_document("Политика обработки персональных данных", "политика обработки персональных данных")
+    add_body(doc, "Настоящая Политика определяет порядок и условия обработки персональных данных физических лиц при использовании чат-бота «Искра» в мессенджере MAX.")
+
+    add_heading(doc, "1. Общие положения")
+    add_body(doc, "1.1. Политика разработана в соответствии с законодательством Российской Федерации о персональных данных и применяется ко всей информации, которую Оператор получает при работе Чат-бота.")
+    add_body(doc, "1.2. Использование Чат-бота возможно только после ознакомления Пользователя с Политикой, Пользовательским соглашением и предоставления отдельного согласия на обработку персональных данных.")
+    add_body(doc, "1.3. Оператор не определяет правила обработки данных самим Сервисом MAX. Такая обработка регулируется документами Сервиса MAX.")
+
+    add_heading(doc, "2. Сведения об Операторе")
+    add_placeholder(doc, "Полное наименование или ФИО", "[ЗАПОЛНИТЬ]")
+    add_placeholder(doc, "ИНН", "[ЗАПОЛНИТЬ]")
+    add_placeholder(doc, "ОГРН/ОГРНИП", "[ЗАПОЛНИТЬ, ЕСЛИ ПРИМЕНИМО]")
+    add_placeholder(doc, "Адрес", "[ЗАПОЛНИТЬ]")
+    add_placeholder(doc, "Электронная почта по вопросам персональных данных", "[ЗАПОЛНИТЬ ПОСЛЕ СОЗДАНИЯ]")
+    add_placeholder(doc, "Владелец/правообладатель Чат-бота", "[ЗАПОЛНИТЬ]")
+
+    add_heading(doc, "3. Категории субъектов и цели обработки")
+    add_body(doc, "3.1. Оператор обрабатывает данные Пользователей, направляющих обращения через Чат-бот, а также данные иных лиц, которые могут быть указаны Пользователем в тексте или материалах обращения.")
+    add_body(doc, "3.2. Целями обработки являются:")
+    for item in (
+        "приём, регистрация, маршрутизация и рассмотрение обращений;",
+        "обратная связь, уведомления о ходе обработки и направление ответа;",
+        "передача материалов компетентным уполномоченным сотрудникам и органам;",
+        "контроль сроков, качества и истории рассмотрения обращений;",
+        "защита системы, предотвращение злоупотреблений и устранение ошибок доставки;",
+        "подготовка внутренней статистики и отчётности.",
+    ):
+        add_bullet(doc, item)
+
+    add_heading(doc, "4. Состав обрабатываемых данных", page_break_before=True)
+    add_body(doc, "Оператор может обрабатывать:")
+    for item in (
+        "ФИО Пользователя и контактный номер телефона;",
+        "MAX ID, отображаемое имя, короткое имя профиля, идентификаторы чатов и сообщений;",
+        "муниципальный округ возникновения проблемы;",
+        "текст обращения;",
+        "предоставленные при наличии и необходимости фотографии, геолокацию и точный адрес проблемы;",
+        "статусы, историю обработки, ответы и сведения о доставке сообщений;",
+        "технические данные, необходимые для безопасности и устойчивой работы Чат-бота.",
+    ):
+        add_bullet(doc, item)
+    add_body(doc, "Чат-бот не запрашивает округ проживания, иные файлы, паспортные данные или сведения о возрасте. Пользователь не должен сообщать избыточные данные, не относящиеся к обращению.")
+
+    add_heading(doc, "5. Правовые основания")
+    add_body(doc, "Правовыми основаниями обработки являются отдельное согласие Пользователя, заключение и исполнение Пользовательского соглашения, а также иные основания, предусмотренные законодательством Российской Федерации, если они применимы к конкретному обращению.")
+
+    add_heading(doc, "6. Порядок обработки и передачи")
+    add_body(doc, "6.1. Обработка включает сбор, запись, систематизацию, накопление, хранение, уточнение, извлечение, использование, передачу, обезличивание, блокирование, удаление и уничтожение данных автоматизированным и неавтоматизированным способом.")
+    add_body(doc, "6.2. Доступ предоставляется только в объёме, необходимом для выполнения служебных обязанностей и рассмотрения обращения.")
+    add_body(doc, "6.3. Данные могут передаваться уполномоченным сотрудникам, государственным органам и органам местного самоуправления, компетентным рассматривать обращение.")
+    add_body(doc, "6.4. Для технической работы используются Сервис MAX и серверная инфраструктура Timeweb. Точное юридическое лицо, оказывающее услуги Timeweb, указывается по договору с Оператором.")
+    add_placeholder(doc, "Юридическое лицо Timeweb", "[ЗАПОЛНИТЬ ПО ДОГОВОРУ]")
+    add_body(doc, "6.5. Оператор не распространяет персональные данные неограниченному кругу лиц и не использует фотографии для биометрической идентификации.")
+
+    add_heading(doc, "7. Локализация и хранение")
+    add_body(doc, "7.1. Первичная запись и хранение персональных данных в информационных системах под контролем Оператора осуществляются на серверной инфраструктуре Timeweb на территории Российской Федерации.")
+    add_body(doc, "7.2. Данные хранятся в течение рассмотрения обращения и одного месяца после его завершения, если законодательством не предусмотрен иной срок.")
+    add_body(doc, "7.3. По окончании срока данные удаляются или уничтожаются, включая копии, находящиеся под контролем Оператора, если их дальнейшее хранение не имеет самостоятельного законного основания.")
+    p = doc.add_paragraph()
+    p.paragraph_format.first_line_indent = Cm(0)
+    r = set_run_font(p.add_run("[ТЕХНИЧЕСКОЕ УСЛОВИЕ: до публикации обеспечить фактическое удаление из базы, журналов и резервных копий либо заменить срок на соответствующий реальной политике хранения.]"), bold=True)
+    shade_run(r)
+
+    add_heading(doc, "8. Защита персональных данных")
+    add_body(doc, "Оператор применяет необходимые правовые, организационные и технические меры, включая разграничение доступа сотрудников, защищённое соединение, контроль административных действий, резервное копирование, регистрацию ошибок доставки и ограничение доступа к базе данных.")
+
+    add_heading(doc, "9. Права Пользователя")
+    add_body(doc, "Пользователь вправе получать сведения об обработке своих данных, требовать их уточнения, блокирования или уничтожения, отозвать согласие и обжаловать действия Оператора в порядке, установленном законом.")
+    add_placeholder(doc, "Электронная почта для запросов", "[ЗАПОЛНИТЬ ПОСЛЕ СОЗДАНИЯ]")
+    add_placeholder(doc, "Почтовый адрес", "[ЗАПОЛНИТЬ]")
+
+    add_heading(doc, "10. Несовершеннолетние")
+    add_body(doc, "Чат-бот не запрашивает возраст Пользователя. Если для предоставления данных или направления обращения в конкретной ситуации требуется участие законного представителя, соответствующие действия должны совершаться с его участием в порядке, предусмотренном законодательством.")
+
+    add_heading(doc, "11. Изменение Политики")
+    add_body(doc, "Оператор вправе обновлять Политику при изменении законодательства или работы Чат-бота. Актуальная редакция должна быть доступна Пользователю в Чат-боте с указанием даты вступления в силу.")
+    add_placeholder(doc, "Дата вступления в силу", "[ДД.ММ.ГГГГ]")
+
+    path = OUTPUT_DIR / "Политика_обработки_ПДн_Искра_черновик.docx"
+    doc.save(path)
+    return path
+
+
+def main():
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    paths = [build_agreement(), build_consent(), build_policy()]
+    for path in paths:
+        print(path.resolve())
+
+
+if __name__ == "__main__":
+    main()
