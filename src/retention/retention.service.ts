@@ -37,6 +37,8 @@ export type RetentionPreview = {
   files: number;
   bytes: number;
   outboundMessages: number;
+  orphanRequesterProfiles: number;
+  requesterProfilesAfterDeletionUpTo: number;
   terminalWithoutCompletionDate: number;
   oldestCompletion: Date | null;
   sampleCodes: string[];
@@ -77,13 +79,14 @@ export class RetentionService {
 
   async preview(now = new Date()): Promise<RetentionPreview> {
     const cutoff = this.cutoff(now);
-    const [candidates, terminalWithoutCompletionDate] = await Promise.all([
+    const [candidates, terminalWithoutCompletionDate, orphanRequesterProfiles] = await Promise.all([
       this.loadCandidates(cutoff),
       this.prisma.incident.count({
         where: { status: { in: [...TERMINAL_STATUSES] }, answeredAt: null },
       }),
+      this.loadOrphanRequesterProfiles(cutoff),
     ]);
-    return this.buildPreview(candidates, cutoff, terminalWithoutCompletionDate);
+    return this.buildPreview(candidates, cutoff, terminalWithoutCompletionDate, orphanRequesterProfiles.length);
   }
 
   async run(now = new Date()): Promise<RetentionRunResult> {
@@ -95,13 +98,19 @@ export class RetentionService {
 
     try {
       const cutoff = this.cutoff(now);
-      const [candidates, terminalWithoutCompletionDate] = await Promise.all([
+      const [candidates, terminalWithoutCompletionDate, orphanRequesterProfiles] = await Promise.all([
         this.loadCandidates(cutoff),
         this.prisma.incident.count({
           where: { status: { in: [...TERMINAL_STATUSES] }, answeredAt: null },
         }),
+        this.loadOrphanRequesterProfiles(cutoff),
       ]);
-      const preview = await this.buildPreview(candidates, cutoff, terminalWithoutCompletionDate);
+      const preview = await this.buildPreview(
+        candidates,
+        cutoff,
+        terminalWithoutCompletionDate,
+        orphanRequesterProfiles.length,
+      );
       const result = emptyRun(preview, false);
 
       for (const incident of candidates) {
@@ -142,7 +151,7 @@ export class RetentionService {
         }
       }
 
-      result.deletedRequesterProfiles = await this.purgeOrphanRequesterProfiles(now);
+      result.deletedRequesterProfiles = await this.purgeOrphanRequesterProfiles(cutoff, now);
       log.info(
         {
           deletedIncidents: result.deletedIncidents,
@@ -176,6 +185,7 @@ export class RetentionService {
     candidates: RetentionCandidate[],
     cutoff: Date,
     terminalWithoutCompletionDate: number,
+    orphanRequesterProfiles: number,
   ): Promise<RetentionPreview> {
     const files = candidates.flatMap(uniqueFiles);
     const incidentIds = candidates.map((incident) => incident.id);
@@ -199,6 +209,8 @@ export class RetentionService {
       files: files.length,
       bytes: files.reduce((sum, file) => sum + file.size, 0),
       outboundMessages,
+      orphanRequesterProfiles,
+      requesterProfilesAfterDeletionUpTo: new Set(candidates.map((incident) => incident.requesterId)).size,
       terminalWithoutCompletionDate,
       oldestCompletion: candidates[0]?.answeredAt ?? null,
       sampleCodes: candidates.slice(0, 10).map((incident) => incident.publicCode),
@@ -227,10 +239,10 @@ export class RetentionService {
   }
 
   /** Remove requester identity only when no business or staff record uses it. */
-  private async purgeOrphanRequesterProfiles(now: Date): Promise<number> {
-    await this.prisma.operatorSession.deleteMany({ where: { expiresAt: { lte: now } } });
-    const candidates = await this.prisma.user.findMany({
+  private async loadOrphanRequesterProfiles(cutoff: Date): Promise<Array<{ id: string; maxUserId: bigint }>> {
+    return this.prisma.user.findMany({
       where: {
+        updatedAt: { lte: cutoff },
         OR: [{ roles: { equals: [] } }, { roles: { equals: [UserRole.REQUESTER] } }],
         incidents: { none: {} },
         assignedByMe: { none: {} },
@@ -243,6 +255,11 @@ export class RetentionService {
       select: { id: true, maxUserId: true },
       take: 1_000,
     });
+  }
+
+  private async purgeOrphanRequesterProfiles(cutoff: Date, now: Date): Promise<number> {
+    await this.prisma.operatorSession.deleteMany({ where: { expiresAt: { lte: now } } });
+    const candidates = await this.loadOrphanRequesterProfiles(cutoff);
 
     let deleted = 0;
     for (const user of candidates) {
@@ -282,7 +299,13 @@ export function formatRetentionPreview(preview: RetentionPreview): string {
     `Обращений: ${preview.incidents}.`,
     `Файлов заявителей и ответов: ${preview.files} (${formatBytes(preview.bytes)}).`,
     `Связанных служебных сообщений: ${preview.outboundMessages}.`,
+    `Уже неиспользуемых профилей заявителей: ${preview.orphanRequesterProfiles}.`,
   ];
+  if (preview.requesterProfilesAfterDeletionUpTo > 0) {
+    lines.push(
+      `После удаления обращений могут освободиться ещё до ${preview.requesterProfilesAfterDeletionUpTo} профилей заявителей.`,
+    );
+  }
   if (preview.oldestCompletion) lines.push(`Самое старое завершение: ${formatDateTime(preview.oldestCompletion)}.`);
   if (preview.sampleCodes.length) lines.push(`Примеры: ${preview.sampleCodes.join(', ')}.`);
   if (preview.terminalWithoutCompletionDate > 0) {

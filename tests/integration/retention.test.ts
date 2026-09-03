@@ -30,6 +30,7 @@ describeIntegration('90-day incident retention', () => {
     const recentRequester = await ensureUser(prisma, 7102n, 'Недавний заявитель');
     const activeRequester = await ensureUser(prisma, 7103n, 'Активный заявитель');
     const responder = await ensureUser(prisma, 7201n, 'Сотрудник', [UserRole.RESPONDER]);
+    await prisma.user.update({ where: { id: oldRequester.id }, data: { updatedAt: daysAgo(120) } });
 
     const expired = await prisma.incident.create({
       data: {
