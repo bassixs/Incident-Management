@@ -71,6 +71,11 @@ export function personalDataConsentKeyboard(url: string): Button[][] {
   ];
 }
 
+/** MAX asks the account owner before sending the contact bound to the account. */
+export function requesterContactKeyboard(): Button[][] {
+  return [[button.requestContact('📱 Поделиться контактом')]];
+}
+
 /** Сферы shown per page of the requester's picker. */
 export const CATEGORY_PAGE_SIZE = 6;
 

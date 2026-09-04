@@ -23,6 +23,7 @@ describe('requester-facing copy', () => {
     const greeting = greetingText();
     expect(greeting).toContain('чат-бот «Искра»');
     expect(greeting).toContain('ФИО и номер телефона');
+    expect(greeting).toContain('сохранит');
     expect(greeting).toContain('сферу и место');
     expect(greeting).toContain('исправить любое поле');
     expect(greeting).toContain('«Мои обращения»');
@@ -30,6 +31,8 @@ describe('requester-facing copy', () => {
     const rules = rulesText();
     expect(rules).toContain('ознакомьтесь с документами');
     expect(rules).toContain('действующий номер телефона');
+    expect(rules).toContain('Поделиться контактом');
+    expect(rules).toContain('следующих обращений');
     expect(rules).toContain('Если не уверены, нажмите «Не знаю»');
     expect(rules).toContain('Любое поле и фотографии можно исправить');
     expect(rules).toContain('Только после этого обращение будет зарегистрировано');

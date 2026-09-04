@@ -40,6 +40,18 @@ export class UserService {
     return user;
   }
 
+  async saveRequesterProfile(
+    maxUserId: bigint,
+    requesterName: string,
+    requesterPhone: string,
+    tx?: PrismaLike,
+  ): Promise<User> {
+    return (tx ?? this.prisma).user.update({
+      where: { maxUserId },
+      data: { requesterName, requesterPhone },
+    });
+  }
+
   async identity(maxUser: Pick<MaxUser, 'user_id' | 'name' | 'username'>): Promise<ActorIdentity> {
     const user = await this.upsertFromMax(maxUser);
     return { user, roles: resolveRoles(user.maxUserId, user.roles) };

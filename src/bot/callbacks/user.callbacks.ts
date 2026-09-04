@@ -21,6 +21,7 @@ import {
   mainMenuKeyboard,
   personalDataConsentKeyboard,
   requesterCategoryKeyboard,
+  requesterContactKeyboard,
   requesterLocalityKeyboard,
   requesterMunicipalityKeyboard,
 } from '../keyboards';
@@ -369,6 +370,9 @@ export async function handleUserCallback(
                 : payload.argument === 'phone'
                   ? requesterPhonePromptText()
                   : 'Отправьте новый текст обращения одним сообщением.',
+            ...(payload.argument === 'name' || payload.argument === 'phone'
+              ? { keyboard: requesterContactKeyboard() }
+              : {}),
           });
           return undefined;
         case 'category': {
@@ -679,13 +683,40 @@ async function beginNewIncident(context: UserCallbackContext): Promise<void> {
     return;
   }
   await services.sessions.clear(actor.maxUserId, context.chatId ?? actor.maxUserId);
+  const requester = await services.users.requireByMaxId(actor.maxUserId);
+  if (requester.requesterName && requester.requesterPhone) {
+    const categories = await services.categories.listActive();
+    await services.sessions.start({
+      maxUserId: actor.maxUserId,
+      chatId: context.chatId ?? actor.maxUserId,
+      type: SessionType.WAITING_INCIDENT_SELECTION,
+      data: {
+        requesterName: requester.requesterName,
+        requesterPhone: requester.requesterPhone,
+      },
+    });
+    await services.messages.send(target, {
+      text: [
+        'Использую сохранённые ФИО и телефон. Их можно проверить и при необходимости изменить в итоговой карточке.',
+        '',
+        categoryPromptText(categories.length),
+      ].join('\n'),
+      keyboard: requesterCategoryKeyboard(categories, 0),
+    });
+    return;
+  }
   await services.sessions.start({
     maxUserId: actor.maxUserId,
     chatId: context.chatId ?? actor.maxUserId,
-    type: SessionType.WAITING_REQUESTER_NAME,
+    type: requester.requesterName ? SessionType.WAITING_REQUESTER_PHONE : SessionType.WAITING_REQUESTER_NAME,
+    data: {
+      ...(requester.requesterName ? { requesterName: requester.requesterName } : {}),
+      ...(requester.requesterPhone ? { requesterPhone: requester.requesterPhone } : {}),
+    },
   });
   await services.messages.send(target, {
-    text: requesterNamePromptText(),
+    text: requester.requesterName ? requesterPhonePromptText() : requesterNamePromptText(),
+    keyboard: requesterContactKeyboard(),
   });
 }
 

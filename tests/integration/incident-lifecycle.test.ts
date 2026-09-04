@@ -55,6 +55,30 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     } as unknown as Message;
   }
 
+  function requesterContactMessage(contactMaxUserId = TEST_USERS.requesterA): Message {
+    return {
+      sender: { user_id: Number(TEST_USERS.requesterA), name: 'Профиль MAX', username: null },
+      recipient: { chat_id: Number(TEST_USERS.requesterA), chat_type: 'dialog' },
+      body: {
+        mid: 'mid-contact',
+        text: '',
+        attachments: [
+          {
+            type: 'contact',
+            payload: {
+              vcf_info: 'BEGIN:VCARD\nFN:Иванов Иван\nTEL:+79001234567\nEND:VCARD',
+              tam_info: {
+                user_id: Number(contactMaxUserId),
+                name: 'Иванов Иван',
+                username: null,
+              },
+            },
+          },
+        ],
+      },
+    } as unknown as Message;
+  }
+
   it('requires and stores full name and phone before an incident is created', async () => {
     const actor = await actorFor(prisma, TEST_USERS.requesterA, 'Профиль MAX', []);
     if ((await harness.services.legal.status(actor.userId)).required) {
@@ -125,6 +149,81 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     const incident = await prisma.incident.findFirstOrThrow();
     expect(incident.requesterName).toBe('Иванов Иван Иванович');
     expect(incident.requesterPhone).toBe('+7 900 123-45-67');
+
+    const profile = await prisma.user.findUniqueOrThrow({ where: { maxUserId: actor.maxUserId } });
+    expect(profile.requesterName).toBe('Иванов Иван Иванович');
+    expect(profile.requesterPhone).toBe('+7 900 123-45-67');
+
+    await handleUserCallback(
+      {
+        services: harness.services,
+        actor,
+        chatId: actor.maxUserId,
+        messageId: 'main-menu',
+        callbackId: 'new-with-profile',
+      },
+      { kind: 'user', action: 'new' },
+    );
+    const reused = await harness.services.sessions.find(actor.maxUserId, actor.maxUserId);
+    expect(reused?.type).toBe('WAITING_INCIDENT_SELECTION');
+    expect(harness.services.sessions.readData(reused!)).toMatchObject({
+      requesterName: 'Иванов Иван Иванович',
+      requesterPhone: '+7 900 123-45-67',
+    });
+    expect(harness.messages.toUser(actor.maxUserId).at(-1)!.message.text).toContain('Использую сохранённые');
+  });
+
+  it('accepts the account owner contact from the MAX contact button', async () => {
+    const actor = await actorFor(prisma, TEST_USERS.requesterA, 'Профиль MAX', []);
+    if ((await harness.services.legal.status(actor.userId)).required) {
+      const evidence = { userId: actor.userId, maxUserId: actor.maxUserId };
+      await harness.services.legal.acceptUserAgreement(evidence);
+      await harness.services.legal.acceptPersonalDataConsent(evidence);
+    }
+    await harness.services.sessions.start({
+      maxUserId: actor.maxUserId,
+      chatId: actor.maxUserId,
+      type: 'WAITING_REQUESTER_NAME',
+    });
+
+    await handleRequesterMessage(
+      harness.services,
+      actor,
+      actor.maxUserId,
+      requesterContactMessage(),
+      { fullName: 'Иванов Иван', tel: '+79001234567' },
+    );
+    const session = await harness.services.sessions.find(actor.maxUserId, actor.maxUserId);
+    expect(session?.type).toBe('WAITING_INCIDENT_SELECTION');
+    expect(harness.services.sessions.readData(session!)).toMatchObject({
+      requesterName: 'Иванов Иван',
+      requesterPhone: '+7 900 123-45-67',
+    });
+  });
+
+  it('does not accept a manually forwarded contact belonging to another MAX user', async () => {
+    const actor = await actorFor(prisma, TEST_USERS.requesterA, 'Профиль MAX', []);
+    if ((await harness.services.legal.status(actor.userId)).required) {
+      const evidence = { userId: actor.userId, maxUserId: actor.maxUserId };
+      await harness.services.legal.acceptUserAgreement(evidence);
+      await harness.services.legal.acceptPersonalDataConsent(evidence);
+    }
+    await harness.services.sessions.start({
+      maxUserId: actor.maxUserId,
+      chatId: actor.maxUserId,
+      type: 'WAITING_REQUESTER_NAME',
+    });
+
+    await handleRequesterMessage(
+      harness.services,
+      actor,
+      actor.maxUserId,
+      requesterContactMessage(TEST_USERS.requesterB),
+      { fullName: 'Петров Пётр', tel: '+79004445566' },
+    );
+    expect((await harness.services.sessions.find(actor.maxUserId, actor.maxUserId))?.type).toBe(
+      'WAITING_REQUESTER_NAME',
+    );
   });
 
   it('changes only the selected draft fields and creates nothing before confirmation', async () => {
@@ -245,6 +344,9 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     expect(incident.problemLocality).toBeNull();
     expect(incident.text).toBe('Новый текст');
     expect(incident.attachments).toHaveLength(0);
+    const profile = await prisma.user.findUniqueOrThrow({ where: { maxUserId: actor.maxUserId } });
+    expect(profile.requesterName).toBe('Петров Пётр');
+    expect(profile.requesterPhone).toBe('+7 999 000-11-22');
   });
 
   // --- §11 daily limit -----------------------------------------------------

@@ -10,7 +10,12 @@ import type { Message } from '../../max/max-types';
 import { classifyAttachments } from '../../media/media.service';
 import { ValidationError } from '../../utils/errors';
 import { normaliseIncidentText, unicodeLength } from '../../utils/text';
-import { legalDocumentsKeyboard, mainMenuKeyboard, requesterCategoryKeyboard } from '../keyboards';
+import {
+  legalDocumentsKeyboard,
+  mainMenuKeyboard,
+  requesterCategoryKeyboard,
+  requesterContactKeyboard,
+} from '../keyboards';
 import {
   requireCompleteIncidentDraft,
   serialiseDraftMedia,
@@ -21,6 +26,7 @@ import {
   greetingText,
   incidentPromptText,
   legalGateText,
+  requesterNamePromptText,
   requesterPhonePromptText,
 } from '../views/cards';
 import type { ResolvedActor } from './helpers';
@@ -33,8 +39,16 @@ export async function handleRequesterMessage(
   actor: ResolvedActor,
   chatId: bigint,
   message: Message,
+  contactInfo?: { tel?: string; fullName?: string },
 ): Promise<void> {
   const target = { userId: actor.maxUserId } as const;
+  const sharedContact = message.body.attachments?.find((attachment) => attachment.type === 'contact');
+  const sharedMaxUserId = sharedContact?.type === 'contact' ? sharedContact.payload.tam_info?.user_id : undefined;
+  if (sharedMaxUserId !== undefined && BigInt(sharedMaxUserId) !== actor.maxUserId) {
+    // A manually forwarded contact may belong to someone else. Only the
+    // account owner's own contact is allowed to fill their profile.
+    contactInfo = undefined;
+  }
 
   if (await services.bans.isBanned(actor.maxUserId)) {
     // §20: no technical details, no hint about how long it lasts.
@@ -85,15 +99,53 @@ export async function handleRequesterMessage(
 
   if (session.type === SessionType.WAITING_REQUESTER_NAME) {
     try {
+      if (contactInfo?.tel) {
+        const requesterPhone = normaliseRequesterPhone(contactInfo.tel);
+        let requesterName: string | undefined;
+        try {
+          if (contactInfo.fullName) requesterName = normaliseRequesterName(contactInfo.fullName);
+        } catch {
+          // A MAX profile may contain only one name. Keep the verified phone
+          // and ask the person to complete their full name manually.
+        }
+        if (requesterName) {
+          await continueToCategorySelection(services, actor.maxUserId, chatId, requesterName, requesterPhone);
+        } else {
+          await services.sessions.start({
+            maxUserId: actor.maxUserId,
+            chatId,
+            type: SessionType.WAITING_REQUESTER_NAME,
+            data: { requesterPhone },
+          });
+          await services.messages.send(target, {
+            text: ['Номер телефона получен из вашего контакта.', '', requesterNamePromptText()].join('\n'),
+            keyboard: requesterContactKeyboard(),
+          });
+        }
+        return;
+      }
       if (media.length > 0) throw new ValidationError('Отправьте ФИО обычным текстовым сообщением.');
       const requesterName = normaliseRequesterName(text);
+      if (data.requesterPhone) {
+        await continueToCategorySelection(
+          services,
+          actor.maxUserId,
+          chatId,
+          requesterName,
+          data.requesterPhone,
+        );
+        return;
+      }
       await services.sessions.start({
         maxUserId: actor.maxUserId,
         chatId,
         type: SessionType.WAITING_REQUESTER_PHONE,
         data: { requesterName },
       });
-      await services.messages.send(target, { text: requesterPhonePromptText() });
+      await services.messages.send(target, {
+        text: requesterPhonePromptText(),
+        keyboard: requesterContactKeyboard(),
+      });
     } catch (error) {
       await services.messages.send(target, {
         text: error instanceof ValidationError ? error.message : 'Не удалось сохранить ФИО. Попробуйте ещё раз.',
@@ -105,19 +157,17 @@ export async function handleRequesterMessage(
   if (session.type === SessionType.WAITING_REQUESTER_PHONE) {
     try {
       if (!data.requesterName) throw new ValidationError('Черновик устарел. Начните создание обращения заново.');
-      if (media.length > 0) throw new ValidationError('Отправьте номер обычным текстовым сообщением.');
-      const requesterPhone = normaliseRequesterPhone(text);
-      const categories = await services.categories.listActive();
-      await services.sessions.start({
-        maxUserId: actor.maxUserId,
+      if (!contactInfo?.tel && media.length > 0) {
+        throw new ValidationError('Введите номер текстом или нажмите «Поделиться контактом».');
+      }
+      const requesterPhone = normaliseRequesterPhone(contactInfo?.tel ?? text);
+      await continueToCategorySelection(
+        services,
+        actor.maxUserId,
         chatId,
-        type: SessionType.WAITING_INCIDENT_SELECTION,
-        data: { requesterName: data.requesterName, requesterPhone },
-      });
-      await services.messages.send(target, {
-        text: categoryPromptText(categories.length),
-        keyboard: requesterCategoryKeyboard(categories, 0),
-      });
+        data.requesterName,
+        requesterPhone,
+      );
     } catch (error) {
       await services.messages.send(target, {
         text: error instanceof ValidationError ? error.message : 'Не удалось сохранить номер. Попробуйте ещё раз.',
@@ -132,6 +182,13 @@ export async function handleRequesterMessage(
       const draft = requireCompleteIncidentDraft(data);
       switch (data.draftEditField) {
         case 'name': {
+          if (contactInfo?.fullName) {
+            await showIncidentDraftPreview(services, actor.maxUserId, chatId, {
+              ...draft,
+              requesterName: normaliseRequesterName(contactInfo.fullName),
+            });
+            return;
+          }
           if (media.length > 0) throw new ValidationError('Отправьте ФИО обычным текстовым сообщением.');
           await showIncidentDraftPreview(services, actor.maxUserId, chatId, {
             ...draft,
@@ -140,10 +197,12 @@ export async function handleRequesterMessage(
           return;
         }
         case 'phone': {
-          if (media.length > 0) throw new ValidationError('Отправьте номер обычным текстовым сообщением.');
+          if (!contactInfo?.tel && media.length > 0) {
+            throw new ValidationError('Введите номер текстом или нажмите «Поделиться контактом».');
+          }
           await showIncidentDraftPreview(services, actor.maxUserId, chatId, {
             ...draft,
-            requesterPhone: normaliseRequesterPhone(text),
+            requesterPhone: normaliseRequesterPhone(contactInfo?.tel ?? text),
           });
           return;
         }
@@ -256,6 +315,29 @@ export async function handleRequesterMessage(
       text: 'Не удалось сохранить черновик. Попробуйте ещё раз позже.',
     });
   }
+}
+
+async function continueToCategorySelection(
+  services: AppServices,
+  maxUserId: bigint,
+  chatId: bigint,
+  requesterName: string,
+  requesterPhone: string,
+): Promise<void> {
+  const categories = await services.categories.listActive();
+  await services.sessions.start({
+    maxUserId,
+    chatId,
+    type: SessionType.WAITING_INCIDENT_SELECTION,
+    data: { requesterName, requesterPhone },
+  });
+  await services.messages.send(
+    { userId: maxUserId },
+    {
+      text: categoryPromptText(categories.length),
+      keyboard: requesterCategoryKeyboard(categories, 0),
+    },
+  );
 }
 
 /** `/start` and `bot_started`. */

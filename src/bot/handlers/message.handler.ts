@@ -58,7 +58,16 @@ export async function handleMessageUpdate(services: AppServices, ctx: Context): 
   }
 
   if (dialog) {
-    await handleRequesterMessage(services, actor, chatId, message);
+    let contactInfo: { tel?: string; fullName?: string } | undefined;
+    try {
+      contactInfo = ctx.contactInfo;
+    } catch (error) {
+      log.warn(
+        { maxUserId: actor.maxUserId.toString() },
+        `invalid MAX contact attachment: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    await handleRequesterMessage(services, actor, chatId, message, contactInfo);
     return;
   }
 
