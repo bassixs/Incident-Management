@@ -149,7 +149,7 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
         problemMunicipalityName: 'Боровский округ',
         problemLocality: 'Боровск',
         draftText: 'Старый текст',
-        draftMedia: [{ kind: 'IMAGE', url: 'https://example.test/old.jpg' }],
+        draftMedia: [{ kind: 'IMAGE', token: 'old-photo-token' }],
       },
     });
 

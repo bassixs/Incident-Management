@@ -1,11 +1,15 @@
 import type { AppServices } from '../app/container';
 import type { IncomingMedia } from '../media/media.service';
+import type { OutboundAttachment } from '../max/max-message.service';
 import type { SessionData } from '../sessions/operator-session.service';
 import { SessionType } from '@prisma/client';
 
 import { ValidationError } from '../utils/errors';
+import { moduleLogger } from '../utils/logger';
 import { incidentDraftConfirmationKeyboard } from './keyboards';
 import { incidentDraftPreview } from './views/cards';
+
+const log = moduleLogger('requester-draft');
 
 export type CompleteIncidentDraft = SessionData & {
   requesterName: string;
@@ -71,6 +75,7 @@ export async function showIncidentDraftPreview(
   const category = draft.selectedCategoryId
     ? await services.categories.findById(draft.selectedCategoryId)
     : null;
+  const attachments = await loadPreviewPhotos(services, draft.draftMedia);
   await services.messages.send(
     { userId: maxUserId },
     {
@@ -86,6 +91,27 @@ export async function showIncidentDraftPreview(
         category?.name,
       ),
       keyboard: incidentDraftConfirmationKeyboard(),
+      ...(attachments.length > 0 ? { attachments } : {}),
     },
   );
+}
+
+async function loadPreviewPhotos(
+  services: AppServices,
+  media: IncomingMedia[],
+): Promise<OutboundAttachment[]> {
+  const attachments: OutboundAttachment[] = [];
+  for (const photo of media) {
+    if (!photo.url) continue;
+    try {
+      const { body } = await services.max.downloadFromUrl(photo.url);
+      attachments.push({ type: 'IMAGE', body, originalName: photo.filename });
+    } catch (error) {
+      log.warn(
+        { err: error instanceof Error ? error.message : String(error) },
+        'draft photo could not be attached to requester preview',
+      );
+    }
+  }
+  return attachments;
 }
