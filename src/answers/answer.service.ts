@@ -202,9 +202,15 @@ export class AnswerService {
       if (!deliveryFailed) {
         await this.sector.notify(incident, `✅ ${incident.publicCode}: ответ отправлен пользователю без согласования.`);
       }
+      await this.sector.finalizeWorkedCard(
+        incident,
+        actor.displayName,
+        deliveryFailed ? 'delivery-failed' : 'delivered',
+      );
     } else {
       await this.review.publishCard(incidentId, answer.id);
       await this.sector.notify(incident, `📝 ${incident.publicCode} отправлено на согласование.`);
+      await this.sector.finalizeWorkedCard(incident, actor.displayName, 'review');
     }
 
     return { incident, answer, sentDirectly: direct, deliveryFailed };

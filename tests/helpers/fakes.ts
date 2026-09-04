@@ -1,7 +1,8 @@
 import type { CompositeMessage, MessageSendResult, SendTarget } from '../../src/max/max-message.service';
+import type { Button } from '../../src/max/max-types';
 
 export type RecordedSend = { target: SendTarget; message: CompositeMessage };
-export type RecordedEdit = { messageId: string; text: string; mode: 'text' | 'finalize' };
+export type RecordedEdit = { messageId: string; text: string; mode: 'text' | 'finalize' | 'keyboard' };
 
 /** Captures everything the code tried to send instead of calling MAX. */
 export class FakeMessageService {
@@ -20,6 +21,11 @@ export class FakeMessageService {
 
   async finalizeCard(messageId: string, text: string): Promise<boolean> {
     this.edits.push({ messageId, text, mode: 'finalize' });
+    return true;
+  }
+
+  async editCardKeyboard(messageId: string, text: string, _keyboard: Button[][]): Promise<boolean> {
+    this.edits.push({ messageId, text, mode: 'keyboard' });
     return true;
   }
 

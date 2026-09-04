@@ -161,7 +161,9 @@ export class ReviewService {
       await this.messages.finalizeCard(
         incident.reviewMessageId,
         [
-          `✅ ${incident.publicCode} согласовано и отправлено пользователю.`,
+          '🟢 ОТРАБОТАНО',
+          '',
+          `${incident.publicCode} согласовано и отправлено пользователю.`,
           '',
           'Согласовал:',
           actor.displayName,

@@ -11,7 +11,7 @@ import {
   assignmentGroupKeyboard,
   type AssignmentBranch,
 } from '../keyboards';
-import { codeLabel } from '../views/cards';
+import { codeLabel, distributionResolvedNotice } from '../views/cards';
 import type { ResolvedActor } from '../handlers/helpers';
 import { ensureFreeSession } from '../handlers/session-guard';
 
@@ -55,13 +55,13 @@ export async function handleIncidentCallback(
       return startAssignment(services, actor, chatId, incident);
 
     case 'assign-branch':
-      return openAssignmentBranch(services, actor, chatId, incident, payload.argument);
+      return openAssignmentBranch(services, actor, chatId, context.messageId, incident, payload.argument);
 
     case 'assign-page':
       return pageAssignmentBranch(services, actor, chatId, context.messageId, incident, payload.argument);
 
     case 'assign-group':
-      return completeAssignment(services, actor, chatId, incident, payload.argument);
+      return completeAssignment(services, actor, chatId, context.messageId, incident, payload.argument);
 
     case 'assign-category':
       return 'Этот список устарел. Нажмите «Распределить» в карточке обращения ещё раз.';
@@ -118,6 +118,8 @@ async function startAssignment(
     { chatId },
     {
       text: [
+        '🔴 НЕ РАСПРЕДЕЛЕНО',
+        '',
         `Куда направить ${incident.publicCode}?`,
         ...(recommendedGroup ? ['', `⭐ Рекомендация по территории: ${recommendedGroup.name}.`] : []),
         ...(hiddenCount > 0 ? ['', `⚠️ Региональная группа временно недоступна: ${hiddenCount}.`] : []),
@@ -132,13 +134,14 @@ async function openAssignmentBranch(
   services: AppServices,
   actor: ResolvedActor,
   chatId: bigint,
+  messageId: string | undefined,
   incident: IncidentWithRelations,
   rawBranch: string | undefined,
 ): Promise<string | undefined> {
   assertDispatcher(services, actor, chatId);
   if (incident.status !== IncidentStatus.DISTRIBUTION) return `${incident.publicCode} уже обработано.`;
   const branch = requireAssignmentBranch(rawBranch);
-  return sendAssignmentPage(services, incident, branch, 0);
+  return sendAssignmentPage(services, incident, branch, 0, messageId);
 }
 
 async function pageAssignmentBranch(
@@ -176,6 +179,8 @@ async function sendAssignmentPage(
   const recommendedGroup = recommendation?.kind === kind ? recommendation : null;
   const title = branch === 'local' ? 'Органы местного самоуправления' : 'Органы исполнительной власти';
   const text = [
+    '🔴 НЕ РАСПРЕДЕЛЕНО',
+    '',
     `${title}: куда направить ${incident.publicCode}?`,
     ...(recommendedGroup ? ['', `⭐ Рекомендация: ${recommendedGroup.name}.`] : []),
     ...(hiddenCount > 0 ? ['', `⚠️ Скрыто групп без рабочего чата: ${hiddenCount}.`] : []),
@@ -198,12 +203,22 @@ async function completeAssignment(
   services: AppServices,
   actor: ResolvedActor,
   chatId: bigint,
+  messageId: string | undefined,
   incident: IncidentWithRelations,
   groupId: string | undefined,
 ): Promise<string> {
   assertDispatcher(services, actor, chatId);
   if (!groupId) throw new AppError('Ответственная группа не указана.', 'BAD_PAYLOAD');
   const updated = await services.distribution.assign(incident.id, groupId, actor);
+
+  // The picker is a separate MAX message from the original incident card.
+  // Close it as well, otherwise its now-stale buttons keep looking active.
+  if (messageId && messageId !== incident.distributionMessageId && updated.assignedGroup) {
+    await services.messages.finalizeCard(
+      messageId,
+      distributionResolvedNotice(updated, updated.assignedGroup, actor.displayName),
+    );
+  }
   return `${updated.publicCode} → ${updated.assignedGroup?.name ?? ''}`;
 }
 

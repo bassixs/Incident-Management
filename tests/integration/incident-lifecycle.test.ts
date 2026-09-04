@@ -2,6 +2,7 @@ import { AnswerStatus, IncidentStatus, UserRole, type PrismaClient } from '@pris
 import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
 
 import { HistoryAction } from '../../src/incidents/incident-history.service';
+import { handleIncidentCallback } from '../../src/bot/callbacks/incident.callbacks';
 import { ConflictError, RateLimitError } from '../../src/utils/errors';
 import {
   actorFor,
@@ -156,6 +157,55 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     expect(harness.messages.toChat(TEST_CHATS.sector).length).toBeGreaterThan(0);
   });
 
+  it('closes the assignment picker after a group is selected', async () => {
+    const incident = await harness.services.incidents.create({
+      requester: requesterA(),
+      text: 'Меню не должно остаться активным.',
+    });
+    const dispatcher = await actorFor(prisma, TEST_USERS.dispatcher, 'Диспетчер', [UserRole.DISPATCHER]);
+    const category = await facility();
+
+    await handleIncidentCallback(
+      {
+        services: harness.services,
+        actor: dispatcher,
+        chatId: TEST_CHATS.distribution,
+        messageId: 'assignment-picker-mid',
+      },
+      { kind: 'incident', action: 'assign-group', incidentId: incident.id, argument: category.id },
+    );
+
+    expect(harness.messages.edits).toContainEqual({
+      messageId: 'assignment-picker-mid',
+      text: expect.stringContaining('🟡 РАСПРЕДЕЛЕНО'),
+      mode: 'finalize',
+    });
+  });
+
+  it('reuses the same picker message when a distribution branch is opened', async () => {
+    const incident = await harness.services.incidents.create({
+      requester: requesterA(),
+      text: 'Проверка перехода в список групп.',
+    });
+    const dispatcher = await actorFor(prisma, TEST_USERS.dispatcher, 'Диспетчер', [UserRole.DISPATCHER]);
+
+    await handleIncidentCallback(
+      {
+        services: harness.services,
+        actor: dispatcher,
+        chatId: TEST_CHATS.distribution,
+        messageId: 'assignment-picker-mid',
+      },
+      { kind: 'incident', action: 'assign-branch', incidentId: incident.id, argument: 'local' },
+    );
+
+    expect(harness.messages.edits).toContainEqual({
+      messageId: 'assignment-picker-mid',
+      text: expect.stringContaining('🔴 НЕ РАСПРЕДЕЛЕНО'),
+      mode: 'keyboard',
+    });
+  });
+
   it('lets only one of two simultaneous dispatchers win', async () => {
     const incident = await harness.services.incidents.create({
       requester: requesterA(),
@@ -260,6 +310,9 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     const fresh = await harness.services.repository.findById(incident.id);
     expect(fresh!.status).toBe(IncidentStatus.WAITING_REVIEW);
     expect(harness.messages.toChat(TEST_CHATS.review).length).toBeGreaterThan(0);
+    expect(harness.messages.edits.some((edit) =>
+      edit.mode === 'finalize' && edit.text.startsWith('🟢 ОТРАБОТАНО'),
+    )).toBe(true);
   });
 
   it('lets only one of two concurrent answer submissions through', async () => {
