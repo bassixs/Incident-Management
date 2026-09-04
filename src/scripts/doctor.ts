@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { Bot } from '@maxhub/max-bot-api';
 import { InboxStatus, OutboxStatus, PrismaClient, UserRole } from '@prisma/client';
@@ -6,6 +6,7 @@ import { InboxStatus, OutboxStatus, PrismaClient, UserRole } from '@prisma/clien
 import { getConfig } from '../config';
 import { createMaxClient, type MaxClient } from '../max/max-client';
 import { createMediaStorage } from '../media/media.service';
+import { LEGAL_FILE_NAMES } from '../legal/legal-acceptance.service';
 
 /**
  * Pre-flight check for a deployment.
@@ -244,6 +245,61 @@ async function checkDeliveryQueues(prisma: PrismaClient): Promise<void> {
   }
 }
 
+async function checkLegalDocuments(): Promise<void> {
+  const config = getConfig();
+  if (!config.LEGAL_CONSENT_REQUIRED) {
+    record(
+      'Юридические документы',
+      'warn',
+      'Допуск по документам выключен. Это правильно для черновиков; включите его только после заполнения реквизитов и проверки юристом.',
+    );
+    return;
+  }
+
+  const base = config.LEGAL_DOCUMENTS_BASE_URL!;
+  const documents = [
+    {
+      label: 'Пользовательское соглашение',
+      fileName: LEGAL_FILE_NAMES.userAgreement,
+      expectedSha256: config.LEGAL_USER_AGREEMENT_SHA256!,
+    },
+    {
+      label: 'Политика обработки ПДн',
+      fileName: LEGAL_FILE_NAMES.privacyPolicy,
+      expectedSha256: config.LEGAL_PRIVACY_POLICY_SHA256!,
+    },
+    {
+      label: 'Согласие на обработку ПДн',
+      fileName: LEGAL_FILE_NAMES.personalDataConsent,
+      expectedSha256: config.LEGAL_PERSONAL_DATA_CONSENT_SHA256!,
+    },
+  ];
+
+  for (const document of documents) {
+    const url = `${base}/${document.fileName}`;
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      if (!response.ok) {
+        record(document.label, 'fail', `${url} вернул HTTP ${response.status}.`);
+        continue;
+      }
+      const body = Buffer.from(await response.arrayBuffer());
+      const actualSha256 = createHash('sha256').update(body).digest('hex');
+      if (actualSha256 !== document.expectedSha256.toLowerCase()) {
+        record(
+          document.label,
+          'fail',
+          `Файл доступен, но SHA-256 не совпадает. Ожидался ${document.expectedSha256}, получен ${actualSha256}.`,
+        );
+        continue;
+      }
+      record(document.label, 'ok', `${url} доступен, SHA-256 совпадает (${body.length} байт).`);
+    } catch (error) {
+      record(document.label, 'fail', `${url} недоступен: ${describeError(error)}`);
+    }
+  }
+}
+
 async function sendProbes(prisma: PrismaClient, max: MaxClient): Promise<void> {
   const config = getConfig();
   const targets: Array<{ label: string; chatId: bigint }> = [];
@@ -305,6 +361,7 @@ async function main(): Promise<void> {
   await checkMediaStorage();
   await checkRoles(prisma);
   await checkDeliveryQueues(prisma);
+  await checkLegalDocuments();
 
   if (process.argv.includes('--send') && botOk) {
     process.stdout.write('\nОтправка проверочных сообщений в рабочие чаты…\n');

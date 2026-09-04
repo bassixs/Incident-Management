@@ -55,6 +55,7 @@ export async function resetDatabase(prisma: PrismaClient): Promise<void> {
       "SystemSetting",
       "ResponsibleGroup",
       "Category",
+      "LegalAcceptance",
       "User"
     RESTART IDENTITY CASCADE
   `);

@@ -15,6 +15,7 @@ import { IncidentHistoryService } from '../incidents/incident-history.service';
 import { IncidentStateService } from '../incidents/incident-state.service';
 import { IncidentRepository } from '../incidents/incident.repository';
 import { IncidentService } from '../incidents/incident.service';
+import { LegalAcceptanceService } from '../legal/legal-acceptance.service';
 import { createMaxClient, MaxClient } from '../max/max-client';
 import { MaxMessageService } from '../max/max-message.service';
 import { createMediaStorage, MediaService } from '../media/media.service';
@@ -46,6 +47,7 @@ export type AppServices = {
   actionGuard: ActionGuardService;
   audit: AdminAuditService;
   retention: RetentionService;
+  legal: LegalAcceptanceService;
 
   users: UserService;
   categories: CategoryService;
@@ -93,6 +95,7 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
   const actionGuard = new ActionGuardService(prisma);
   const audit = new AdminAuditService(prisma);
   const retention = new RetentionService(prisma, storage);
+  const legal = new LegalAcceptanceService(prisma, config);
 
   const users = new UserService(prisma);
   const categories = new CategoryService(prisma);
@@ -159,6 +162,7 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
     actionGuard,
     audit,
     retention,
+    legal,
     users,
     categories,
     responsibleGroups,

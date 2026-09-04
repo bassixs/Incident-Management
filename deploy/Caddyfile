@@ -14,6 +14,15 @@
 		reverse_proxy app:3000
 	}
 
+	# Final, lawyer-approved PDFs only. Drafts stay in legal/pdf and are never
+	# mounted here; publishing is an explicit copy into legal/public.
+	handle_path /documents/* {
+		root * /srv/legal
+		header Cache-Control "no-cache"
+		header Content-Disposition "inline"
+		file_server
+	}
+
 	handle {
 		respond "Not found" 404
 	}

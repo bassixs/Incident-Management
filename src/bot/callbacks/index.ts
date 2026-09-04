@@ -41,7 +41,14 @@ export async function handleCallbackUpdate(services: AppServices, ctx: Context):
       return;
     }
 
-    const operation = dispatchCallback(services, actor, chatId, messageId, payload);
+    const operation = dispatchCallback(
+      services,
+      actor,
+      chatId,
+      messageId,
+      callback.callback_id,
+      payload,
+    );
     const raced = await Promise.race([
       operation.then((notice) => ({ kind: 'done' as const, notice })),
       delay(600).then(() => ({ kind: 'pending' as const })),
@@ -83,11 +90,12 @@ async function dispatchCallback(
   actor: Awaited<ReturnType<typeof resolveActor>>,
   chatId: bigint | undefined,
   messageId: string | undefined,
+  callbackId: string,
   payload: NonNullable<ReturnType<typeof parseCallbackPayload>>,
 ): Promise<string | undefined> {
   switch (payload.kind) {
     case 'user':
-      return handleUserCallback({ services, actor, chatId, messageId }, payload);
+      return handleUserCallback({ services, actor, chatId, messageId, callbackId }, payload);
     case 'incident':
       return handleIncidentCallback({ services, actor, chatId, messageId }, payload);
     case 'session':

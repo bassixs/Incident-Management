@@ -88,6 +88,14 @@ const envSchema = z
     SESSION_TTL_MINUTES: int(10),
     MY_INCIDENTS_LIMIT: int(10),
 
+    /** Legal gate stays off until the operator details and publication date are final. */
+    LEGAL_CONSENT_REQUIRED: boolean(false),
+    LEGAL_DOCUMENTS_BASE_URL: z.string().url().optional(),
+    LEGAL_DOCUMENT_VERSION: z.string().trim().min(1).default('1.0'),
+    LEGAL_USER_AGREEMENT_SHA256: z.string().trim().regex(/^[a-fA-F0-9]{64}$/).optional(),
+    LEGAL_PRIVACY_POLICY_SHA256: z.string().trim().regex(/^[a-fA-F0-9]{64}$/).optional(),
+    LEGAL_PERSONAL_DATA_CONSENT_SHA256: z.string().trim().regex(/^[a-fA-F0-9]{64}$/).optional(),
+
     MEDIA_STORAGE: z.enum(['local', 's3']).default('local'),
     MEDIA_LOCAL_PATH: z.string().default('./data/uploads'),
     S3_ENDPOINT: z.string().optional(),
@@ -137,6 +145,22 @@ const envSchema = z
         }
       }
     }
+    if (value.LEGAL_CONSENT_REQUIRED) {
+      for (const key of [
+        'LEGAL_DOCUMENTS_BASE_URL',
+        'LEGAL_USER_AGREEMENT_SHA256',
+        'LEGAL_PRIVACY_POLICY_SHA256',
+        'LEGAL_PERSONAL_DATA_CONSENT_SHA256',
+      ] as const) {
+        if (!value[key]) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: `${key} is required when LEGAL_CONSENT_REQUIRED=true.`,
+          });
+        }
+      }
+    }
     try {
       new Intl.DateTimeFormat('ru-RU', { timeZone: value.APP_TIMEZONE });
     } catch {
@@ -165,6 +189,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
   return {
     ...parsed.data,
     mediaLocalAbsolutePath: path.resolve(process.cwd(), parsed.data.MEDIA_LOCAL_PATH),
+    LEGAL_DOCUMENTS_BASE_URL: parsed.data.LEGAL_DOCUMENTS_BASE_URL?.replace(/\/+$/, ''),
   };
 }
 

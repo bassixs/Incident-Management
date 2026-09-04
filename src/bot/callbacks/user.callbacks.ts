@@ -11,21 +11,29 @@ import {
 import { ValidationError } from '../../utils/errors';
 import { moduleLogger } from '../../utils/logger';
 import {
+  agreementAcceptanceKeyboard,
   LOCALITY_OTHER,
   LOCALITY_SKIP,
+  legalDocumentsKeyboard,
   mainMenuKeyboard,
+  personalDataConsentKeyboard,
   requesterCategoryKeyboard,
   requesterLocalityKeyboard,
   requesterMunicipalityKeyboard,
 } from '../keyboards';
 import {
+  agreementAcceptanceText,
   categoryPromptText,
   customLocalityPromptText,
   greetingText,
   incidentPromptText,
+  legalAcceptanceCompleteText,
+  legalDocumentsText,
+  legalGateText,
   localityPromptText,
   municipalityPromptText,
   myIncidentsText,
+  personalDataConsentText,
   rulesText,
 } from '../views/cards';
 import type { ResolvedActor } from '../handlers/helpers';
@@ -38,7 +46,17 @@ export type UserCallbackContext = {
   chatId: bigint | undefined;
   /** The message the button sits on, so the picker can be paged in place. */
   messageId: string | undefined;
+  /** Evidence id of the physical confirmation action in MAX. */
+  callbackId: string;
 };
+
+const CONSENT_GATED_ACTIONS = new Set([
+  'category',
+  'page',
+  'location-page',
+  'municipality',
+  'locality',
+]);
 
 /** Requester-side buttons (§53, §7, §54, §55). Never touches other people's data. */
 export async function handleUserCallback(
@@ -53,6 +71,15 @@ export async function handleUserCallback(
     return 'Действие недоступно';
   }
 
+  if (
+    CONSENT_GATED_ACTIONS.has(payload.action) &&
+    !(await services.legal.hasCurrentAccess(actor.userId))
+  ) {
+    await services.sessions.clear(actor.maxUserId, context.chatId ?? actor.maxUserId);
+    await sendLegalGate(context);
+    return 'Сначала подтвердите документы';
+  }
+
   switch (payload.action) {
     case 'menu': {
       await services.messages.send(target, { text: greetingText(), keyboard: mainMenuKeyboard() });
@@ -61,6 +88,17 @@ export async function handleUserCallback(
 
     case 'rules': {
       await services.messages.send(target, { text: rulesText(), keyboard: mainMenuKeyboard() });
+      return undefined;
+    }
+
+    case 'documents': {
+      const status = await services.legal.status(actor.userId);
+      await services.messages.send(target, {
+        text: legalDocumentsText(status),
+        keyboard: legalDocumentsKeyboard(services.legal.links(), {
+          showContinue: status.required && !status.ready && status.documentsAvailable,
+        }),
+      });
       return undefined;
     }
 
@@ -75,21 +113,85 @@ export async function handleUserCallback(
     }
 
     case 'new': {
-      const remaining = await services.incidents.remainingDailyQuota(actor.maxUserId);
-      if (remaining <= 0) {
-        await services.messages.send(target, {
-          text: dailyLimitMessage(services.config.DAILY_INCIDENT_LIMIT),
-          keyboard: mainMenuKeyboard(),
-        });
-        return 'Дневной лимит исчерпан';
+      if (!(await services.legal.hasCurrentAccess(actor.userId))) {
+        await services.sessions.clear(actor.maxUserId, context.chatId ?? actor.maxUserId);
+        await sendLegalGate(context);
+        return 'Требуется подтверждение документов';
       }
-      await services.sessions.clear(actor.maxUserId, context.chatId ?? actor.maxUserId);
-      const categories = await services.categories.listActive();
-      await services.messages.send(target, {
-        text: categoryPromptText(categories.length),
-        keyboard: requesterCategoryKeyboard(categories, 0),
-      });
+      await beginNewIncident(context);
       return undefined;
+    }
+
+    case 'legal-continue': {
+      const status = await services.legal.status(actor.userId);
+      const links = services.legal.links();
+      if (!status.required) {
+        await services.messages.send(target, {
+          text: legalDocumentsText(status),
+          keyboard: legalDocumentsKeyboard(links),
+        });
+        return undefined;
+      }
+      if (!status.agreementAccepted) {
+        if (!links.userAgreement) throw new ValidationError('Документ временно недоступен.');
+        await services.messages.send(target, {
+          text: agreementAcceptanceText(services.config.LEGAL_DOCUMENT_VERSION),
+          keyboard: agreementAcceptanceKeyboard(links.userAgreement),
+        });
+        return undefined;
+      }
+      if (!status.consentAccepted) {
+        if (!links.personalDataConsent) throw new ValidationError('Документ временно недоступен.');
+        await services.messages.send(target, {
+          text: personalDataConsentText(services.config.LEGAL_DOCUMENT_VERSION),
+          keyboard: personalDataConsentKeyboard(links.personalDataConsent),
+        });
+        return undefined;
+      }
+      await beginNewIncident(context);
+      return undefined;
+    }
+
+    case 'accept-agreement': {
+      const links = services.legal.links();
+      if (!links.personalDataConsent) throw new ValidationError('Документ временно недоступен.');
+      await services.legal.acceptUserAgreement({
+        userId: actor.userId,
+        maxUserId: actor.maxUserId,
+        sourceCallbackId: context.callbackId,
+        sourceMessageId: context.messageId,
+        sourceChatId: context.chatId,
+      });
+      if (context.messageId) {
+        await services.messages.finalizeCard(
+          context.messageId,
+          `Пользовательское соглашение редакции ${services.config.LEGAL_DOCUMENT_VERSION} принято.`,
+        );
+      }
+      await services.messages.send(target, {
+        text: personalDataConsentText(services.config.LEGAL_DOCUMENT_VERSION),
+        keyboard: personalDataConsentKeyboard(links.personalDataConsent),
+      });
+      return 'Соглашение принято';
+    }
+
+    case 'accept-consent': {
+      await services.legal.acceptPersonalDataConsent({
+        userId: actor.userId,
+        maxUserId: actor.maxUserId,
+        sourceCallbackId: context.callbackId,
+        sourceMessageId: context.messageId,
+        sourceChatId: context.chatId,
+      });
+      if (context.messageId) {
+        await services.messages.finalizeCard(
+          context.messageId,
+          `Согласие на обработку персональных данных редакции ${services.config.LEGAL_DOCUMENT_VERSION} предоставлено.`,
+        );
+      }
+      await services.messages.send(target, { text: legalAcceptanceCompleteText() });
+      await beginNewIncident(context);
+      return 'Согласие сохранено';
     }
 
     case 'location-page': {
@@ -238,6 +340,39 @@ export async function handleUserCallback(
     default:
       return undefined;
   }
+}
+
+async function sendLegalGate(context: UserCallbackContext): Promise<void> {
+  const { services, actor } = context;
+  const status = await services.legal.status(actor.userId);
+  await services.messages.send(
+    { userId: actor.maxUserId },
+    {
+      text: legalGateText(),
+      keyboard: legalDocumentsKeyboard(services.legal.links(), {
+        showContinue: status.required && status.documentsAvailable,
+      }),
+    },
+  );
+}
+
+async function beginNewIncident(context: UserCallbackContext): Promise<void> {
+  const { services, actor } = context;
+  const target = { userId: actor.maxUserId } as const;
+  const remaining = await services.incidents.remainingDailyQuota(actor.maxUserId);
+  if (remaining <= 0) {
+    await services.messages.send(target, {
+      text: dailyLimitMessage(services.config.DAILY_INCIDENT_LIMIT),
+      keyboard: mainMenuKeyboard(),
+    });
+    return;
+  }
+  await services.sessions.clear(actor.maxUserId, context.chatId ?? actor.maxUserId);
+  const categories = await services.categories.listActive();
+  await services.messages.send(target, {
+    text: categoryPromptText(categories.length),
+    keyboard: requesterCategoryKeyboard(categories, 0),
+  });
 }
 
 function parseLocationArgument(raw: string | undefined, expectedParts: 2): [string, string];

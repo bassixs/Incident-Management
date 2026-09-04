@@ -54,6 +54,11 @@ enum ResponsibleGroupKind {
   EXECUTIVE_AUTHORITY
 }
 
+enum LegalAcceptanceType {
+  USER_AGREEMENT
+  PERSONAL_DATA_CONSENT
+}
+
 enum UserRole {
   REQUESTER
   DISPATCHER
@@ -99,8 +104,32 @@ model User {
   authoredAnswers IncidentAnswer[] @relation("AnswerAuthor")
   approvedAnswers IncidentAnswer[] @relation("AnswerApprover")
   bansIssued      Ban[]            @relation("BanAuthor")
+  legalAcceptances LegalAcceptance[]
 
   @@index([maxUserId])
+}
+
+/// Evidence of an explicit legal confirmation made in the private MAX dialog.
+/// Each document revision is accepted separately; the first successful click
+/// is immutable and repeated clicks are idempotent through the compound key.
+model LegalAcceptance {
+  id               String              @id @default(uuid())
+  userId           String
+  user             User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  maxUserId        BigInt
+  type             LegalAcceptanceType
+  documentVersion  String
+  documentUrl      String
+  documentSha256   String
+  confirmationText String
+  sourceCallbackId String?             @unique
+  sourceMessageId  String?
+  sourceChatId     BigInt?
+  acceptedAt       DateTime            @default(now())
+
+  @@unique([userId, type, documentVersion])
+  @@index([maxUserId, acceptedAt])
+  @@index([type, documentVersion])
 }
 
 model Category {

@@ -2,6 +2,7 @@ import { Keyboard } from '@maxhub/max-bot-api';
 import type { Button } from '../../max/max-types';
 import type { Category, ResponsibleGroup } from '@prisma/client';
 import type { ProblemMunicipality } from '../../locations/problem-locations';
+import type { LegalDocumentLinks } from '../../legal/legal-acceptance.service';
 
 import {
   incidentCallback,
@@ -19,7 +20,54 @@ export function mainMenuKeyboard(): Button[][] {
   return [
     [button.callback('📝 Создать обращение', userCallback('new'))],
     [button.callback('🔎 Мои обращения', userCallback('my-incidents'))],
+    [button.callback('📄 Документы', userCallback('documents'))],
     [button.callback('ℹ️ Правила', userCallback('rules'))],
+  ];
+}
+
+/** Permanent document links plus an optional entry into the acceptance flow. */
+export function legalDocumentsKeyboard(
+  links: LegalDocumentLinks,
+  options: { showContinue?: boolean } = {},
+): Button[][] {
+  const rows: Button[][] = [];
+  if (links.userAgreement) rows.push([button.link('Пользовательское соглашение', links.userAgreement)]);
+  if (links.privacyPolicy) rows.push([button.link('Политика обработки данных', links.privacyPolicy)]);
+  if (links.personalDataConsent) {
+    rows.push([button.link('Согласие на обработку данных', links.personalDataConsent)]);
+  }
+  if (options.showContinue) {
+    rows.push([button.callback('Продолжить', userCallback('legal-continue'), { intent: 'positive' })]);
+  }
+  rows.push([button.callback('Главное меню', userCallback('menu'))]);
+  return rows;
+}
+
+export function agreementAcceptanceKeyboard(url: string): Button[][] {
+  return [
+    [button.link('Открыть соглашение', url)],
+    [
+      button.callback(
+        'Принимаю пользовательское соглашение',
+        userCallback('accept-agreement'),
+        { intent: 'positive' },
+      ),
+    ],
+    [button.callback('Главное меню', userCallback('menu'))],
+  ];
+}
+
+export function personalDataConsentKeyboard(url: string): Button[][] {
+  return [
+    [button.link('Открыть согласие', url)],
+    [
+      button.callback(
+        'Даю согласие на обработку персональных данных',
+        userCallback('accept-consent'),
+        { intent: 'positive' },
+      ),
+    ],
+    [button.callback('Главное меню', userCallback('menu'))],
   ];
 }
 

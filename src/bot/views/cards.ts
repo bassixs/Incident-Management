@@ -3,6 +3,7 @@ import type { Incident, IncidentAnswer, ResponsibleGroup } from '@prisma/client'
 import { getConfig } from '../../config';
 import { describeStatus } from '../../incidents/incident-state.service';
 import type { IncidentWithRelations } from '../../incidents/incident.repository';
+import type { LegalAccessStatus } from '../../legal/legal-acceptance.service';
 import { formatDate, formatDateTime } from '../../utils/datetime';
 import { pluralRu } from '../../utils/text';
 
@@ -280,8 +281,64 @@ export function greetingText(): string {
     '',
     'Здесь можно сообщить о проблеме или инциденте.',
     '',
-    'Выберите сферу обращения.',
-    'Если вы не уверены — нажмите «Не знаю».',
+    'Выберите нужное действие.',
+  ].join('\n');
+}
+
+export function legalDocumentsText(status: LegalAccessStatus): string {
+  if (!status.documentsAvailable) {
+    return [
+      'Юридические документы готовятся к публикации.',
+      '',
+      'До заполнения сведений об Операторе обязательное подтверждение отключено.',
+    ].join('\n');
+  }
+  return [
+    'Документы чат-бота «Искра»',
+    '',
+    'Откройте документы кнопками ниже. Они всегда доступны из главного меню.',
+    ...(status.required
+      ? [
+          '',
+          `Пользовательское соглашение: ${status.agreementAccepted ? 'принято' : 'не подтверждено'}.`,
+          `Согласие на обработку персональных данных: ${status.consentAccepted ? 'предоставлено' : 'не подтверждено'}.`,
+        ]
+      : []),
+  ].join('\n');
+}
+
+export function legalGateText(): string {
+  return [
+    'Перед созданием первого обращения ознакомьтесь с документами.',
+    '',
+    'Пользовательское соглашение и согласие на обработку персональных данных подтверждаются отдельно.',
+    'Если вы не согласны, вернитесь в главное меню — обращение создано не будет.',
+  ].join('\n');
+}
+
+export function agreementAcceptanceText(version: string): string {
+  return [
+    'Шаг 1 из 2. Пользовательское соглашение',
+    '',
+    `Откройте и прочитайте документ редакции ${version}.`,
+    'Если принимаете его условия, нажмите отдельную кнопку подтверждения.',
+  ].join('\n');
+}
+
+export function personalDataConsentText(version: string): string {
+  return [
+    'Шаг 2 из 2. Согласие на обработку персональных данных',
+    '',
+    `Откройте и прочитайте согласие редакции ${version}.`,
+    'Нажмите кнопку ниже, только если добровольно даёте согласие на указанных условиях.',
+  ].join('\n');
+}
+
+export function legalAcceptanceCompleteText(): string {
+  return [
+    'Спасибо. Оба подтверждения сохранены.',
+    '',
+    'Теперь можно создать обращение. Если документы существенно изменятся, бот попросит подтвердить новую редакцию.',
   ].join('\n');
 }
 

@@ -805,6 +805,69 @@ docker compose exec -T postgres pg_restore --list \
 
 ---
 
+## 5.1. Юридические документы и допуск к созданию обращения
+
+Что делает бот:
+
+1. Команда `/start` показывает главное меню; раздел «Документы» доступен всегда.
+2. При первом нажатии «Создать обращение» бот показывает ссылки на три PDF.
+3. Пользователь отдельно принимает Пользовательское соглашение и отдельно даёт
+   согласие на обработку персональных данных. Одно нажатие не заменяет другое.
+4. Только после обоих подтверждений открывается создание обращения.
+5. В БД сохраняются MAX ID пользователя, тип подтверждения, редакция и SHA-256
+   документа, точный текст кнопки, время, ID callback, сообщения и чата.
+6. Повторное нажатие не создаёт дубль. Если поменять
+   `LEGAL_DOCUMENT_VERSION`, прежние подтверждения перестанут давать доступ.
+
+До заполнения жёлтых полей и финальной проверки юристом функция должна быть
+выключена: `LEGAL_CONSENT_REQUIRED=false`. Черновики лежат в `legal/pdf`, но
+Caddy публикует только отдельный каталог `legal/public`, поэтому случайно
+показать пользователям черновой PDF нельзя.
+
+Порядок финального включения:
+
+```bash
+cd /opt/incident-bot
+
+# 1. Положить три одобренных юристом PDF под этими точными именами:
+# legal/public/user-agreement.pdf
+# legal/public/privacy-policy.pdf
+# legal/public/personal-data-consent.pdf
+
+# 2. Получить контрольные суммы для .env:
+sha256sum legal/public/user-agreement.pdf
+sha256sum legal/public/privacy-policy.pdf
+sha256sum legal/public/personal-data-consent.pdf
+
+# 3. В .env задать:
+# LEGAL_DOCUMENTS_BASE_URL=https://<PUBLIC_DOMAIN>/documents
+# LEGAL_DOCUMENT_VERSION=1.0
+# LEGAL_USER_AGREEMENT_SHA256=<сумма user-agreement.pdf>
+# LEGAL_PRIVACY_POLICY_SHA256=<сумма privacy-policy.pdf>
+# LEGAL_PERSONAL_DATA_CONSENT_SHA256=<сумма personal-data-consent.pdf>
+# LEGAL_CONSENT_REQUIRED=true
+
+# 4. Перезапустить Caddy и приложение, затем проверить документы и БД:
+docker compose --profile tls up -d --build app caddy
+NODE_EXTRA_CA_CERTS=./deploy/russian-trusted-ca.pem npm run doctor
+```
+
+Проверить, сколько подтверждений сохранено по текущей редакции:
+
+```bash
+docker compose exec -T postgres psql -U incident -d incident -c '
+SELECT "type", "documentVersion", count(*)
+FROM "LegalAcceptance"
+GROUP BY "type", "documentVersion"
+ORDER BY "documentVersion", "type";'
+```
+
+При любом содержательном изменении PDF нужно увеличить
+`LEGAL_DOCUMENT_VERSION`, пересчитать SHA-256 и снова выполнить `doctor`.
+Подменять файл, сохраняя прежние версию и контрольную сумму, нельзя.
+
+---
+
 ## 6. Перед боевым запуском
 
 Настройки, оставшиеся в тестовом виде:
@@ -826,6 +889,11 @@ docker compose exec -T postgres pg_restore --list \
       проверкой целостности и ротацией
 - [ ] Перед публикацией юридических документов проверить очистку старше 90
       дней на production и разобрать ручные/внешние резервные копии
+- [ ] Заполнить реквизиты Оператора, контакт и дату во всех трёх документах,
+      получить финальное подтверждение юриста и убрать пометки «ПРОЕКТ»
+- [ ] Опубликовать только финальные PDF, задать версию и SHA-256, включить
+      `LEGAL_CONSENT_REQUIRED=true`, выполнить `doctor` и пройти сценарий новым
+      тестовым пользователем
 - [ ] Настроить автоматическую внешнюю копию бэкапов на другой сервер или S3
 - [ ] При росте объёма вложений перевести `MEDIA_STORAGE` на `s3`
 

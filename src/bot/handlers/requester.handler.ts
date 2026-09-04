@@ -7,8 +7,8 @@ import { classifyAttachments } from '../../media/media.service';
 import { RateLimitError, ValidationError } from '../../utils/errors';
 import { incidentLogFields, moduleLogger } from '../../utils/logger';
 import { normaliseIncidentText, unicodeLength } from '../../utils/text';
-import { mainMenuKeyboard } from '../keyboards';
-import { greetingText, incidentPromptText, registrationConfirmation } from '../views/cards';
+import { legalDocumentsKeyboard, mainMenuKeyboard } from '../keyboards';
+import { greetingText, incidentPromptText, legalGateText, registrationConfirmation } from '../views/cards';
 import type { ResolvedActor } from './helpers';
 
 const log = moduleLogger('bot-requester');
@@ -33,6 +33,22 @@ export async function handleRequesterMessage(
   const session = await services.sessions.find(actor.maxUserId, chatId);
   if (!session) {
     await services.messages.send(target, { text: NO_SESSION_HINT, keyboard: mainMenuKeyboard() });
+    return;
+  }
+
+  if (
+    (session.type === SessionType.WAITING_CUSTOM_LOCALITY ||
+      session.type === SessionType.WAITING_INCIDENT_TEXT) &&
+    !(await services.legal.hasCurrentAccess(actor.userId))
+  ) {
+    await services.sessions.clear(actor.maxUserId, chatId);
+    const legalStatus = await services.legal.status(actor.userId);
+    await services.messages.send(target, {
+      text: legalGateText(),
+      keyboard: legalDocumentsKeyboard(services.legal.links(), {
+        showContinue: legalStatus.required && legalStatus.documentsAvailable,
+      }),
+    });
     return;
   }
 
