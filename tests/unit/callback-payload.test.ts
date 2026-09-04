@@ -44,6 +44,11 @@ describe('callback payloads', () => {
       action: 'municipality',
       argument: `${CATEGORY_ID}~YUKHNOVSKY`,
     });
+    expect(parseCallbackPayload(userCallback('draft-field', 'phone'))).toEqual({
+      kind: 'user',
+      action: 'draft-field',
+      argument: 'phone',
+    });
   });
 
   it('round-trips report period buttons', () => {

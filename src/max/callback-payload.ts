@@ -39,6 +39,10 @@ export const USER_ACTIONS = [
   'legal-continue',
   'accept-agreement',
   'accept-consent',
+  'draft-confirm',
+  'draft-edit',
+  'draft-field',
+  'draft-photo',
   'menu',
 ] as const;
 export type UserAction = (typeof USER_ACTIONS)[number];

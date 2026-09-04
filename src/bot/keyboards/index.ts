@@ -179,6 +179,37 @@ export function requesterLocalityKeyboard(
   ];
 }
 
+/** Final requester checkpoint before an Incident row is created. */
+export function incidentDraftConfirmationKeyboard(): Button[][] {
+  return [
+    [button.callback('✅ Всё верно', userCallback('draft-confirm'), { intent: 'positive' })],
+    [button.callback('✏️ Исправить', userCallback('draft-edit'))],
+  ];
+}
+
+/** Choose exactly one draft field; changing it never clears the other fields. */
+export function incidentDraftEditKeyboard(hasPhoto: boolean): Button[][] {
+  return [
+    [button.callback('ФИО', userCallback('draft-field', 'name'))],
+    [button.callback('Номер телефона', userCallback('draft-field', 'phone'))],
+    [button.callback('Сфера обращения', userCallback('draft-field', 'category'))],
+    [button.callback('Территория и населённый пункт', userCallback('draft-field', 'location'))],
+    [button.callback('Текст обращения', userCallback('draft-field', 'text'))],
+    [button.callback(hasPhoto ? 'Фотографии' : 'Добавить фотографию', userCallback('draft-field', 'photo'))],
+    [button.callback('⬅️ Назад к проверке', userCallback('draft-edit', 'back'))],
+  ];
+}
+
+export function incidentDraftPhotoKeyboard(hasPhoto: boolean): Button[][] {
+  return [
+    [button.callback(hasPhoto ? 'Заменить фотографии' : 'Добавить фотографию', userCallback('draft-photo', 'replace'))],
+    ...(hasPhoto
+      ? [[button.callback('Удалить фотографии', userCallback('draft-photo', 'remove'), { intent: 'negative' })]]
+      : []),
+    [button.callback('⬅️ Назад', userCallback('draft-edit'))],
+  ];
+}
+
 /** Buttons under the distribution-chat card (§16). */
 export function distributionKeyboard(incidentId: string): Button[][] {
   return [

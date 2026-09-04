@@ -3,6 +3,7 @@ import { type OperatorSession, type PrismaClient, SessionType } from '@prisma/cl
 import { getConfig } from '../config';
 import type { PrismaLike } from '../database/prisma';
 import { moduleLogger } from '../utils/logger';
+import type { IncomingMedia } from '../media/media.service';
 
 const log = moduleLogger('sessions');
 
@@ -17,6 +18,10 @@ export type SessionData = {
   problemMunicipalityCode?: string;
   problemMunicipalityName?: string;
   problemLocality?: string | null;
+  /** Completed requester draft, kept outside Incident until explicit confirmation. */
+  draftText?: string;
+  draftMedia?: IncomingMedia[];
+  draftEditField?: 'name' | 'phone' | 'category' | 'location' | 'text' | 'photo';
   /** WAITING_BAN_REASON: whom to ban (the incident author). */
   targetMaxUserId?: string;
   /** WAITING_FOR_ANSWER: text pre-filled from a template or an AI draft. */

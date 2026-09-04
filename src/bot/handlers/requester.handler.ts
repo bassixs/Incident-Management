@@ -8,21 +8,22 @@ import {
 } from '../../incidents/incident.service';
 import type { Message } from '../../max/max-types';
 import { classifyAttachments } from '../../media/media.service';
-import { RateLimitError, ValidationError } from '../../utils/errors';
-import { incidentLogFields, moduleLogger } from '../../utils/logger';
+import { ValidationError } from '../../utils/errors';
 import { normaliseIncidentText, unicodeLength } from '../../utils/text';
 import { legalDocumentsKeyboard, mainMenuKeyboard, requesterCategoryKeyboard } from '../keyboards';
+import {
+  requireCompleteIncidentDraft,
+  serialiseDraftMedia,
+  showIncidentDraftPreview,
+} from '../requester-draft';
 import {
   categoryPromptText,
   greetingText,
   incidentPromptText,
   legalGateText,
-  registrationConfirmation,
   requesterPhonePromptText,
 } from '../views/cards';
 import type { ResolvedActor } from './helpers';
-
-const log = moduleLogger('bot-requester');
 
 const NO_SESSION_HINT = 'Чтобы создать новое обращение, нажмите «Создать обращение».';
 
@@ -52,7 +53,10 @@ export async function handleRequesterMessage(
       session.type === SessionType.WAITING_REQUESTER_PHONE ||
       session.type === SessionType.WAITING_INCIDENT_SELECTION ||
       session.type === SessionType.WAITING_CUSTOM_LOCALITY ||
-      session.type === SessionType.WAITING_INCIDENT_TEXT) &&
+      session.type === SessionType.WAITING_INCIDENT_TEXT ||
+      session.type === SessionType.WAITING_INCIDENT_CONFIRMATION ||
+      session.type === SessionType.WAITING_INCIDENT_EDIT_SELECTION ||
+      session.type === SessionType.WAITING_INCIDENT_EDIT_VALUE) &&
     !(await services.legal.hasCurrentAccess(actor.userId))
   ) {
     await services.sessions.clear(actor.maxUserId, chatId);
@@ -69,6 +73,15 @@ export async function handleRequesterMessage(
   const data = services.sessions.readData(session);
   const media = classifyAttachments(message.body.attachments);
   const text = message.body.text ?? '';
+
+  if (
+    session.type === SessionType.WAITING_INCIDENT_CONFIRMATION ||
+    session.type === SessionType.WAITING_INCIDENT_EDIT_SELECTION ||
+    session.type === SessionType.WAITING_INCIDENT_SELECTION
+  ) {
+    await services.messages.send(target, { text: 'Продолжите кнопками в сообщении выше.' });
+    return;
+  }
 
   if (session.type === SessionType.WAITING_REQUESTER_NAME) {
     try {
@@ -113,9 +126,57 @@ export async function handleRequesterMessage(
     return;
   }
 
-  if (session.type === SessionType.WAITING_INCIDENT_SELECTION) {
-    await services.messages.send(target, { text: 'Продолжите создание обращения кнопками выше.' });
-    return;
+
+  if (session.type === SessionType.WAITING_INCIDENT_EDIT_VALUE) {
+    try {
+      const draft = requireCompleteIncidentDraft(data);
+      switch (data.draftEditField) {
+        case 'name': {
+          if (media.length > 0) throw new ValidationError('Отправьте ФИО обычным текстовым сообщением.');
+          await showIncidentDraftPreview(services, actor.maxUserId, chatId, {
+            ...draft,
+            requesterName: normaliseRequesterName(text),
+          });
+          return;
+        }
+        case 'phone': {
+          if (media.length > 0) throw new ValidationError('Отправьте номер обычным текстовым сообщением.');
+          await showIncidentDraftPreview(services, actor.maxUserId, chatId, {
+            ...draft,
+            requesterPhone: normaliseRequesterPhone(text),
+          });
+          return;
+        }
+        case 'text': {
+          if (media.length > 0) {
+            throw new ValidationError('Отправьте только новый текст. Фотографии меняются отдельной кнопкой.');
+          }
+          const validated = services.incidents.validateSubmission(text);
+          await showIncidentDraftPreview(services, actor.maxUserId, chatId, {
+            ...draft,
+            draftText: validated.text,
+          });
+          return;
+        }
+        case 'photo': {
+          if (media.length === 0 || media.some((item) => item.kind !== 'IMAGE')) {
+            throw new ValidationError('Отправьте одну или несколько фотографий без других файлов.');
+          }
+          await showIncidentDraftPreview(services, actor.maxUserId, chatId, {
+            ...draft,
+            draftMedia: serialiseDraftMedia(media),
+          });
+          return;
+        }
+        default:
+          throw new ValidationError('Черновик устарел. Начните создание обращения заново.');
+      }
+    } catch (error) {
+      await services.messages.send(target, {
+        text: error instanceof ValidationError ? error.message : 'Не удалось сохранить изменение. Попробуйте ещё раз.',
+      });
+      return;
+    }
   }
 
   if (session.type === SessionType.WAITING_CUSTOM_LOCALITY) {
@@ -143,15 +204,20 @@ export async function handleRequesterMessage(
       });
       return;
     }
-    await services.sessions.start({
-      maxUserId: actor.maxUserId,
-      chatId,
-      type: SessionType.WAITING_INCIDENT_TEXT,
-      data: { ...data, problemLocality: locality },
-    });
-    await services.messages.send(target, {
-      text: [`Населённый пункт: ${locality}`, '', incidentPromptText()].join('\n'),
-    });
+    const nextData = { ...data, problemLocality: locality };
+    if (data.draftEditField === 'location') {
+      await showIncidentDraftPreview(services, actor.maxUserId, chatId, nextData);
+    } else {
+      await services.sessions.start({
+        maxUserId: actor.maxUserId,
+        chatId,
+        type: SessionType.WAITING_INCIDENT_TEXT,
+        data: nextData,
+      });
+      await services.messages.send(target, {
+        text: [`Населённый пункт: ${locality}`, '', incidentPromptText()].join('\n'),
+      });
+    }
     return;
   }
 
@@ -170,39 +236,13 @@ export async function handleRequesterMessage(
   }
 
   try {
-    const incident = await services.incidents.create({
-      requester: {
-        maxUserId: actor.maxUserId,
-        name: data.requesterName,
-        phone: data.requesterPhone,
-        username: message.sender?.username ?? null,
-      },
-      text,
-      userSelectedCategoryId: data.selectedCategoryId ?? null,
-      problemMunicipalityCode: data.problemMunicipalityCode ?? null,
-      problemMunicipalityName: data.problemMunicipalityName ?? null,
+    const validated = services.incidents.validateSubmission(text, media);
+    await showIncidentDraftPreview(services, actor.maxUserId, chatId, {
+      ...data,
+      selectedCategoryId: data.selectedCategoryId ?? null,
       problemLocality: data.problemLocality ?? null,
-      media,
-    });
-
-    await services.sessions.clear(actor.maxUserId, chatId);
-
-    // A failure to publish the card must never hide the fact that the incident
-    // exists: the registration is already committed and the number is final.
-    await services.distribution.publishCard(incident.id).catch((error) =>
-      log.error(
-        incidentLogFields({
-          incidentId: incident.id,
-          publicCode: incident.publicCode,
-          action: 'DISTRIBUTION_CARD_SENT',
-        }),
-        `failed to publish distribution card: ${error instanceof Error ? error.message : String(error)}`,
-      ),
-    );
-
-    await services.messages.send(target, {
-      text: registrationConfirmation(incident),
-      keyboard: mainMenuKeyboard(),
+      draftText: validated.text,
+      draftMedia: serialiseDraftMedia(media),
     });
     return;
   } catch (error) {
@@ -212,18 +252,8 @@ export async function handleRequesterMessage(
       await services.messages.send(target, { text: error.message });
       return;
     }
-    if (error instanceof RateLimitError) {
-      await services.sessions.clear(actor.maxUserId, chatId);
-      await services.messages.send(target, { text: error.message, keyboard: mainMenuKeyboard() });
-      return;
-    }
-    log.error(
-      incidentLogFields({ maxUserId: actor.maxUserId, chatId, action: 'INCIDENT_CREATED' }),
-      `incident registration failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
     await services.messages.send(target, {
-      text: 'Не удалось зарегистрировать обращение. Попробуйте ещё раз позже.',
-      keyboard: mainMenuKeyboard(),
+      text: 'Не удалось сохранить черновик. Попробуйте ещё раз позже.',
     });
   }
 }

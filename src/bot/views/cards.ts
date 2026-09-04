@@ -314,6 +314,53 @@ export function greetingText(): string {
   ].join('\n');
 }
 
+export type IncidentDraftView = {
+  requesterName: string;
+  requesterPhone: string;
+  problemMunicipalityName: string;
+  problemLocality?: string | null;
+  draftText: string;
+  photoCount: number;
+};
+
+/** Requester-only preview. Nothing has been registered or routed yet. */
+export function incidentDraftPreview(draft: IncidentDraftView, categoryName?: string | null): string {
+  return [
+    '🔎 ПРОВЕРЬТЕ ОБРАЩЕНИЕ',
+    '',
+    'ФИО:',
+    draft.requesterName,
+    '',
+    'Телефон:',
+    draft.requesterPhone,
+    '',
+    'Сфера обращения:',
+    categoryName ?? 'Не знаю',
+    '',
+    'Территория проблемы:',
+    draft.problemLocality
+      ? `${draft.problemMunicipalityName} → ${draft.problemLocality}`
+      : draft.problemMunicipalityName,
+    '',
+    'Обращение:',
+    draft.draftText,
+    '',
+    `Фотографии: ${draft.photoCount > 0 ? draft.photoCount : 'нет'}`,
+    '',
+    'Обращение ещё не отправлено. Если всё указано правильно, нажмите «Всё верно».',
+  ].join('\n');
+}
+
+export function incidentDraftEditPrompt(): string {
+  return ['Что нужно исправить?', '', 'Выберите одно поле. Остальные данные сохранятся.'].join('\n');
+}
+
+export function incidentDraftPhotoPrompt(hasPhoto: boolean): string {
+  return hasPhoto
+    ? 'Вы можете заменить все приложенные фотографии или удалить их.'
+    : 'Фотографий пока нет. Нажмите кнопку ниже, чтобы добавить.';
+}
+
 /** Final state shown only on the original card in the distribution chat. */
 export function distributionWorkedNotice(incident: Incident, group: ResponsibleGroup): string {
   return [

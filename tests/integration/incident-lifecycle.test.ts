@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
 
 import { HistoryAction } from '../../src/incidents/incident-history.service';
 import { handleIncidentCallback } from '../../src/bot/callbacks/incident.callbacks';
+import { handleUserCallback } from '../../src/bot/callbacks/user.callbacks';
 import { handleRequesterMessage } from '../../src/bot/handlers/requester.handler';
 import type { Message } from '../../src/max/max-types';
 import { ConflictError, RateLimitError } from '../../src/utils/errors';
@@ -105,9 +106,145 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
       requesterMessage('Не работает фонарь.'),
     );
 
+    expect(await prisma.incident.count()).toBe(0);
+    const preview = await harness.services.sessions.find(actor.maxUserId, actor.maxUserId);
+    expect(preview?.type).toBe('WAITING_INCIDENT_CONFIRMATION');
+    expect(harness.services.sessions.readData(preview!).draftText).toBe('Не работает фонарь.');
+
+    await handleUserCallback(
+      {
+        services: harness.services,
+        actor,
+        chatId: actor.maxUserId,
+        messageId: 'preview-card',
+        callbackId: 'confirm-draft',
+      },
+      { kind: 'user', action: 'draft-confirm' },
+    );
+
     const incident = await prisma.incident.findFirstOrThrow();
     expect(incident.requesterName).toBe('Иванов Иван Иванович');
     expect(incident.requesterPhone).toBe('+7 900 123-45-67');
+  });
+
+  it('changes only the selected draft fields and creates nothing before confirmation', async () => {
+    const actor = await actorFor(prisma, TEST_USERS.requesterA, 'Профиль MAX', []);
+    if ((await harness.services.legal.status(actor.userId)).required) {
+      const evidence = { userId: actor.userId, maxUserId: actor.maxUserId };
+      await harness.services.legal.acceptUserAgreement(evidence);
+      await harness.services.legal.acceptPersonalDataConsent(evidence);
+    }
+    const category = await prisma.category.findUniqueOrThrow({
+      where: { code: CATEGORY_CODES.facility },
+    });
+    await harness.services.sessions.start({
+      maxUserId: actor.maxUserId,
+      chatId: actor.maxUserId,
+      type: 'WAITING_INCIDENT_CONFIRMATION',
+      data: {
+        requesterName: 'Иванов Иван',
+        requesterPhone: '+7 900 111-22-33',
+        selectedCategoryId: null,
+        problemMunicipalityCode: 'BOROVSKY',
+        problemMunicipalityName: 'Боровский округ',
+        problemLocality: 'Боровск',
+        draftText: 'Старый текст',
+        draftMedia: [{ kind: 'IMAGE', url: 'https://example.test/old.jpg' }],
+      },
+    });
+
+    const context = (callbackId: string) => ({
+      services: harness.services,
+      actor,
+      chatId: actor.maxUserId,
+      messageId: `message-${callbackId}`,
+      callbackId,
+    });
+
+    await handleUserCallback(context('edit-name-menu'), { kind: 'user', action: 'draft-edit' });
+    await handleUserCallback(context('edit-name'), {
+      kind: 'user',
+      action: 'draft-field',
+      argument: 'name',
+    });
+    await handleRequesterMessage(harness.services, actor, actor.maxUserId, requesterMessage('Петров Пётр'));
+
+    await handleUserCallback(context('edit-phone-menu'), { kind: 'user', action: 'draft-edit' });
+    await handleUserCallback(context('edit-phone'), {
+      kind: 'user',
+      action: 'draft-field',
+      argument: 'phone',
+    });
+    await handleRequesterMessage(harness.services, actor, actor.maxUserId, requesterMessage('8 999 000 11 22'));
+
+    await handleUserCallback(context('edit-category-menu'), { kind: 'user', action: 'draft-edit' });
+    await handleUserCallback(context('edit-category'), {
+      kind: 'user',
+      action: 'draft-field',
+      argument: 'category',
+    });
+    await handleUserCallback(context('select-category'), {
+      kind: 'user',
+      action: 'category',
+      argument: category.id,
+    });
+
+    await handleUserCallback(context('edit-location-menu'), { kind: 'user', action: 'draft-edit' });
+    await handleUserCallback(context('edit-location'), {
+      kind: 'user',
+      action: 'draft-field',
+      argument: 'location',
+    });
+    await handleUserCallback(context('select-location'), {
+      kind: 'user',
+      action: 'municipality',
+      argument: `${category.id}~KALUGA_CITY`,
+    });
+
+    await handleUserCallback(context('edit-text-menu'), { kind: 'user', action: 'draft-edit' });
+    await handleUserCallback(context('edit-text'), {
+      kind: 'user',
+      action: 'draft-field',
+      argument: 'text',
+    });
+    await handleRequesterMessage(harness.services, actor, actor.maxUserId, requesterMessage('Новый текст'));
+
+    await handleUserCallback(context('edit-photo-menu'), { kind: 'user', action: 'draft-edit' });
+    await handleUserCallback(context('edit-photo'), {
+      kind: 'user',
+      action: 'draft-field',
+      argument: 'photo',
+    });
+    await handleUserCallback(context('remove-photo'), {
+      kind: 'user',
+      action: 'draft-photo',
+      argument: 'remove',
+    });
+
+    expect(await prisma.incident.count()).toBe(0);
+    const preview = await harness.services.sessions.find(actor.maxUserId, actor.maxUserId);
+    const draft = harness.services.sessions.readData(preview!);
+    expect(preview?.type).toBe('WAITING_INCIDENT_CONFIRMATION');
+    expect(draft).toMatchObject({
+      requesterName: 'Петров Пётр',
+      requesterPhone: '+7 999 000-11-22',
+      selectedCategoryId: category.id,
+      problemMunicipalityCode: 'KALUGA_CITY',
+      problemMunicipalityName: 'Город Калуга',
+      problemLocality: null,
+      draftText: 'Новый текст',
+      draftMedia: [],
+    });
+
+    await handleUserCallback(context('confirm-edited'), { kind: 'user', action: 'draft-confirm' });
+    const incident = await prisma.incident.findFirstOrThrow({ include: { attachments: true } });
+    expect(incident.requesterName).toBe('Петров Пётр');
+    expect(incident.requesterPhone).toBe('+7 999 000-11-22');
+    expect(incident.userSelectedCategoryId).toBe(category.id);
+    expect(incident.problemMunicipalityCode).toBe('KALUGA_CITY');
+    expect(incident.problemLocality).toBeNull();
+    expect(incident.text).toBe('Новый текст');
+    expect(incident.attachments).toHaveLength(0);
   });
 
   // --- §11 daily limit -----------------------------------------------------

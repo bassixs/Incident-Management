@@ -8,10 +8,13 @@ import {
   findProblemLocality,
   findProblemMunicipality,
 } from '../../locations/problem-locations';
-import { ValidationError } from '../../utils/errors';
-import { moduleLogger } from '../../utils/logger';
+import type { SessionData } from '../../sessions/operator-session.service';
+import { RateLimitError, ValidationError } from '../../utils/errors';
+import { incidentLogFields, moduleLogger } from '../../utils/logger';
 import {
   agreementAcceptanceKeyboard,
+  incidentDraftEditKeyboard,
+  incidentDraftPhotoKeyboard,
   LOCALITY_OTHER,
   LOCALITY_SKIP,
   legalDocumentsKeyboard,
@@ -21,12 +24,15 @@ import {
   requesterLocalityKeyboard,
   requesterMunicipalityKeyboard,
 } from '../keyboards';
+import { requireCompleteIncidentDraft, showIncidentDraftPreview } from '../requester-draft';
 import {
   agreementAcceptanceText,
   categoryPromptText,
   customLocalityPromptText,
   greetingText,
   incidentPromptText,
+  incidentDraftEditPrompt,
+  incidentDraftPhotoPrompt,
   legalAcceptanceCompleteText,
   legalDocumentsText,
   legalGateText,
@@ -35,6 +41,8 @@ import {
   myIncidentsText,
   personalDataConsentText,
   requesterNamePromptText,
+  requesterPhonePromptText,
+  registrationConfirmation,
   rulesText,
 } from '../views/cards';
 import type { ResolvedActor } from '../handlers/helpers';
@@ -57,6 +65,10 @@ const CONSENT_GATED_ACTIONS = new Set([
   'location-page',
   'municipality',
   'locality',
+  'draft-confirm',
+  'draft-edit',
+  'draft-field',
+  'draft-photo',
 ]);
 
 /** Requester-side buttons (§53, §7, §54, §55). Never touches other people's data. */
@@ -195,9 +207,236 @@ export async function handleUserCallback(
       return 'Согласие сохранено';
     }
 
+    case 'draft-confirm': {
+      const chatId = context.chatId ?? actor.maxUserId;
+      const data = await requireDraftForSession(
+        services,
+        actor.maxUserId,
+        chatId,
+        SessionType.WAITING_INCIDENT_CONFIRMATION,
+      );
+      const draft = requireCompleteIncidentDraft(data);
+      let incident;
+      try {
+        const requester = await services.users.requireByMaxId(actor.maxUserId);
+        incident = await services.incidents.create({
+          requester: {
+            maxUserId: actor.maxUserId,
+            name: draft.requesterName,
+            phone: draft.requesterPhone,
+            username: requester.username,
+          },
+          text: draft.draftText,
+          userSelectedCategoryId: draft.selectedCategoryId,
+          problemMunicipalityCode: draft.problemMunicipalityCode,
+          problemMunicipalityName: draft.problemMunicipalityName,
+          problemLocality: draft.problemLocality,
+          media: draft.draftMedia,
+        });
+      } catch (error) {
+        if (error instanceof RateLimitError) {
+          await services.sessions.clear(actor.maxUserId, chatId);
+          await services.messages.send(target, { text: error.message, keyboard: mainMenuKeyboard() });
+          return 'Дневной лимит исчерпан';
+        }
+        if (error instanceof ValidationError) {
+          await services.messages.send(target, { text: error.message });
+          return 'Проверьте данные';
+        }
+        log.error(
+          incidentLogFields({ maxUserId: actor.maxUserId, chatId, action: 'INCIDENT_CREATED' }),
+          `incident registration failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        await services.messages.send(target, {
+          text: 'Не удалось зарегистрировать обращение. Попробуйте ещё раз позже.',
+        });
+        return 'Не удалось зарегистрировать';
+      }
+      await services.sessions.clear(actor.maxUserId, chatId);
+      if (context.messageId) {
+        await services.messages
+          .finalizeCard(
+            context.messageId,
+            `✅ Данные подтверждены.\n\nОбращение зарегистрировано: ${incident.publicCode}`,
+          )
+          .catch(() => false);
+      }
+      await services.distribution.publishCard(incident.id).catch((error) =>
+        log.error(
+          incidentLogFields({
+            incidentId: incident.id,
+            publicCode: incident.publicCode,
+            action: 'DISTRIBUTION_CARD_SENT',
+          }),
+          `failed to publish distribution card: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
+      await services.messages.send(target, {
+        text: registrationConfirmation(incident),
+        keyboard: mainMenuKeyboard(),
+      });
+      return 'Обращение зарегистрировано';
+    }
+
+    case 'draft-edit': {
+      const chatId = context.chatId ?? actor.maxUserId;
+      const allowed =
+        payload.argument === 'back'
+          ? [SessionType.WAITING_INCIDENT_EDIT_SELECTION]
+          : [
+              SessionType.WAITING_INCIDENT_CONFIRMATION,
+              SessionType.WAITING_INCIDENT_EDIT_SELECTION,
+            ];
+      const data = await requireDraftForSession(services, actor.maxUserId, chatId, ...allowed);
+      const draft = requireCompleteIncidentDraft(data);
+      if (payload.argument === 'back') {
+        if (context.messageId) {
+          await services.messages.finalizeCard(context.messageId, 'Исправление завершено. Проверьте карточку ниже.');
+        }
+        await showIncidentDraftPreview(services, actor.maxUserId, chatId, draft);
+        return undefined;
+      }
+      if (context.messageId && allowed.includes(SessionType.WAITING_INCIDENT_CONFIRMATION)) {
+        await services.messages.finalizeCard(
+          context.messageId,
+          '✏️ Обращение пока не отправлено. Выберите поле для исправления ниже.',
+        );
+      }
+      await services.sessions.start({
+        maxUserId: actor.maxUserId,
+        chatId,
+        type: SessionType.WAITING_INCIDENT_EDIT_SELECTION,
+        data: draft,
+      });
+      await services.messages.send(target, {
+        text: incidentDraftEditPrompt(),
+        keyboard: incidentDraftEditKeyboard(draft.draftMedia.length > 0),
+      });
+      return undefined;
+    }
+
+    case 'draft-field': {
+      const chatId = context.chatId ?? actor.maxUserId;
+      const data = await requireDraftForSession(
+        services,
+        actor.maxUserId,
+        chatId,
+        SessionType.WAITING_INCIDENT_EDIT_SELECTION,
+      );
+      const draft = requireCompleteIncidentDraft(data);
+      const fieldLabels: Record<string, string> = {
+        name: 'ФИО',
+        phone: 'номер телефона',
+        category: 'сфера обращения',
+        location: 'территория и населённый пункт',
+        text: 'текст обращения',
+        photo: 'фотографии',
+      };
+      const fieldLabel = payload.argument ? fieldLabels[payload.argument] : undefined;
+      if (!fieldLabel) throw new ValidationError('Кнопка устарела. Вернитесь к проверке обращения.');
+      if (context.messageId) {
+        await services.messages.finalizeCard(context.messageId, `Исправляется: ${fieldLabel}.`);
+      }
+      switch (payload.argument) {
+        case 'name':
+        case 'phone':
+        case 'text':
+          await services.sessions.start({
+            maxUserId: actor.maxUserId,
+            chatId,
+            type: SessionType.WAITING_INCIDENT_EDIT_VALUE,
+            data: { ...draft, draftEditField: payload.argument },
+          });
+          await services.messages.send(target, {
+            text:
+              payload.argument === 'name'
+                ? requesterNamePromptText()
+                : payload.argument === 'phone'
+                  ? requesterPhonePromptText()
+                  : 'Отправьте новый текст обращения одним сообщением.',
+          });
+          return undefined;
+        case 'category': {
+          const categories = await services.categories.listActive();
+          await services.sessions.start({
+            maxUserId: actor.maxUserId,
+            chatId,
+            type: SessionType.WAITING_INCIDENT_SELECTION,
+            data: { ...draft, draftEditField: 'category' },
+          });
+          await services.messages.send(target, {
+            text: categoryPromptText(categories.length),
+            keyboard: requesterCategoryKeyboard(categories, 0),
+          });
+          return undefined;
+        }
+        case 'location':
+          await services.sessions.start({
+            maxUserId: actor.maxUserId,
+            chatId,
+            type: SessionType.WAITING_INCIDENT_SELECTION,
+            data: { ...draft, draftEditField: 'location' },
+          });
+          await services.messages.send(target, {
+            text: municipalityPromptText(PROBLEM_MUNICIPALITIES.length),
+            keyboard: requesterMunicipalityKeyboard(
+              draft.selectedCategoryId,
+              PROBLEM_MUNICIPALITIES,
+              0,
+            ),
+          });
+          return undefined;
+        case 'photo':
+          await services.messages.send(target, {
+            text: incidentDraftPhotoPrompt(draft.draftMedia.length > 0),
+            keyboard: incidentDraftPhotoKeyboard(draft.draftMedia.length > 0),
+          });
+          return undefined;
+        default:
+          throw new ValidationError('Кнопка устарела. Вернитесь к проверке обращения.');
+      }
+    }
+
+    case 'draft-photo': {
+      const chatId = context.chatId ?? actor.maxUserId;
+      const data = await requireDraftForSession(
+        services,
+        actor.maxUserId,
+        chatId,
+        SessionType.WAITING_INCIDENT_EDIT_SELECTION,
+      );
+      const draft = requireCompleteIncidentDraft(data);
+      if (payload.argument !== 'remove' && payload.argument !== 'replace') {
+        throw new ValidationError('Кнопка устарела. Вернитесь к проверке обращения.');
+      }
+      if (context.messageId) {
+        await services.messages.finalizeCard(
+          context.messageId,
+          payload.argument === 'remove' ? 'Фотографии удаляются.' : 'Ожидаются новые фотографии.',
+        );
+      }
+      if (payload.argument === 'remove') {
+        await showIncidentDraftPreview(services, actor.maxUserId, chatId, {
+          ...draft,
+          draftMedia: [],
+        });
+        return 'Фотографии удалены';
+      }
+      await services.sessions.start({
+        maxUserId: actor.maxUserId,
+        chatId,
+        type: SessionType.WAITING_INCIDENT_EDIT_VALUE,
+        data: { ...draft, draftEditField: 'photo' },
+      });
+      await services.messages.send(target, {
+        text: 'Отправьте одну или несколько новых фотографий. Они заменят ранее приложенные.',
+      });
+      return undefined;
+    }
+
     case 'location-page': {
       if (!context.messageId) return undefined;
-      await requireContactDraft(services, actor.maxUserId, context.chatId);
+      await requireSelectionDraft(services, actor.maxUserId, context.chatId);
       const [categoryToken, pageToken] = parseLocationArgument(payload.argument, 2);
       const selectedCategoryId = await requireActiveCategory(services, categoryToken);
       const page = Number.parseInt(pageToken, 10);
@@ -216,7 +455,7 @@ export async function handleUserCallback(
     /** Paging the сфера picker: rewrite the same message, no new ones. */
     case 'page': {
       if (!context.messageId) return undefined;
-      await requireContactDraft(services, actor.maxUserId, context.chatId);
+      await requireSelectionDraft(services, actor.maxUserId, context.chatId);
       const categories = await services.categories.listActive();
       const page = Number.parseInt(payload.argument ?? '0', 10);
       await services.messages.editCardKeyboard(
@@ -228,7 +467,7 @@ export async function handleUserCallback(
     }
 
     case 'category': {
-      const contact = await requireContactDraft(services, actor.maxUserId, context.chatId);
+      const draft = await requireSelectionDraft(services, actor.maxUserId, context.chatId);
       const raw = payload.argument;
       let selectedCategoryId: string | null = null;
       let chosenName = 'не указана';
@@ -251,11 +490,21 @@ export async function handleUserCallback(
         await services.messages.finalizeCard(context.messageId, `Сфера обращения: ${chosenName}`);
       }
 
+      if (draft.draftEditField === 'category') {
+        await showIncidentDraftPreview(
+          services,
+          actor.maxUserId,
+          context.chatId ?? actor.maxUserId,
+          { ...draft, selectedCategoryId },
+        );
+        return undefined;
+      }
+
       await services.sessions.start({
         maxUserId: actor.maxUserId,
         chatId: context.chatId ?? actor.maxUserId,
         type: SessionType.WAITING_INCIDENT_SELECTION,
-        data: { ...contact, selectedCategoryId },
+        data: { ...draft, selectedCategoryId },
       });
 
       await services.messages.send(target, {
@@ -267,7 +516,7 @@ export async function handleUserCallback(
     }
 
     case 'municipality': {
-      const contact = await requireContactDraft(services, actor.maxUserId, context.chatId);
+      const draft = await requireSelectionDraft(services, actor.maxUserId, context.chatId);
       const [categoryToken, municipalityCode] = parseLocationArgument(payload.argument, 2);
       const selectedCategoryId = await requireActiveCategory(services, categoryToken);
       const municipality = findProblemMunicipality(municipalityCode);
@@ -286,7 +535,7 @@ export async function handleUserCallback(
           chatId: context.chatId ?? actor.maxUserId,
           type: SessionType.WAITING_INCIDENT_SELECTION,
           data: {
-            ...contact,
+            ...draft,
             selectedCategoryId,
             problemMunicipalityCode: municipality.code,
             problemMunicipalityName: municipality.name,
@@ -299,19 +548,29 @@ export async function handleUserCallback(
         return undefined;
       }
 
-      await startIncidentTextSession(services, actor.maxUserId, context.chatId, {
-        ...contact,
+      const nextData = {
+        ...draft,
         selectedCategoryId,
         problemMunicipalityCode: municipality.code,
         problemMunicipalityName: municipality.name,
         problemLocality: null,
-      });
-      await services.messages.send(target, { text: incidentPromptText() });
+      };
+      if (draft.draftEditField === 'location') {
+        await showIncidentDraftPreview(
+          services,
+          actor.maxUserId,
+          context.chatId ?? actor.maxUserId,
+          nextData,
+        );
+      } else {
+        await startIncidentTextSession(services, actor.maxUserId, context.chatId, nextData);
+        await services.messages.send(target, { text: incidentPromptText() });
+      }
       return undefined;
     }
 
     case 'locality': {
-      const contact = await requireContactDraft(services, actor.maxUserId, context.chatId);
+      const draft = await requireSelectionDraft(services, actor.maxUserId, context.chatId);
       const [categoryToken, municipalityCode, localityCode] = parseLocationArgument(payload.argument, 3);
       const selectedCategoryId = await requireActiveCategory(services, categoryToken);
       const municipality = findProblemMunicipality(municipalityCode);
@@ -331,7 +590,7 @@ export async function handleUserCallback(
           chatId: context.chatId ?? actor.maxUserId,
           type: SessionType.WAITING_CUSTOM_LOCALITY,
           data: {
-            ...contact,
+            ...draft,
             selectedCategoryId,
             problemMunicipalityCode: municipality.code,
             problemMunicipalityName: municipality.name,
@@ -353,14 +612,24 @@ export async function handleUserCallback(
           `Территория проблемы: ${municipality.name}${locality ? ` → ${locality.name}` : ''}`,
         );
       }
-      await startIncidentTextSession(services, actor.maxUserId, context.chatId, {
-        ...contact,
+      const nextData = {
+        ...draft,
         selectedCategoryId,
         problemMunicipalityCode: municipality.code,
         problemMunicipalityName: municipality.name,
         problemLocality: locality?.name ?? null,
-      });
-      await services.messages.send(target, { text: incidentPromptText() });
+      };
+      if (draft.draftEditField === 'location') {
+        await showIncidentDraftPreview(
+          services,
+          actor.maxUserId,
+          context.chatId ?? actor.maxUserId,
+          nextData,
+        );
+      } else {
+        await startIncidentTextSession(services, actor.maxUserId, context.chatId, nextData);
+        await services.messages.send(target, { text: incidentPromptText() });
+      }
       return undefined;
     }
 
@@ -405,17 +674,34 @@ async function beginNewIncident(context: UserCallbackContext): Promise<void> {
   });
 }
 
-async function requireContactDraft(
+async function requireSelectionDraft(
   services: AppServices,
   maxUserId: bigint,
   chatId: bigint | undefined,
-): Promise<{ requesterName: string; requesterPhone: string }> {
-  const session = await services.sessions.find(maxUserId, chatId ?? maxUserId);
-  const data = session ? services.sessions.readData(session) : {};
+): Promise<SessionData & { requesterName: string; requesterPhone: string }> {
+  const data = await requireDraftForSession(
+    services,
+    maxUserId,
+    chatId ?? maxUserId,
+    SessionType.WAITING_INCIDENT_SELECTION,
+  );
   if (!data.requesterName || !data.requesterPhone) {
     throw new ValidationError('Черновик устарел. Начните создание обращения заново.');
   }
-  return { requesterName: data.requesterName, requesterPhone: data.requesterPhone };
+  return { ...data, requesterName: data.requesterName, requesterPhone: data.requesterPhone };
+}
+
+async function requireDraftForSession(
+  services: AppServices,
+  maxUserId: bigint,
+  chatId: bigint,
+  ...allowedTypes: SessionType[]
+): Promise<SessionData> {
+  const session = await services.sessions.find(maxUserId, chatId);
+  if (!session || !allowedTypes.includes(session.type)) {
+    throw new ValidationError('Кнопка устарела. Начните создание обращения заново.');
+  }
+  return services.sessions.readData(session);
 }
 
 function parseLocationArgument(raw: string | undefined, expectedParts: 2): [string, string];
@@ -441,7 +727,7 @@ async function startIncidentTextSession(
   services: AppServices,
   maxUserId: bigint,
   chatId: bigint | undefined,
-  data: {
+  data: SessionData & {
     requesterName: string;
     requesterPhone: string;
     selectedCategoryId: string | null;

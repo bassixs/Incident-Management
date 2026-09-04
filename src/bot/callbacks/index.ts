@@ -136,7 +136,14 @@ function actionLease(
     key: `${scope}:${payload.kind}:${payload.action}:${'argument' in payload ? payload.argument ?? '-' : '-'}`,
     maxUserId,
     action: `${payload.kind}:${payload.action}`,
-    ttlMs: payload.kind === 'report' ? 300_000 : payload.kind === 'user' ? 2_000 : 10_000,
+    ttlMs:
+      payload.kind === 'report'
+        ? 300_000
+        : payload.kind === 'user' && payload.action === 'draft-confirm'
+          ? 120_000
+          : payload.kind === 'user'
+            ? 2_000
+            : 10_000,
   };
 }
 
