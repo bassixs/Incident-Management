@@ -56,6 +56,11 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
 
   it('requires and stores full name and phone before an incident is created', async () => {
     const actor = await actorFor(prisma, TEST_USERS.requesterA, 'Профиль MAX', []);
+    if ((await harness.services.legal.status(actor.userId)).required) {
+      const evidence = { userId: actor.userId, maxUserId: actor.maxUserId };
+      await harness.services.legal.acceptUserAgreement(evidence);
+      await harness.services.legal.acceptPersonalDataConsent(evidence);
+    }
     await harness.services.sessions.start({
       maxUserId: actor.maxUserId,
       chatId: actor.maxUserId,
