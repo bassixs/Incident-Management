@@ -146,7 +146,7 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
     delivery,
     distribution,
   );
-  const answers = new AnswerService(prisma, repository, history, state, media, review, sector, distribution);
+  const answers = new AnswerService(prisma, repository, history, state, media, review, distribution);
 
   const sla = new SlaService(prisma, repository, history, sector, distribution, sessions);
   const reports = new ExcelReportService(repository);

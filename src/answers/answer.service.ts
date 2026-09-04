@@ -11,7 +11,6 @@ import { HistoryAction, type IncidentHistoryService } from '../incidents/inciden
 import type { IncidentStateService } from '../incidents/incident-state.service';
 import type { IncidentRepository, IncidentWithRelations } from '../incidents/incident.repository';
 import type { IncomingMedia, MediaService } from '../media/media.service';
-import type { SectorService } from '../sector/sector.service';
 import type { ReviewService } from '../review/review.service';
 import { ConflictError, NotFoundError, ValidationError } from '../utils/errors';
 import { incidentLogFields, moduleLogger } from '../utils/logger';
@@ -40,7 +39,6 @@ export class AnswerService {
     private readonly state: IncidentStateService,
     private readonly media: MediaService,
     private readonly review: ReviewService,
-    private readonly sector: SectorService,
     private readonly distribution: DistributionService,
   ) {}
 
@@ -194,19 +192,13 @@ export class AnswerService {
           actorMaxUserId: actor.maxUserId,
           metadata: { answerId: answer.id, error: error instanceof Error ? error.message : String(error) },
         });
-        await this.sector.notify(
-          incident,
-          `⚠️ ${incident.publicCode}: ответ подготовлен, но доставить его пользователю не удалось.\n\nПовторите отправку командой /resend ${incident.publicCode}.`,
-        );
         deliveryFailed = true;
       }
       if (!deliveryFailed) {
         await this.distribution.markWorked(incident);
-        await this.sector.notify(incident, `✅ ${incident.publicCode}: ответ отправлен пользователю без согласования.`);
       }
     } else {
       await this.review.publishCard(incidentId, answer.id);
-      await this.sector.notify(incident, `📝 ${incident.publicCode} отправлено на согласование.`);
     }
 
     return { incident, answer, sentDirectly: direct, deliveryFailed };

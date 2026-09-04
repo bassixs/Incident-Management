@@ -306,6 +306,9 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     const fresh = await harness.services.repository.findById(incident.id);
     expect(fresh!.status).toBe(IncidentStatus.WAITING_REVIEW);
     expect(harness.messages.toChat(TEST_CHATS.review).length).toBeGreaterThan(0);
+    // The handler sends one visible confirmation. The answer service must not
+    // add a second copy to the same sector chat.
+    expect(harness.messages.toChat(TEST_CHATS.sector)).toHaveLength(1);
   });
 
   it('lets only one of two concurrent answer submissions through', async () => {
