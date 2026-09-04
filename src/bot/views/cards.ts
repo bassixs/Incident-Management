@@ -5,7 +5,6 @@ import { describeStatus } from '../../incidents/incident-state.service';
 import type { IncidentWithRelations } from '../../incidents/incident.repository';
 import type { LegalAccessStatus } from '../../legal/legal-acceptance.service';
 import { formatDate, formatDateTime } from '../../utils/datetime';
-import { pluralRu } from '../../utils/text';
 
 /** `№ INC-20260823-0001` — the label repeated on every fragment of a message. */
 export function codeLabel(incident: Pick<Incident, 'publicCode'>): string {
@@ -17,12 +16,6 @@ function attachmentLine(photoCount: number, fileCount = 0): string[] {
   if (photoCount > 0) lines.push(`📎 Фото: ${photoCount}`);
   if (fileCount > 0) lines.push(`📎 Файлы: ${fileCount}`);
   return lines;
-}
-
-function slaDaysPhrase(): string {
-  const hours = getConfig().INCIDENT_SLA_HOURS;
-  const days = Math.max(1, Math.round(hours / 24));
-  return `${days} ${pluralRu(days, 'дня', 'дней', 'дней')}`;
 }
 
 export function problemLocationText(
@@ -42,9 +35,9 @@ export function registrationConfirmation(incident: Incident): string {
     `Номер: ${incident.publicCode}`,
     `Дата: ${formatDate(incident.createdAt)}`,
     '',
-    `Ответ будет предоставлен не позднее ${slaDaysPhrase()}.`,
+    'Обращение принято и направлено на рассмотрение.',
     '',
-    'Сохраните номер обращения.',
+    'Сохраните номер обращения. Ход обработки можно посмотреть в разделе «Мои обращения».',
   ].join('\n');
 }
 
@@ -291,26 +284,46 @@ export function incidentLookupCard(incident: IncidentWithRelations): string {
 export function rulesText(): string {
   const config = getConfig();
   return [
-    'Правила подачи обращения:',
+    '📋 Как подать обращение',
     '',
-    '• фамилия, имя и номер телефона обязательны;',
-    '• одно сообщение = одно обращение;',
-    `• максимум ${config.INCIDENT_MAX_LENGTH} символов;`,
-    `• не более ${config.DAILY_INCIDENT_LIMIT} обращений в день;`,
-    '• можно приложить фото;',
-    '• видео не принимается;',
-    `• срок ответа — до ${slaDaysPhrase()}.`,
+    '1. Перед первым обращением ознакомьтесь с документами и подтвердите согласие.',
+    '2. Укажите фамилию, имя и действующий номер телефона — это обязательные поля.',
+    '3. Выберите сферу. Если не уверены, нажмите «Не знаю».',
+    '4. Укажите город или округ, где возникла проблема, и при необходимости населённый пункт.',
+    `5. Опишите одну проблему понятным текстом — не более ${config.INCIDENT_MAX_LENGTH} символов.`,
+    '6. При необходимости приложите фотографии.',
+    '7. Проверьте итоговую карточку. Любое поле и фотографии можно исправить до отправки.',
+    '8. Нажмите «Всё верно». Только после этого обращение будет зарегистрировано.',
+    '',
+    'Важно:',
+    '',
+    '• одно обращение должно относиться к одной проблеме;',
+    '• видео, аудиосообщения и другие файлы не принимаются;',
+    `• можно зарегистрировать не более ${config.DAILY_INCIDENT_LIMIT} обращений в сутки;`,
+    '• после регистрации бот выдаст номер обращения;',
+    '• состояние обращения доступно в разделе «Мои обращения»;',
+    '• итоговый ответ придёт в этот личный чат.',
   ].join('\n');
 }
 
 /** §7 */
 export function greetingText(): string {
   return [
-    'Здравствуйте!',
+    '✨ Добро пожаловать в чат-бот «Искра»!',
     '',
-    'Здесь можно сообщить о проблеме или инциденте.',
+    'Здесь можно сообщить о проблеме в городе или районе Калужской области и направить обращение ответственным специалистам.',
     '',
-    'Выберите нужное действие.',
+    'Как это работает:',
+    '',
+    '1. Вы укажете ФИО и номер телефона.',
+    '2. Выберете сферу и место, где возникла проблема.',
+    '3. Опишете ситуацию и при необходимости приложите фотографии.',
+    '4. Проверите итоговую карточку и сможете исправить любое поле.',
+    '5. После подтверждения бот зарегистрирует обращение и выдаст его номер.',
+    '',
+    'Состояние зарегистрированных обращений можно посмотреть в разделе «Мои обращения». Ответ поступит в этот чат.',
+    '',
+    'Выберите нужное действие ниже.',
   ].join('\n');
 }
 
@@ -456,11 +469,7 @@ export function requesterPhonePromptText(): string {
 /** §7 — heading above the paged сфера picker. */
 export function categoryPromptText(total: number): string {
   return [
-    'Здравствуйте!',
-    '',
-    'Здесь можно сообщить о проблеме или инциденте.',
-    '',
-    'Выберите сферу обращения.',
+    'Шаг 3. Выберите сферу обращения.',
     'Если вы не уверены — нажмите «Не знаю», сферу определит специалист.',
     ...(total > 0 ? ['', `Всего сфер: ${total}. Листайте стрелками.`] : []),
   ].join('\n');
@@ -468,7 +477,7 @@ export function categoryPromptText(total: number): string {
 
 export function municipalityPromptText(total: number): string {
   return [
-    'Где произошла проблема?',
+    'Шаг 4. Где произошла проблема?',
     '',
     'Выберите город или округ.',
     'Если вопрос относится ко всей области, выберите общий вариант.',
@@ -497,7 +506,7 @@ export function customLocalityPromptText(municipalityName: string): string {
 export function incidentPromptText(): string {
   const config = getConfig();
   return [
-    'Опишите проблему одним сообщением.',
+    'Шаг 5. Опишите проблему одним сообщением.',
     '',
     `Максимальная длина — ${config.INCIDENT_MAX_LENGTH} символов.`,
     '',
@@ -516,7 +525,8 @@ export function myIncidentsText(incidents: Incident[]): string {
     '',
     ...incidents.flatMap((incident) => [
       incident.publicCode,
-      describeStatus(incident.status, incident.isOverdue),
+      // Overdue is an internal SLA signal for staff, not a requester-facing status.
+      describeStatus(incident.status, false),
       '',
     ]),
   ]
