@@ -42,9 +42,9 @@ const COLUMNS: Column[] = [
     value: (incident) => incident.problemLocality ?? '',
   },
   {
-    header: 'Итоговая категория',
-    width: 24,
-    value: (incident) => incident.assignedCategory?.name ?? '',
+    header: 'Ответственная группа',
+    width: 34,
+    value: (incident) => incident.assignedGroup?.name ?? '',
   },
   {
     header: 'Статус',

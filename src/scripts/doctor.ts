@@ -47,11 +47,12 @@ async function checkDatabase(prisma: PrismaClient): Promise<void> {
 
   try {
     const categories = await prisma.category.count();
+    const groups = await prisma.responsibleGroup.count();
     const incidents = await prisma.incident.count();
     record(
       'База данных',
       'ok',
-      `Подключение есть, миграции применены. Сфер: ${categories}, обращений: ${incidents}.`,
+      `Подключение есть, миграции применены. Тем: ${categories}, ответственных групп: ${groups}, обращений: ${incidents}.`,
     );
     if (categories === 0) {
       record('Сферы (Category)', 'warn', 'Таблица пуста. Выполните: npm run seed');
@@ -98,37 +99,37 @@ async function checkChat(max: MaxClient, label: string, chatId: bigint | undefin
   }
 }
 
-async function checkCategories(prisma: PrismaClient, max: MaxClient): Promise<void> {
-  const categories = await prisma.category.findMany({
+async function checkResponsibleGroups(prisma: PrismaClient, max: MaxClient): Promise<void> {
+  const groups = await prisma.responsibleGroup.findMany({
     where: { isActive: true },
-    orderBy: { sortOrder: 'asc' },
+    orderBy: [{ kind: 'asc' }, { sortOrder: 'asc' }],
   });
-  if (categories.length === 0) {
-    record('Профильные чаты', 'warn', 'Нет активных сфер.');
+  if (groups.length === 0) {
+    record('Профильные чаты', 'warn', 'Нет активных ответственных групп. Выполните: npm run seed');
     return;
   }
 
-  const pending = categories.filter((category) => category.maxChatId === null);
-  const configured = categories.filter((category) => category.maxChatId !== null);
+  const pending = groups.filter((group) => group.maxChatId === null);
+  const configured = groups.filter((group) => group.maxChatId !== null);
 
   // A сфера awaiting its chat is a rollout state, not a fault: the dispatcher
   // is never offered it, so nothing can break. Reported once, as a warning.
   if (pending.length > 0) {
     record(
-      'Сферы без рабочего чата',
+      'Группы без рабочего чата',
       'warn',
-      `${pending.length} из ${categories.length}: ${pending.map((item) => item.code).join(', ')}.\n` +
-        '   Диспетчеру они не показываются. Задать: /category_chat <КОД> <CHAT_ID>',
+      `${pending.length} из ${groups.length}: ${pending.map((item) => item.code).join(', ')}.\n` +
+        '   Диспетчеру они не показываются.',
     );
   }
 
   if (configured.length === 0) {
-    record('Профильные чаты', 'fail', 'Ни одна сфера не готова к распределению.');
+    record('Профильные чаты', 'fail', 'Ни одна ответственная группа не готова к распределению.');
     return;
   }
 
-  for (const category of configured) {
-    await checkChat(max, `Сфера ${category.code}`, category.maxChatId ?? undefined, '');
+  for (const group of configured) {
+    await checkChat(max, `Группа ${group.code}`, group.maxChatId ?? undefined, '');
   }
 }
 
@@ -255,9 +256,9 @@ async function sendProbes(prisma: PrismaClient, max: MaxClient): Promise<void> {
   if (config.DELIVERY_ALERT_CHAT_ID !== undefined) {
     targets.push({ label: 'чат технических предупреждений', chatId: config.DELIVERY_ALERT_CHAT_ID });
   }
-  for (const category of await prisma.category.findMany({ where: { isActive: true } })) {
-    if (category.maxChatId !== null) {
-      targets.push({ label: `профильный чат ${category.code}`, chatId: category.maxChatId });
+  for (const group of await prisma.responsibleGroup.findMany({ where: { isActive: true } })) {
+    if (group.maxChatId !== null) {
+      targets.push({ label: `профильный чат ${group.code}`, chatId: group.maxChatId });
     }
   }
 
@@ -297,7 +298,7 @@ async function main(): Promise<void> {
       config.DELIVERY_ALERT_CHAT_ID,
       'Задайте DELIVERY_ALERT_CHAT_ID, чтобы получать сообщения о проблемах доставки.',
     );
-    await checkCategories(prisma, max);
+    await checkResponsibleGroups(prisma, max);
     await checkWebhook(max);
   }
 

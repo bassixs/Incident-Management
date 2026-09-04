@@ -155,7 +155,7 @@ export class SlaService {
 
   /** Warnings go where the work is: the sector chat, or distribution if unrouted. */
   private async notify(incident: Incident, text: string): Promise<void> {
-    if (incident.assignedCategoryId) {
+    if (incident.assignedGroupId) {
       await this.sector.notify(incident, text);
       return;
     }

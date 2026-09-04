@@ -1,6 +1,6 @@
 import { Keyboard } from '@maxhub/max-bot-api';
 import type { Button } from '../../max/max-types';
-import type { Category } from '@prisma/client';
+import type { Category, ResponsibleGroup } from '@prisma/client';
 import type { ProblemMunicipality } from '../../locations/problem-locations';
 
 import {
@@ -140,11 +140,88 @@ export function distributionKeyboard(incidentId: string): Button[][] {
   ];
 }
 
-/** Sector picker for a dispatcher (§17). The operator chooses — nothing is preselected. */
-export function assignCategoryKeyboard(incidentId: string, categories: Category[]): Button[][] {
-  const rows = categories.map((category) => [
-    button.callback(category.name, incidentCallback('assign-category', incidentId, category.id)),
+export type AssignmentBranch = 'local' | 'executive';
+export const ASSIGNMENT_PAGE_SIZE = 6;
+
+/** First routing level: the regional team or one of two group families. */
+export function assignmentBranchKeyboard(
+  incidentId: string,
+  regionalGroup: ResponsibleGroup | null,
+  recommendedGroup: ResponsibleGroup | null,
+): Button[][] {
+  const rows: Button[][] = [];
+  if (regionalGroup) {
+    const recommended = regionalGroup.id === recommendedGroup?.id;
+    rows.push([
+      button.callback(
+        recommended ? '⭐ Калужская область — рекомендуется' : 'Калужская область',
+        incidentCallback('assign-group', incidentId, regionalGroup.id),
+        { intent: recommended ? 'positive' : 'default' },
+      ),
+    ]);
+  }
+  rows.push([
+    button.callback('Органы местного самоуправления', incidentCallback('assign-branch', incidentId, 'local')),
   ]);
+  rows.push([
+    button.callback('Органы исполнительной власти', incidentCallback('assign-branch', incidentId, 'executive')),
+  ]);
+  rows.push([button.callback('Отмена', incidentCallback('cancel', incidentId))]);
+  return rows;
+}
+
+export function assignmentPageCount(total: number): number {
+  return Math.max(1, Math.ceil(total / ASSIGNMENT_PAGE_SIZE));
+}
+
+/** Second routing level: a paged list with the matching municipality first. */
+export function assignmentGroupKeyboard(
+  incidentId: string,
+  branch: AssignmentBranch,
+  groups: ResponsibleGroup[],
+  page = 0,
+  recommendedGroup: ResponsibleGroup | null = null,
+): Button[][] {
+  const ordered = recommendedGroup
+    ? [recommendedGroup, ...groups.filter((group) => group.id !== recommendedGroup.id)]
+    : groups;
+  const pages = assignmentPageCount(ordered.length);
+  const current = Math.min(Math.max(page, 0), pages - 1);
+  const slice = ordered.slice(current * ASSIGNMENT_PAGE_SIZE, (current + 1) * ASSIGNMENT_PAGE_SIZE);
+  const rows: Button[][] = slice.map((group) => {
+    const recommended = group.id === recommendedGroup?.id;
+    return [
+      button.callback(
+        recommended ? `⭐ ${group.name} — рекомендуется` : group.name,
+        incidentCallback('assign-group', incidentId, group.id),
+        { intent: recommended ? 'positive' : 'default' },
+      ),
+    ];
+  });
+
+  if (pages > 1) {
+    const nav: Button[] = [];
+    if (current > 0) {
+      nav.push(
+        button.callback(
+          '⬅️ Назад',
+          incidentCallback('assign-page', incidentId, `${branch}~${current - 1}`),
+        ),
+      );
+    }
+    nav.push(button.callback(`${current + 1} / ${pages}`, NOOP_CALLBACK));
+    if (current < pages - 1) {
+      nav.push(
+        button.callback(
+          'Вперёд ➡️',
+          incidentCallback('assign-page', incidentId, `${branch}~${current + 1}`),
+        ),
+      );
+    }
+    rows.push(nav);
+  }
+
+  rows.push([button.callback('К выбору типа организации', incidentCallback('assign', incidentId))]);
   rows.push([button.callback('Отмена', incidentCallback('cancel', incidentId))]);
   return rows;
 }

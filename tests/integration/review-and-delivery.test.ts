@@ -42,7 +42,7 @@ describeIntegration('review, revision and delivery (PostgreSQL)', () => {
       requester: { maxUserId: requesterMaxUserId, name: `User ${requesterMaxUserId}` },
       text,
     });
-    const category = (await harness.services.categories.findByCode(CATEGORY_CODES.facility))!;
+    const category = (await harness.services.responsibleGroups.findByCode(CATEGORY_CODES.facility))!;
     const dispatcher = await actorFor(prisma, TEST_USERS.dispatcher, 'Диспетчер', [UserRole.DISPATCHER]);
     await harness.services.distribution.assign(incident.id, category.id, dispatcher);
     const responder = await actorFor(prisma, TEST_USERS.responder, 'Ответственный', [UserRole.RESPONDER]);

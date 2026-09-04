@@ -1,10 +1,15 @@
-import { type Category, IncidentStatus, type PrismaClient } from '@prisma/client';
+import {
+  IncidentStatus,
+  type PrismaClient,
+  type ResponsibleGroup,
+  ResponsibleGroupKind,
+} from '@prisma/client';
 
 import { distributionKeyboard } from '../bot/keyboards';
 import { codeLabel, distributionCard, distributionResolvedNotice, rejectionToRequester } from '../bot/views/cards';
-import type { CategoryService } from '../categories/category.service';
 import { getConfig } from '../config';
 import type { RequesterDeliveryService } from '../delivery/requester-delivery.service';
+import type { ResponsibleGroupService } from '../responsible-groups/responsible-group.service';
 import { HistoryAction, type IncidentHistoryService } from '../incidents/incident-history.service';
 import type { IncidentStateService } from '../incidents/incident-state.service';
 import type { IncidentRepository, IncidentWithRelations } from '../incidents/incident.repository';
@@ -33,7 +38,7 @@ export class DistributionService {
     private readonly incidents: IncidentService,
     private readonly history: IncidentHistoryService,
     private readonly state: IncidentStateService,
-    private readonly categories: CategoryService,
+    private readonly groups: ResponsibleGroupService,
     private readonly messages: MaxMessageService,
     private readonly media: MediaService,
     private readonly sector: SectorService,
@@ -92,12 +97,19 @@ export class DistributionService {
    * nowhere to publish would fail after the click, which is worse than not
    * showing it. `hiddenCount` lets the caller say so out loud.
    */
-  async assignmentOptions(): Promise<{ categories: Category[]; hiddenCount: number }> {
-    const [routable, active] = await Promise.all([
-      this.categories.listRoutable(),
-      this.categories.listActive(),
+  async assignmentOptions(
+    kind: ResponsibleGroupKind,
+  ): Promise<{ groups: ResponsibleGroup[]; hiddenCount: number }> {
+    const [routable, activeCount] = await Promise.all([
+      this.groups.listRoutable(kind),
+      this.groups.countActive(kind),
     ]);
-    return { categories: routable, hiddenCount: active.length - routable.length };
+    return { groups: routable, hiddenCount: activeCount - routable.length };
+  }
+
+  async recommendedGroup(municipalityCode: string | null): Promise<ResponsibleGroup | null> {
+    const group = await this.groups.findByMunicipalityCode(municipalityCode);
+    return group?.isActive && group.maxChatId !== null ? group : null;
   }
 
   /**
@@ -107,7 +119,7 @@ export class DistributionService {
    * press the button at the same moment exactly one UPDATE matches a row and
    * the loser is told who won. One incident can never reach two sectors.
    */
-  async assign(incidentId: string, categoryId: string, actor: Actor): Promise<IncidentWithRelations> {
+  async assign(incidentId: string, groupId: string, actor: Actor): Promise<IncidentWithRelations> {
     const incident = await this.repository.findById(incidentId);
     if (!incident) throw new NotFoundError(`Incident ${incidentId} not found`);
 
@@ -116,13 +128,13 @@ export class DistributionService {
     }
     this.state.assertTransition(incident.status, IncidentStatus.ASSIGNED, { incidentId });
 
-    const category = await this.categories.requireActiveById(categoryId);
-    this.categories.requireChatId(category);
+    const group = await this.groups.requireActiveById(groupId);
+    this.groups.requireChatId(group);
 
     const now = new Date();
     const claimed = await this.repository.transition(this.prisma, incidentId, IncidentStatus.DISTRIBUTION, {
       status: IncidentStatus.ASSIGNED,
-      assignedCategoryId: category.id,
+      assignedGroupId: group.id,
       assignedByUserId: actor.userId,
       assignedAt: now,
     });
@@ -138,7 +150,7 @@ export class DistributionService {
       toStatus: IncidentStatus.ASSIGNED,
       actorMaxUserId: actor.maxUserId,
       actorRole: actor.role,
-      metadata: { categoryId: category.id, categoryCode: category.code, dispatcher: actor.displayName },
+      metadata: { groupId: group.id, groupCode: group.code, dispatcher: actor.displayName },
     });
 
     log.info(
@@ -155,7 +167,7 @@ export class DistributionService {
     if (incident.distributionMessageId) {
       await this.messages.finalizeCard(
         incident.distributionMessageId,
-        distributionResolvedNotice(incident, category, actor.displayName),
+        distributionResolvedNotice(incident, group, actor.displayName),
       );
     }
 
@@ -237,7 +249,7 @@ export class DistributionService {
       return `Обращение ${incident.publicCode} уже отклонено.`;
     }
     const who = incident.assignedBy?.displayName;
-    const where = incident.assignedCategory?.name;
+    const where = incident.assignedGroup?.name;
     if (who || where) {
       return `Обращение ${incident.publicCode} уже распределено${where ? ` в «${where}»` : ''}${
         who ? ` пользователем ${who}` : ''

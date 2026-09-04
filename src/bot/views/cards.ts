@@ -1,4 +1,4 @@
-import type { Category, Incident, IncidentAnswer } from '@prisma/client';
+import type { Incident, IncidentAnswer, ResponsibleGroup } from '@prisma/client';
 
 import { getConfig } from '../../config';
 import { describeStatus } from '../../incidents/incident-state.service';
@@ -80,14 +80,14 @@ export function distributionCard(incident: IncidentWithRelations): string {
 /** §58 — replaces the distribution card once a dispatcher has routed it. */
 export function distributionResolvedNotice(
   incident: Incident,
-  category: Category,
+  group: ResponsibleGroup,
   dispatcherName: string,
 ): string {
   return [
     `✅ ${incident.publicCode} распределено`,
     '',
-    'Категория:',
-    category.name,
+    'Ответственная группа:',
+    group.name,
     '',
     'Распределил:',
     dispatcherName,
@@ -95,15 +95,15 @@ export function distributionResolvedNotice(
 }
 
 /** §21 — the card published in the sector chat after distribution. */
-export function sectorCard(incident: IncidentWithRelations, category: Category): string {
+export function sectorCard(incident: IncidentWithRelations, group: ResponsibleGroup): string {
   const photoCount = incident.attachments.filter((item) => item.type === 'IMAGE').length;
   return [
     '📥 НОВОЕ ОБРАЩЕНИЕ',
     '',
     codeLabel(incident),
     '',
-    'Категория:',
-    category.name,
+    'Ответственная группа:',
+    group.name,
     '',
     'Территория проблемы:',
     problemLocationText(incident),
@@ -125,7 +125,7 @@ export function sectorCard(incident: IncidentWithRelations, category: Category):
 export function reviewCard(
   incident: IncidentWithRelations,
   answer: IncidentAnswer & { attachments: Array<{ type: string }> },
-  category: Category | null,
+  group: ResponsibleGroup | null,
 ): string {
   const photoCount = answer.attachments.filter((item) => item.type === 'IMAGE').length;
   const fileCount = answer.attachments.filter((item) => item.type === 'FILE').length;
@@ -135,8 +135,8 @@ export function reviewCard(
     '',
     codeLabel(incident),
     '',
-    'Категория:',
-    category?.name ?? '—',
+    'Ответственная группа:',
+    group?.name ?? '—',
     '',
     'Территория проблемы:',
     problemLocationText(incident),
@@ -148,8 +148,8 @@ export function reviewCard(
     answer.text,
     // The approver must see the signature the requester will get, since it is
     // added automatically and is not part of the text under review.
-    ...(category?.authorityName
-      ? ['', 'Уйдёт за подписью:', category.authorityName]
+    ...(group?.authorityName
+      ? ['', 'Уйдёт за подписью:', group.authorityName]
       : ['', '⚠️ Ведомство для подписи не задано — ответ уйдёт без подписи.']),
     ...(attachmentLines.length ? ['', '📎 Вложения ответа:', ...attachmentLines] : []),
     '',
@@ -238,8 +238,8 @@ export function incidentLookupCard(incident: IncidentWithRelations): string {
     formatDateTime(incident.deadlineAt),
     ...(incident.answeredAt ? ['', 'Отвечено:', formatDateTime(incident.answeredAt)] : []),
     '',
-    'Категория:',
-    incident.assignedCategory?.name ?? incident.userSelectedCategory?.name ?? 'не определена',
+    'Ответственная группа:',
+    incident.assignedGroup?.name ?? 'не определена',
     '',
     'Территория проблемы:',
     problemLocationText(incident),

@@ -35,7 +35,7 @@ const admin = actor(TEST_USERS.admin, [UserRole.REQUESTER, UserRole.ADMIN]);
 
 const incident = {
   publicCode: 'INC-20260823-0001',
-  assignedCategory: { maxChatId: TEST_CHATS.sector },
+  assignedGroup: { maxChatId: TEST_CHATS.sector },
 } as unknown as IncidentWithRelations;
 
 describe('role resolution', () => {
@@ -98,8 +98,8 @@ describe('responder actions', () => {
     expect(() => assertResponder(requester, incident, TEST_CHATS.otherSector)).toThrow(ForbiddenError);
   });
 
-  it('are refused when the сфера has no chat configured', () => {
-    const unrouted = { publicCode: 'INC-1', assignedCategory: null } as unknown as IncidentWithRelations;
+  it('are refused when the responsible group has no chat configured', () => {
+    const unrouted = { publicCode: 'INC-1', assignedGroup: null } as unknown as IncidentWithRelations;
     expect(() => assertResponder(responder, unrouted, TEST_CHATS.sector)).toThrow(ForbiddenError);
   });
 

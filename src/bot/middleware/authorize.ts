@@ -57,7 +57,7 @@ export function assertResponder(
 ): void {
   if (actor.roles.includes(UserRole.ADMIN)) return;
 
-  const sectorChatId = incident.assignedCategory?.maxChatId ?? null;
+  const sectorChatId = incident.assignedGroup?.maxChatId ?? null;
   if (sectorChatId === null) {
     throw new ForbiddenError(`Для сферы обращения ${incident.publicCode} не настроен рабочий чат.`);
   }

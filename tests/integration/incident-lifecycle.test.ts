@@ -40,7 +40,7 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
   const requesterB = () => ({ maxUserId: TEST_USERS.requesterB, name: 'Пётр Петров' });
 
   async function facility() {
-    return (await harness.services.categories.findByCode(CATEGORY_CODES.facility))!;
+    return (await harness.services.responsibleGroups.findByCode(CATEGORY_CODES.facility))!;
   }
 
   // --- §11 daily limit -----------------------------------------------------
@@ -122,7 +122,7 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
   });
 
   it('stores the selected municipality and locality independently from the topic', async () => {
-    const category = await facility();
+    const category = (await harness.services.categories.findByCode(CATEGORY_CODES.facility))!;
     const incident = await harness.services.incidents.create({
       requester: requesterA(),
       text: 'Проблема в Балабаново',
@@ -151,7 +151,7 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     const updated = await harness.services.distribution.assign(incident.id, category.id, dispatcher);
 
     expect(updated.status).toBe(IncidentStatus.ASSIGNED);
-    expect(updated.assignedCategoryId).toBe(category.id);
+    expect(updated.assignedGroupId).toBe(category.id);
     expect(updated.assignedByUserId).toBe(dispatcher.userId);
     expect(harness.messages.toChat(TEST_CHATS.sector).length).toBeGreaterThan(0);
   });

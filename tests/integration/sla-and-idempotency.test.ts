@@ -42,7 +42,7 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
       requester: { maxUserId: TEST_USERS.requesterA, name: 'Иван Иванов' },
       text,
     });
-    const category = (await harness.services.categories.findByCode(CATEGORY_CODES.facility))!;
+    const category = (await harness.services.responsibleGroups.findByCode(CATEGORY_CODES.facility))!;
     const dispatcher = await actorFor(prisma, TEST_USERS.dispatcher, 'Диспетчер', [UserRole.DISPATCHER]);
     await harness.services.distribution.assign(incident.id, category.id, dispatcher);
     return incident;

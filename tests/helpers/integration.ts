@@ -53,6 +53,7 @@ export async function resetDatabase(prisma: PrismaClient): Promise<void> {
       "ProcessedUpdate",
       "IncidentCounter",
       "SystemSetting",
+      "ResponsibleGroup",
       "Category",
       "User"
     RESTART IDENTITY CASCADE
@@ -82,15 +83,33 @@ export async function seedCategories(prisma: PrismaClient): Promise<void> {
       {
         code: CATEGORY_CODES.facility,
         name: 'Хозяйственные вопросы',
-        maxChatId: TEST_CHATS.sector,
         sortOrder: 10,
       },
       {
         code: CATEGORY_CODES.it,
         name: 'IT',
-        maxChatId: TEST_CHATS.otherSector,
         sortOrder: 20,
+      },
+    ],
+  });
+  await prisma.responsibleGroup.createMany({
+    data: [
+      {
+        code: CATEGORY_CODES.facility,
+        name: 'Хозяйственная группа',
+        kind: 'LOCAL_GOVERNMENT',
+        maxChatId: TEST_CHATS.sector,
+        municipalityCode: 'TEST_AREA',
+        authorityName: 'Хозяйственная служба',
+        sortOrder: 10,
+      },
+      {
+        code: CATEGORY_CODES.it,
+        name: 'IT-группа',
+        kind: 'EXECUTIVE_AUTHORITY',
+        maxChatId: TEST_CHATS.otherSector,
         answerTemplate: 'Обращение № {{incidentCode}}\n{{result}}',
+        sortOrder: 20,
       },
     ],
   });

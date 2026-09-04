@@ -21,6 +21,7 @@ import { createMediaStorage, MediaService } from '../media/media.service';
 import type { MediaStorage } from '../media/media-storage.interface';
 import { ExcelReportService } from '../reports/excel-report.service';
 import { RetentionService } from '../retention/retention.service';
+import { ResponsibleGroupService } from '../responsible-groups/responsible-group.service';
 import { ReviewService } from '../review/review.service';
 import { SectorService } from '../sector/sector.service';
 import { OperatorSessionService } from '../sessions/operator-session.service';
@@ -48,6 +49,7 @@ export type AppServices = {
 
   users: UserService;
   categories: CategoryService;
+  responsibleGroups: ResponsibleGroupService;
   bans: BanService;
   sessions: OperatorSessionService;
 
@@ -94,6 +96,7 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
 
   const users = new UserService(prisma);
   const categories = new CategoryService(prisma);
+  const responsibleGroups = new ResponsibleGroupService(prisma);
   const bans = new BanService(prisma);
   const sessions = new OperatorSessionService(prisma);
 
@@ -111,7 +114,7 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
     incidents,
     history,
     state,
-    categories,
+    responsibleGroups,
     messages,
     media,
   );
@@ -121,7 +124,7 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
     incidents,
     history,
     state,
-    categories,
+    responsibleGroups,
     messages,
     media,
     sector,
@@ -135,7 +138,7 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
     incidents,
     history,
     state,
-    categories,
+    responsibleGroups,
     messages,
     media,
     sector,
@@ -158,6 +161,7 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
     retention,
     users,
     categories,
+    responsibleGroups,
     bans,
     sessions,
     repository,

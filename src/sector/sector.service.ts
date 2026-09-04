@@ -1,8 +1,12 @@
-import { type Category, type Incident, IncidentStatus, type PrismaClient } from '@prisma/client';
+import {
+  type Incident,
+  IncidentStatus,
+  type PrismaClient,
+  type ResponsibleGroup,
+} from '@prisma/client';
 
 import { revisionKeyboard, sectorKeyboard } from '../bot/keyboards';
 import { codeLabel, revisionCard, sectorCard } from '../bot/views/cards';
-import type { CategoryService } from '../categories/category.service';
 import { getConfig } from '../config';
 import { HistoryAction, type IncidentHistoryService } from '../incidents/incident-history.service';
 import type { IncidentStateService } from '../incidents/incident-state.service';
@@ -11,6 +15,7 @@ import type { IncidentService } from '../incidents/incident.service';
 import { loadOutboundAttachments } from '../media/attachment-loader';
 import type { MediaService } from '../media/media.service';
 import type { MaxMessageService } from '../max/max-message.service';
+import type { ResponsibleGroupService } from '../responsible-groups/responsible-group.service';
 import { ConflictError, NotFoundError, ValidationError } from '../utils/errors';
 import { incidentLogFields, moduleLogger } from '../utils/logger';
 
@@ -24,7 +29,7 @@ export class SectorService {
     private readonly incidents: IncidentService,
     private readonly history: IncidentHistoryService,
     private readonly state: IncidentStateService,
-    private readonly categories: CategoryService,
+    private readonly groups: ResponsibleGroupService,
     private readonly messages: MaxMessageService,
     private readonly media: MediaService,
   ) {}
@@ -33,19 +38,19 @@ export class SectorService {
   async publishCard(incidentId: string): Promise<void> {
     const incident = await this.repository.findById(incidentId);
     if (!incident) throw new NotFoundError(`Incident ${incidentId} not found`);
-    if (!incident.assignedCategory) {
+    if (!incident.assignedGroup) {
       throw new ValidationError('Обращение ещё не распределено.');
     }
-    const chatId = this.categories.requireChatId(incident.assignedCategory);
+    const chatId = this.groups.requireChatId(incident.assignedGroup);
     const config = getConfig();
 
     const result = await this.messages.send(
       { chatId },
       {
-        text: sectorCard(incident, incident.assignedCategory),
+        text: sectorCard(incident, incident.assignedGroup),
         label: codeLabel(incident),
         keyboard: sectorKeyboard(incident.id, {
-          hasTemplate: Boolean(incident.assignedCategory.answerTemplate),
+          hasTemplate: Boolean(incident.assignedGroup.answerTemplate),
         }),
         attachments: await loadOutboundAttachments(this.media, incident.attachments),
         delivery: {
@@ -77,12 +82,12 @@ export class SectorService {
   /** Rewrite the sector card, e.g. after someone takes the incident (§22). */
   async refreshCard(incidentId: string): Promise<void> {
     const incident = await this.repository.findById(incidentId);
-    if (!incident?.sectorMessageId || !incident.assignedCategory) return;
+    if (!incident?.sectorMessageId || !incident.assignedGroup) return;
     // Text only: the incident photo and the action buttons already on the
     // card are preserved, which is what §22 asks for.
     await this.messages.editCardText(
       incident.sectorMessageId,
-      sectorCard(incident, incident.assignedCategory),
+      sectorCard(incident, incident.assignedGroup),
     );
   }
 
@@ -146,8 +151,13 @@ export class SectorService {
   }
 
   /** §32 — send the rework request back to the sector chat. */
-  async publishRevision(incident: Incident, category: Category, answerVersion: number, reason: string): Promise<void> {
-    const chatId = this.categories.requireChatId(category);
+  async publishRevision(
+    incident: Incident,
+    group: ResponsibleGroup,
+    answerVersion: number,
+    reason: string,
+  ): Promise<void> {
+    const chatId = this.groups.requireChatId(group);
     await this.messages.send(
       { chatId },
       {
@@ -160,10 +170,10 @@ export class SectorService {
 
   /** Plain notice into the sector chat (SLA warnings, status echoes). */
   async notify(incident: Incident, text: string): Promise<void> {
-    const categoryId = incident.assignedCategoryId;
-    if (!categoryId) return;
-    const category = await this.categories.findById(categoryId);
-    if (!category?.maxChatId) return;
-    await this.messages.send({ chatId: category.maxChatId }, { text, label: codeLabel(incident) });
+    const groupId = incident.assignedGroupId;
+    if (!groupId) return;
+    const group = await this.groups.findById(groupId);
+    if (!group?.maxChatId) return;
+    await this.messages.send({ chatId: group.maxChatId }, { text, label: codeLabel(incident) });
   }
 }

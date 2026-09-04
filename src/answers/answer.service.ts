@@ -55,7 +55,7 @@ export class AnswerService {
 
   /** Pre-fill offered by "Использовать шаблон" (§27). */
   templateFor(incident: IncidentWithRelations): string | null {
-    const template = incident.assignedCategory?.answerTemplate;
+    const template = incident.assignedGroup?.answerTemplate;
     if (!template) return null;
     return renderTemplate(template, { incidentCode: incident.publicCode });
   }

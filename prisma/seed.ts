@@ -1,14 +1,13 @@
 import { PrismaClient } from '@prisma/client';
+import { RESPONSIBLE_GROUPS } from '../src/responsible-groups/catalog';
 
 const prisma = new PrismaClient();
 
 /**
  * Сферы обращений (§62).
  *
- * Codes are Latin and stable: they appear in admin commands and in history
- * metadata, so renaming a сфера must never change its code. Chat ids are set
- * per environment with `/category_chat <КОД> <CHAT_ID>` and are deliberately
- * absent here — a reseed must not wipe them.
+ * Codes are Latin and stable. These are requester-facing topics only; routing
+ * destinations live in ResponsibleGroup.
  */
 const CATEGORIES = [
   { code: 'SECURITY', name: 'Безопасность и правопорядок', authorityName: null },
@@ -57,22 +56,35 @@ async function main(): Promise<void> {
     });
   }
 
+  for (const [index, group] of RESPONSIBLE_GROUPS.entries()) {
+    await prisma.responsibleGroup.upsert({
+      where: { code: group.code },
+      create: {
+        code: group.code,
+        name: group.name,
+        kind: group.kind,
+        maxChatId: group.maxChatId,
+        municipalityCode: group.municipalityCode ?? null,
+        authorityName: group.name,
+        bypassReview: group.bypassReview ?? false,
+        sortOrder: (index + 1) * 10,
+        isActive: true,
+      },
+      update: {
+        name: group.name,
+        kind: group.kind,
+        maxChatId: group.maxChatId,
+        municipalityCode: group.municipalityCode ?? null,
+        authorityName: group.name,
+        bypassReview: group.bypassReview ?? false,
+        sortOrder: (index + 1) * 10,
+      },
+    });
+  }
+
   const total = await prisma.category.count();
-  const withoutChat = await prisma.category.count({ where: { isActive: true, maxChatId: null } });
-  const withoutAuthority = await prisma.category.count({
-    where: { isActive: true, authorityName: null },
-  });
-  process.stdout.write(`Seed complete. Сфер в базе: ${total}.\n`);
-  if (withoutAuthority > 0) {
-    process.stdout.write(
-      `Без ведомства для подписи: ${withoutAuthority}. Задайте: /category_authority <КОД> <Название>.\n`,
-    );
-  }
-  if (withoutChat > 0) {
-    process.stdout.write(
-      `Без рабочего чата: ${withoutChat}. Задайте их командой /category_chat <КОД> <CHAT_ID>.\n`,
-    );
-  }
+  const groupTotal = await prisma.responsibleGroup.count();
+  process.stdout.write(`Seed complete. Тем в базе: ${total}; ответственных групп: ${groupTotal}.\n`);
 }
 
 main()

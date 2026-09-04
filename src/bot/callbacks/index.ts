@@ -89,7 +89,7 @@ async function dispatchCallback(
     case 'user':
       return handleUserCallback({ services, actor, chatId, messageId }, payload);
     case 'incident':
-      return handleIncidentCallback({ services, actor, chatId }, payload);
+      return handleIncidentCallback({ services, actor, chatId, messageId }, payload);
     case 'session':
       return handleSessionCallback(services, actor.maxUserId, chatId, payload.action);
     case 'report':
@@ -108,7 +108,7 @@ function actionLease(
   if (payload.kind === 'noop') return undefined;
 
   if (payload.kind === 'incident') {
-    const globallyExclusive = ['assign-category', 'take', 'approve'].includes(payload.action);
+    const globallyExclusive = ['assign-category', 'assign-group', 'take', 'approve'].includes(payload.action);
     return {
       key: [
         globallyExclusive ? 'incident-global' : `user:${maxUserId.toString()}`,

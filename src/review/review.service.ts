@@ -2,7 +2,6 @@ import { AnswerStatus, IncidentStatus, type PrismaClient } from '@prisma/client'
 
 import { reviewKeyboard } from '../bot/keyboards';
 import { codeLabel, finalAnswerToRequester, reviewCard } from '../bot/views/cards';
-import type { CategoryService } from '../categories/category.service';
 import { getConfig } from '../config';
 import type { RequesterDeliveryService } from '../delivery/requester-delivery.service';
 import type { Actor } from '../distribution/distribution.service';
@@ -13,6 +12,7 @@ import type { IncidentService } from '../incidents/incident.service';
 import { loadOutboundAttachments } from '../media/attachment-loader';
 import type { MediaService } from '../media/media.service';
 import type { MaxMessageService } from '../max/max-message.service';
+import type { ResponsibleGroupService } from '../responsible-groups/responsible-group.service';
 import type { SectorService } from '../sector/sector.service';
 import { AppError, ConflictError, NotFoundError } from '../utils/errors';
 import { incidentLogFields, moduleLogger } from '../utils/logger';
@@ -27,7 +27,7 @@ export class ReviewService {
     private readonly incidents: IncidentService,
     private readonly history: IncidentHistoryService,
     private readonly state: IncidentStateService,
-    private readonly categories: CategoryService,
+    private readonly groups: ResponsibleGroupService,
     private readonly messages: MaxMessageService,
     private readonly media: MediaService,
     private readonly sector: SectorService,
@@ -51,7 +51,7 @@ export class ReviewService {
     const result = await this.messages.send(
       { chatId: this.chatId() },
       {
-        text: reviewCard(incident, answer, incident.assignedCategory),
+        text: reviewCard(incident, answer, incident.assignedGroup),
         label: codeLabel(incident),
         keyboard: reviewKeyboard(incident.id),
         attachments: await loadOutboundAttachments(this.media, answer.attachments),
@@ -124,7 +124,7 @@ export class ReviewService {
       await this.delivery.deliverAnswer(
         incidentId,
         answer.id,
-        finalAnswerToRequester(incident, answer, answeredAt, incident.assignedCategory?.authorityName),
+        finalAnswerToRequester(incident, answer, answeredAt, incident.assignedGroup?.authorityName),
       );
     } catch (error) {
       // The incident stays RESOLVED (it was approved), but the answer is not
@@ -211,8 +211,8 @@ export class ReviewService {
     });
 
     const updated = (await this.repository.findById(incidentId))!;
-    if (updated.assignedCategory) {
-      await this.sector.publishRevision(updated, updated.assignedCategory, answer.version, reason);
+    if (updated.assignedGroup) {
+      await this.sector.publishRevision(updated, updated.assignedGroup, answer.version, reason);
     }
     if (incident.reviewMessageId) {
       await this.messages.finalizeCard(
@@ -257,7 +257,7 @@ export class ReviewService {
         incident,
         answer,
         incident.answeredAt ?? answer.approvedAt ?? new Date(),
-        incident.assignedCategory?.authorityName,
+        incident.assignedGroup?.authorityName,
       ),
     );
   }

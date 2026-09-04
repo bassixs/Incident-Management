@@ -9,6 +9,9 @@
 
 export const INCIDENT_ACTIONS = [
   'assign',
+  'assign-branch',
+  'assign-page',
+  'assign-group',
   'assign-category',
   'reject',
   'ban',

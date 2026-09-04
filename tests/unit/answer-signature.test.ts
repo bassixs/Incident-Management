@@ -1,4 +1,4 @@
-import type { Category, Incident, IncidentAnswer } from '@prisma/client';
+import type { Incident, IncidentAnswer, ResponsibleGroup } from '@prisma/client';
 import { describe, expect, it } from 'vitest';
 
 import { finalAnswerToRequester, reviewCard } from '../../src/bot/views/cards';
@@ -60,24 +60,24 @@ describe('подпись ведомства в ответе жителю', () =>
 });
 
 describe('подпись в карточке согласования', () => {
-  const withCategory = (authorityName: string | null): IncidentWithRelations =>
+  const withGroup = (authorityName: string | null): IncidentWithRelations =>
     ({ ...incident, attachments: [], answers: [] }) as unknown as IncidentWithRelations;
 
-  const category = (authorityName: string | null): Category =>
-    ({ name: 'Дороги', authorityName }) as Category;
+  const group = (authorityName: string | null): ResponsibleGroup =>
+    ({ name: 'Министерство транспорта', authorityName }) as ResponsibleGroup;
 
   const answerWithAttachments = { ...answer, attachments: [] } as IncidentAnswer & {
     attachments: Array<{ type: string }>;
   };
 
   it('показывает согласующему, за чьей подписью уйдёт ответ', () => {
-    const card = reviewCard(withCategory(AUTHORITY), answerWithAttachments, category(AUTHORITY));
+    const card = reviewCard(withGroup(AUTHORITY), answerWithAttachments, group(AUTHORITY));
     expect(card).toContain('Уйдёт за подписью:');
     expect(card).toContain(AUTHORITY);
   });
 
   it('предупреждает согласующего, если ведомство не задано', () => {
-    const card = reviewCard(withCategory(null), answerWithAttachments, category(null));
+    const card = reviewCard(withGroup(null), answerWithAttachments, group(null));
     expect(card).toContain('Ведомство для подписи не задано');
   });
 });

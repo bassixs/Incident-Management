@@ -90,8 +90,8 @@ export async function handleBotAdded(services: AppServices, ctx: Context): Promi
         '',
         `ID чата: ${update.chat_id}`,
         '',
-        'Укажите его в DISTRIBUTION_CHAT_ID, REVIEW_CHAT_ID или в настройках сферы',
-        '(/category_chat <КОД> <CHAT_ID>).',
+        'Укажите его в DISTRIBUTION_CHAT_ID, REVIEW_CHAT_ID или в настройках ответственной группы',
+        '(/group_chat <КОД> <CHAT_ID>).',
       ].join('\n'),
     },
   );

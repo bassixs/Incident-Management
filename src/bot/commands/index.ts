@@ -1,4 +1,4 @@
-import { InboxStatus, OutboxStatus, UserRole } from '@prisma/client';
+import { InboxStatus, OutboxStatus, ResponsibleGroupKind, UserRole } from '@prisma/client';
 
 import type { AppServices } from '../../app/container';
 import { AuditAction } from '../../audit/admin-audit.service';
@@ -39,13 +39,16 @@ const STAFF_HELP = [
   'Только для администратора:',
   '/ban <MAX_USER_ID> <причина>',
   '/unban <MAX_USER_ID>',
-  '/categories — список сфер',
+  '/categories — список тем обращения',
   '/category_add <КОД> <Название>',
-  '/category_chat <КОД> <CHAT_ID>',
   '/category_on <КОД> | /category_off <КОД>',
   '/category_name <КОД> <Новое название>',
-  '/category_authority <КОД> <Ведомство для подписи | ->',
-  '/category_template <КОД> <шаблон|-> ',
+  '/groups — список ответственных групп',
+  '/group_chat <КОД> <CHAT_ID>',
+  '/group_on <КОД> | /group_off <КОД>',
+  '/group_name <КОД> <Новое название>',
+  '/group_authority <КОД> <Подпись ответа | ->',
+  '/group_template <КОД> <шаблон|-> ',
   '/role <MAX_USER_ID> <ADMIN,DISPATCHER,...|-> ',
   '/sla_check — принудительная проверка сроков',
   '/delivery_status — состояние очередей сообщений',
@@ -225,7 +228,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
     );
   },
 
-  /** Grouped by readiness — with two dozen сферы a flat list is unreadable. */
+  /** Requester-facing topics; they no longer contain routing chat settings. */
   categories: async ({ services, actor, chatId, isDialog }) => {
     requirePermission(actor, 'admin.manage');
     const categories = await services.categories.listAll();
@@ -234,12 +237,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
       return;
     }
 
-    const describe = (category: (typeof categories)[number]): string =>
-      `${category.code} — ${category.name}${category.answerTemplate ? ' 📄' : ''}\n` +
-      `     ${category.authorityName ?? '⚠️ ведомство не задано'}`;
-
-    const ready = categories.filter((item) => item.isActive && item.maxChatId !== null);
-    const noChat = categories.filter((item) => item.isActive && item.maxChatId === null);
+    const active = categories.filter((item) => item.isActive);
     const disabled = categories.filter((item) => !item.isActive);
 
     await reply(
@@ -248,27 +246,47 @@ export const COMMANDS: Record<string, CommandHandler> = {
       isDialog,
       actor,
       [
-        `Сферы: ${categories.length}`,
-        ...(ready.length
-          ? ['', `✅ Готовы к распределению (${ready.length}):`, ...ready.map(describe)]
+        `Темы обращения: ${categories.length}`,
+        ...(active.length
+          ? ['', `✅ Доступны пользователю (${active.length}):`, ...active.map((item) => `${item.code} — ${item.name}`)]
           : []),
-        ...(noChat.length
-          ? [
-              '',
-              `⚠️ Без рабочего чата (${noChat.length}) — диспетчеру не показываются:`,
-              ...noChat.map(describe),
-              '',
-              'Задать: /category_chat <КОД> <CHAT_ID>',
-            ]
+        ...(disabled.length
+          ? ['', `⛔ Отключены (${disabled.length}):`, ...disabled.map((item) => `${item.code} — ${item.name}`)]
           : []),
-        ...(disabled.length ? ['', `⛔ Отключены (${disabled.length}):`, ...disabled.map(describe)] : []),
-        '',
-        `Без ведомства для подписи: ${categories.filter((item) => item.isActive && !item.authorityName).length}`,
-        'Задать: /category_authority <КОД> <Название ведомства>',
-        '',
-        '📄 — задан шаблон ответа',
       ].join('\n'),
     );
+  },
+
+  groups: async ({ services, actor, chatId, isDialog }) => {
+    requirePermission(actor, 'admin.manage');
+    const groups = await services.responsibleGroups.listAll();
+    if (groups.length === 0) {
+      await reply(services, chatId, isDialog, actor, 'Ответственные группы не заданы. Выполните npm run seed.');
+      return;
+    }
+    const sections = [
+      { kind: ResponsibleGroupKind.REGIONAL, title: 'Калужская область' },
+      { kind: ResponsibleGroupKind.LOCAL_GOVERNMENT, title: 'Органы местного самоуправления' },
+      { kind: ResponsibleGroupKind.EXECUTIVE_AUTHORITY, title: 'Органы исполнительной власти' },
+    ];
+    for (const section of sections) {
+      const items = groups.filter((group) => group.kind === section.kind);
+      await reply(
+        services,
+        chatId,
+        isDialog,
+        actor,
+        [
+          `${section.title} (${items.length}):`,
+          '',
+          ...items.map(
+            (group) =>
+              `${group.isActive ? '✅' : '⛔'} ${group.code} — ${group.name}\n` +
+              `   чат: ${group.maxChatId?.toString() ?? 'не задан'}${group.bypassReview ? ' · без согласования' : ''}`,
+          ),
+        ].join('\n'),
+      );
+    }
   },
 
   category_add: async ({ services, actor, chatId, isDialog, args }) => {
@@ -283,7 +301,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
       targetId: category.code,
       summary: `Создана сфера ${category.code} — ${category.name}`,
     });
-    await reply(services, chatId, isDialog, actor, `Сфера ${category.code} создана. Задайте чат: /category_chat ${category.code} <CHAT_ID>`);
+    await reply(services, chatId, isDialog, actor, `Тема ${category.code} создана.`);
   },
 
   category_chat: async ({ services, actor, chatId, isDialog, args }) => {
@@ -434,6 +452,87 @@ export const COMMANDS: Record<string, CommandHandler> = {
         `Просрочено: ${result.overdue}`,
         `Сессий очищено: ${result.sessionsPurged}`,
       ].join('\n'),
+    );
+  },
+
+  group_chat: async ({ services, actor, chatId, isDialog, args }) => {
+    requirePermission(actor, 'admin.manage');
+    const [code, rawChatId] = args;
+    if (!code || !rawChatId) throw new ValidationError('Использование: /group_chat <КОД> <CHAT_ID>');
+    const group = await services.responsibleGroups.setChatId(code, parseMaxId(rawChatId));
+    await recordAudit(services, actor, {
+      action: AuditAction.GROUP_CHAT_SET,
+      targetType: 'ответственная группа',
+      targetId: group.code,
+      summary: `Для группы ${group.code} задан чат ${group.maxChatId?.toString()}`,
+      metadata: { chatId: group.maxChatId?.toString() },
+    });
+    await reply(services, chatId, isDialog, actor, `Группа ${group.code} → чат ${group.maxChatId?.toString()}`);
+  },
+
+  group_on: async (context) => setGroupActive(context, true),
+  group_off: async (context) => setGroupActive(context, false),
+
+  group_name: async ({ services, actor, chatId, isDialog, args }) => {
+    requirePermission(actor, 'admin.manage');
+    const [code, ...nameParts] = args;
+    const name = nameParts.join(' ').trim();
+    if (!code || !name) throw new ValidationError('Использование: /group_name <КОД> <Новое название>');
+    const group = await services.responsibleGroups.rename(code, name);
+    await recordAudit(services, actor, {
+      action: AuditAction.GROUP_RENAMED,
+      targetType: 'ответственная группа',
+      targetId: group.code,
+      summary: `Группа ${group.code} переименована в «${group.name}»`,
+    });
+    await reply(services, chatId, isDialog, actor, `Группа ${group.code} → «${group.name}»`);
+  },
+
+  group_authority: async ({ services, actor, chatId, isDialog, args }) => {
+    requirePermission(actor, 'admin.manage');
+    const [code, ...nameParts] = args;
+    if (!code) throw new ValidationError('Использование: /group_authority <КОД> <Подпись ответа | ->');
+    const raw = nameParts.join(' ').trim();
+    const group = await services.responsibleGroups.setAuthority(code, raw === '' || raw === '-' ? null : raw);
+    await recordAudit(services, actor, {
+      action: AuditAction.GROUP_AUTHORITY_SET,
+      targetType: 'ответственная группа',
+      targetId: group.code,
+      summary: group.authorityName
+        ? `Для группы ${group.code} задана подпись «${group.authorityName}»`
+        : `Для группы ${group.code} удалена подпись`,
+    });
+    await reply(
+      services,
+      chatId,
+      isDialog,
+      actor,
+      group.authorityName
+        ? `Ответы группы ${group.code} будут подписаны «${group.authorityName}».`
+        : `Подпись ответов группы ${group.code} убрана.`,
+    );
+  },
+
+  group_template: async ({ services, actor, chatId, isDialog, args }) => {
+    requirePermission(actor, 'admin.manage');
+    const [code, ...templateParts] = args;
+    if (!code) throw new ValidationError('Использование: /group_template <КОД> <шаблон | ->');
+    const raw = templateParts.join(' ').trim();
+    const group = await services.responsibleGroups.setTemplate(code, raw === '-' || raw === '' ? null : raw);
+    await recordAudit(services, actor, {
+      action: AuditAction.GROUP_TEMPLATE_SET,
+      targetType: 'ответственная группа',
+      targetId: group.code,
+      summary: group.answerTemplate
+        ? `Для группы ${group.code} обновлён шаблон ответа`
+        : `Для группы ${group.code} удалён шаблон ответа`,
+    });
+    await reply(
+      services,
+      chatId,
+      isDialog,
+      actor,
+      group.answerTemplate ? `Шаблон группы ${group.code} обновлён.` : `Шаблон группы ${group.code} удалён.`,
     );
   },
 
@@ -645,6 +744,27 @@ async function setCategoryActive(context: CommandContext, isActive: boolean): Pr
     isDialog,
     actor,
     `Сфера ${category.code} ${isActive ? 'включена' : 'отключена'}.`,
+  );
+}
+
+async function setGroupActive(context: CommandContext, isActive: boolean): Promise<void> {
+  const { services, actor, chatId, isDialog, args } = context;
+  requirePermission(actor, 'admin.manage');
+  const code = args[0];
+  if (!code) throw new ValidationError(`Использование: /group_${isActive ? 'on' : 'off'} <КОД>`);
+  const group = await services.responsibleGroups.setActive(code, isActive);
+  await recordAudit(services, actor, {
+    action: isActive ? AuditAction.GROUP_ENABLED : AuditAction.GROUP_DISABLED,
+    targetType: 'ответственная группа',
+    targetId: group.code,
+    summary: `Группа ${group.code} ${isActive ? 'включена' : 'отключена'}`,
+  });
+  await reply(
+    services,
+    chatId,
+    isDialog,
+    actor,
+    `Группа ${group.code} ${isActive ? 'включена' : 'отключена'}.`,
   );
 }
 
