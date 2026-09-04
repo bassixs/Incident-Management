@@ -7,12 +7,12 @@ from docx import Document
 
 
 EXPECTED = {
-    "Пользовательское_соглашение_Искра_черновик.docx": (
+    "Пользовательское_соглашение_Искра.docx": (
         "Принимаю пользовательское соглашение",
         "Согласие на обработку персональных данных запрашивается и фиксируется отдельно",
         "муниципальный округ, на территории которого находится указанная в обращении проблема",
     ),
-    "Согласие_на_обработку_ПДн_Искра_черновик.docx": (
+    "Согласие_на_обработку_ПДн_Искра.docx": (
         "Даю согласие на обработку персональных данных",
         "90 (девяноста) календарных дней после направления окончательного ответа",
         "Распространение персональных данных неограниченному кругу лиц настоящим согласием не разрешается",
@@ -20,7 +20,7 @@ EXPECTED = {
         "Материалами обращения являются муниципальный округ возникновения проблемы, текст обращения",
         "Эти материалы сами по себе не относятся к персональным данным Пользователя",
     ),
-    "Политика_обработки_ПДн_Искра_черновик.docx": (
+    "Политика_обработки_ПДн_Искра.docx": (
         "Чат-бот не запрашивает округ проживания",
         "90 (девяноста) календарных дней после его завершения",
         "серверной инфраструктуры, расположенной на территории Российской Федерации",
@@ -51,11 +51,17 @@ def main() -> None:
         path = root / name
         doc = Document(path)
         text = all_text(doc)
-        assert "Искра" in text and "MAX" in text and "ПРОЕКТ" in text
+        assert "Искра" in text and "MAX" in text
         assert "Сайта" not in text
         assert "Timeweb" not in text and "TimeWeb" not in text and "ТаймВэб" not in text
         assert "8.ользователь" not in text
-        assert "[" in text and "]" in text, f"No visible placeholders in {name}"
+        assert "ПРОЕКТ" not in text, f"Draft marker remains in {name}"
+        assert "[" not in text and "]" not in text, f"Visible placeholders remain in {name}"
+        assert "Министерство цифрового развития Калужской области" in text
+        assert "ИНН: 4027138814" in text
+        assert "1194027000221" in text and "11944027000221" not in text
+        assert "min_digital@adm.kaluga.ru" in text
+        assert "04.09.2026" in text
         for phrase in required:
             assert phrase in text, f"Missing phrase in {name}: {phrase}"
 

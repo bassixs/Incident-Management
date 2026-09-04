@@ -32,6 +32,8 @@ def insert_before(paragraph: Paragraph, text: str) -> None:
 
 def compact_version_line(document: Document, date_text: str) -> None:
     version_text = "Редакция документа: 1.0"
+    if any(paragraph.text.startswith(f"{version_text}.") for paragraph in document.paragraphs):
+        return
     for paragraph in document.paragraphs:
         if paragraph.text != date_text:
             continue
@@ -52,8 +54,22 @@ def compact_version_line(document: Document, date_text: str) -> None:
     raise RuntimeError(f"Effective date paragraph not found: {date_text}")
 
 
+def normalize_operator_details(document: Document) -> None:
+    replacements = {
+        "Министерство Цифрового Развития Калужской области":
+            "Министерство цифрового развития Калужской области",
+        "11944027000221": "1194027000221",
+    }
+    for paragraph in document.paragraphs:
+        updated = paragraph.text
+        for old, new in replacements.items():
+            updated = updated.replace(old, new)
+        if updated != paragraph.text:
+            paragraph.text = updated
+
+
 def update_policy() -> None:
-    path = LEGAL_DIR / "Политика_обработки_ПДн_Искра_черновик.docx"
+    path = LEGAL_DIR / "Политика_обработки_ПДн_Искра.docx"
     document = Document(path)
     replace_exact(
         document,
@@ -74,11 +90,12 @@ def update_policy() -> None:
             paragraph.paragraph_format.space_after = Pt(2)
         elif paragraph.text.startswith("Оператор может обновлять Политику."):
             paragraph.paragraph_format.space_after = Pt(0)
+    normalize_operator_details(document)
     document.save(path)
 
 
 def update_agreement() -> None:
-    path = LEGAL_DIR / "Пользовательское_соглашение_Искра_черновик.docx"
+    path = LEGAL_DIR / "Пользовательское_соглашение_Искра.docx"
     document = Document(path)
     replace_exact(
         document,
@@ -91,11 +108,12 @@ def update_agreement() -> None:
         "8.3. Оператор может изменять Соглашение. Новая редакция применяется с указанной в ней даты и размещается в Чат-боте. Если изменения требуют нового подтверждения, до создания следующего обращения Пользователю предлагается принять новую редакцию отдельным действием.",
     )
     compact_version_line(document, "Дата вступления в силу: [ДД.ММ.ГГГГ]")
+    normalize_operator_details(document)
     document.save(path)
 
 
 def update_consent() -> None:
-    path = LEGAL_DIR / "Согласие_на_обработку_ПДн_Искра_черновик.docx"
+    path = LEGAL_DIR / "Согласие_на_обработку_ПДн_Искра.docx"
     document = Document(path)
     replace_exact(
         document,
@@ -113,6 +131,7 @@ def update_consent() -> None:
         "Оператор фиксирует идентификатор Пользователя в MAX, дату и время предоставления согласия, редакцию и контрольную сумму документа, а также идентификатор подтверждающего действия в MAX для подтверждения факта получения согласия.",
     )
     compact_version_line(document, "Дата начала действия редакции: [ДД.ММ.ГГГГ]")
+    normalize_operator_details(document)
     document.save(path)
 
 
