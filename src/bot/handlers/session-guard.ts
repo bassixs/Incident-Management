@@ -6,6 +6,7 @@ import type { ResolvedActor } from './helpers';
 
 export const SESSION_PROMPTS: Record<SessionType, string> = {
   [SessionType.WAITING_INCIDENT_TEXT]: 'Ожидается текст обращения.',
+  [SessionType.WAITING_CUSTOM_LOCALITY]: 'Ожидается название населённого пункта.',
   [SessionType.WAITING_REJECTION_REASON]: 'Ожидается причина отклонения.',
   [SessionType.WAITING_REVISION_REASON]: 'Ожидается причина возврата на доработку.',
   [SessionType.WAITING_FOR_ANSWER]: 'Ожидается текст ответа.',

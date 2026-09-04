@@ -40,11 +40,18 @@ enum AttachmentType {
 
 enum SessionType {
   WAITING_INCIDENT_TEXT
+  WAITING_CUSTOM_LOCALITY
   WAITING_REJECTION_REASON
   WAITING_REVISION_REASON
   WAITING_FOR_ANSWER
   WAITING_BAN_REASON
   WAITING_REPORT_PERIOD
+}
+
+enum ResponsibleGroupKind {
+  REGIONAL
+  LOCAL_GOVERNMENT
+  EXECUTIVE_AUTHORITY
 }
 
 enum UserRole {
@@ -117,6 +124,29 @@ model Category {
   @@index([isActive, sortOrder])
 }
 
+/// Получатель обращения после ручного распределения. Темы, которые выбирает
+/// заявитель, намеренно хранятся отдельно в Category.
+model ResponsibleGroup {
+  id               String               @id @default(uuid())
+  code             String               @unique
+  name             String
+  kind             ResponsibleGroupKind
+  maxChatId        BigInt?              @unique
+  /// Код территории, для которой группа показывается как рекомендация.
+  municipalityCode String?              @unique
+  authorityName    String?
+  answerTemplate   String?
+  bypassReview     Boolean              @default(false)
+  isActive         Boolean              @default(true)
+  sortOrder        Int                  @default(100)
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  assignedIncidents Incident[] @relation("AssignedResponsibleGroup")
+
+  @@index([kind, isActive, sortOrder])
+}
+
 model Incident {
   id         String @id @default(uuid())
   publicCode String @unique
@@ -129,9 +159,16 @@ model Incident {
   text String
 
   userSelectedCategoryId String?
-  userSelectedCategory   Category? @relation("UserSelectedCategory", fields: [userSelectedCategoryId], references: [id])
+  userSelectedCategory   Category?         @relation("UserSelectedCategory", fields: [userSelectedCategoryId], references: [id])
   assignedCategoryId     String?
-  assignedCategory       Category? @relation("AssignedCategory", fields: [assignedCategoryId], references: [id])
+  assignedCategory       Category?         @relation("AssignedCategory", fields: [assignedCategoryId], references: [id])
+  assignedGroupId        String?
+  assignedGroup          ResponsibleGroup? @relation("AssignedResponsibleGroup", fields: [assignedGroupId], references: [id])
+
+  /// Территория проблемы выбирается независимо от темы обращения.
+  problemMunicipalityCode String?
+  problemMunicipalityName String?
+  problemLocality         String?
 
   status IncidentStatus @default(DISTRIBUTION)
 
@@ -175,6 +212,8 @@ model Incident {
   @@index([status, answeredAt])
   @@index([deadlineAt])
   @@index([assignedCategoryId])
+  @@index([assignedGroupId])
+  @@index([problemMunicipalityCode])
   @@index([createdAt])
 }
 
