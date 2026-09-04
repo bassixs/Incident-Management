@@ -32,6 +32,16 @@ const COLUMNS: Column[] = [
     value: (incident) => incident.userSelectedCategory?.name ?? 'Не знаю',
   },
   {
+    header: 'Округ или город проблемы',
+    width: 30,
+    value: (incident) => incident.problemMunicipalityName ?? '',
+  },
+  {
+    header: 'Населённый пункт',
+    width: 24,
+    value: (incident) => incident.problemLocality ?? '',
+  },
+  {
     header: 'Итоговая категория',
     width: 24,
     value: (incident) => incident.assignedCategory?.name ?? '',

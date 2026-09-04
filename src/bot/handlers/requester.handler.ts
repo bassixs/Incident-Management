@@ -6,8 +6,9 @@ import type { Message } from '../../max/max-types';
 import { classifyAttachments } from '../../media/media.service';
 import { RateLimitError, ValidationError } from '../../utils/errors';
 import { incidentLogFields, moduleLogger } from '../../utils/logger';
+import { normaliseIncidentText, unicodeLength } from '../../utils/text';
 import { mainMenuKeyboard } from '../keyboards';
-import { greetingText, registrationConfirmation } from '../views/cards';
+import { greetingText, incidentPromptText, registrationConfirmation } from '../views/cards';
 import type { ResolvedActor } from './helpers';
 
 const log = moduleLogger('bot-requester');
@@ -30,7 +31,7 @@ export async function handleRequesterMessage(
   }
 
   const session = await services.sessions.find(actor.maxUserId, chatId);
-  if (!session || session.type !== SessionType.WAITING_INCIDENT_TEXT) {
+  if (!session) {
     await services.messages.send(target, { text: NO_SESSION_HINT, keyboard: mainMenuKeyboard() });
     return;
   }
@@ -38,6 +39,43 @@ export async function handleRequesterMessage(
   const data = services.sessions.readData(session);
   const media = classifyAttachments(message.body.attachments);
   const text = message.body.text ?? '';
+
+  if (session.type === SessionType.WAITING_CUSTOM_LOCALITY) {
+    const locality = normaliseIncidentText(text).replace(/\n+/g, ' ');
+    if (media.length > 0 || locality.length === 0) {
+      await services.messages.send(target, {
+        text: 'Напишите только название населённого пункта. Фотографию можно будет приложить к описанию проблемы следующим сообщением.',
+      });
+      return;
+    }
+    if (unicodeLength(locality) > 100) {
+      await services.messages.send(target, { text: 'Название слишком длинное. Укажите не более 100 символов.' });
+      return;
+    }
+    if (!data.problemMunicipalityCode || !data.problemMunicipalityName) {
+      await services.sessions.clear(actor.maxUserId, chatId);
+      await services.messages.send(target, {
+        text: 'Черновик устарел. Начните создание обращения заново.',
+        keyboard: mainMenuKeyboard(),
+      });
+      return;
+    }
+    await services.sessions.start({
+      maxUserId: actor.maxUserId,
+      chatId,
+      type: SessionType.WAITING_INCIDENT_TEXT,
+      data: { ...data, problemLocality: locality },
+    });
+    await services.messages.send(target, {
+      text: [`Населённый пункт: ${locality}`, '', incidentPromptText()].join('\n'),
+    });
+    return;
+  }
+
+  if (session.type !== SessionType.WAITING_INCIDENT_TEXT) {
+    await services.messages.send(target, { text: NO_SESSION_HINT, keyboard: mainMenuKeyboard() });
+    return;
+  }
 
   try {
     const incident = await services.incidents.create({
@@ -48,6 +86,9 @@ export async function handleRequesterMessage(
       },
       text,
       userSelectedCategoryId: data.selectedCategoryId ?? null,
+      problemMunicipalityCode: data.problemMunicipalityCode ?? null,
+      problemMunicipalityName: data.problemMunicipalityName ?? null,
+      problemLocality: data.problemLocality ?? null,
       media,
     });
 

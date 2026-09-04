@@ -9,8 +9,11 @@ const log = moduleLogger('sessions');
 export { SessionType };
 
 export type SessionData = {
-  /** WAITING_INCIDENT_TEXT: the сфера the requester guessed, if any. */
+  /** Requester draft: the тема the requester selected, if any. */
   selectedCategoryId?: string | null;
+  problemMunicipalityCode?: string;
+  problemMunicipalityName?: string;
+  problemLocality?: string | null;
   /** WAITING_BAN_REASON: whom to ban (the incident author). */
   targetMaxUserId?: string;
   /** WAITING_FOR_ANSWER: text pre-filled from a template or an AI draft. */

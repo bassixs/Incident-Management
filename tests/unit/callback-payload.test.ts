@@ -39,6 +39,11 @@ describe('callback payloads', () => {
       argument: 'none',
     });
     expect(parseCallbackPayload(sessionCallback('cancel'))).toEqual({ kind: 'session', action: 'cancel' });
+    expect(parseCallbackPayload(userCallback('municipality', `${CATEGORY_ID}~YUKHNOVSKY`))).toEqual({
+      kind: 'user',
+      action: 'municipality',
+      argument: `${CATEGORY_ID}~YUKHNOVSKY`,
+    });
   });
 
   it('round-trips report period buttons', () => {

@@ -23,7 +23,17 @@ export const INCIDENT_ACTIONS = [
 
 export type IncidentAction = (typeof INCIDENT_ACTIONS)[number];
 
-export const USER_ACTIONS = ['new', 'category', 'page', 'my-incidents', 'rules', 'menu'] as const;
+export const USER_ACTIONS = [
+  'new',
+  'category',
+  'page',
+  'location-page',
+  'municipality',
+  'locality',
+  'my-incidents',
+  'rules',
+  'menu',
+] as const;
 export type UserAction = (typeof USER_ACTIONS)[number];
 
 export const SESSION_ACTIONS = ['continue', 'cancel'] as const;

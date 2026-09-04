@@ -24,6 +24,15 @@ function slaDaysPhrase(): string {
   return `${days} ${pluralRu(days, 'дня', 'дней', 'дней')}`;
 }
 
+export function problemLocationText(
+  incident: Pick<Incident, 'problemMunicipalityName' | 'problemLocality'>,
+): string {
+  if (!incident.problemMunicipalityName) return 'Не указана';
+  return incident.problemLocality
+    ? `${incident.problemMunicipalityName} → ${incident.problemLocality}`
+    : incident.problemMunicipalityName;
+}
+
 /** §12 — confirmation sent to the requester right after registration. */
 export function registrationConfirmation(incident: Incident): string {
   return [
@@ -55,6 +64,9 @@ export function distributionCard(incident: IncidentWithRelations): string {
     '',
     'Сфера пользователя:',
     incident.userSelectedCategory?.name ?? 'Не знаю',
+    '',
+    'Территория проблемы:',
+    problemLocationText(incident),
     '',
     'Обращение:',
     incident.text,
@@ -93,6 +105,9 @@ export function sectorCard(incident: IncidentWithRelations, category: Category):
     'Категория:',
     category.name,
     '',
+    'Территория проблемы:',
+    problemLocationText(incident),
+    '',
     'Обращение:',
     incident.text,
     '',
@@ -122,6 +137,9 @@ export function reviewCard(
     '',
     'Категория:',
     category?.name ?? '—',
+    '',
+    'Территория проблемы:',
+    problemLocationText(incident),
     '',
     'Обращение:',
     incident.text,
@@ -223,6 +241,9 @@ export function incidentLookupCard(incident: IncidentWithRelations): string {
     'Категория:',
     incident.assignedCategory?.name ?? incident.userSelectedCategory?.name ?? 'не определена',
     '',
+    'Территория проблемы:',
+    problemLocationText(incident),
+    '',
     'Ответственный:',
     incident.currentResponder?.displayName ?? 'не назначен',
     '',
@@ -274,6 +295,33 @@ export function categoryPromptText(total: number): string {
     'Выберите сферу обращения.',
     'Если вы не уверены — нажмите «Не знаю», сферу определит специалист.',
     ...(total > 0 ? ['', `Всего сфер: ${total}. Листайте стрелками.`] : []),
+  ].join('\n');
+}
+
+export function municipalityPromptText(total: number): string {
+  return [
+    'Где произошла проблема?',
+    '',
+    'Выберите город или округ.',
+    'Если вопрос относится ко всей области, выберите общий вариант.',
+    ...(total > 0 ? ['', `Всего вариантов: ${total}. Листайте стрелками.`] : []),
+  ].join('\n');
+}
+
+export function localityPromptText(municipalityName: string): string {
+  return [
+    `Уточните населённый пункт: ${municipalityName}.`,
+    '',
+    'Если нужного варианта нет — нажмите «Другой» и напишите название.',
+    'Если уточнение не требуется — нажмите «Пропустить».',
+  ].join('\n');
+}
+
+export function customLocalityPromptText(municipalityName: string): string {
+  return [
+    `Напишите название населённого пункта в территории «${municipalityName}».`,
+    '',
+    'Только название, без описания проблемы. Описание бот попросит следующим сообщением.',
   ].join('\n');
 }
 

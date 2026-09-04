@@ -18,6 +18,9 @@ export type CreateIncidentInput = {
   requester: { maxUserId: bigint; name: string; username?: string | null };
   text: string;
   userSelectedCategoryId?: string | null;
+  problemMunicipalityCode?: string | null;
+  problemMunicipalityName?: string | null;
+  problemLocality?: string | null;
   media?: IncomingMedia[];
 };
 
@@ -138,6 +141,9 @@ export class IncidentService {
         requesterName: user.displayName,
         text,
         userSelectedCategoryId: input.userSelectedCategoryId ?? null,
+        problemMunicipalityCode: input.problemMunicipalityCode ?? null,
+        problemMunicipalityName: input.problemMunicipalityName ?? null,
+        problemLocality: input.problemLocality ?? null,
         status: IncidentStatus.DISTRIBUTION,
         createdAt: now,
         deadlineAt: computeDeadline(now, config.INCIDENT_SLA_HOURS),
@@ -153,6 +159,9 @@ export class IncidentService {
           metadata: {
             publicCode,
             userSelectedCategoryId: input.userSelectedCategoryId ?? null,
+            problemMunicipalityCode: input.problemMunicipalityCode ?? null,
+            problemMunicipalityName: input.problemMunicipalityName ?? null,
+            problemLocality: input.problemLocality ?? null,
             attachmentCount: (input.media ?? []).filter((item) => item.kind === 'IMAGE').length,
           },
         },

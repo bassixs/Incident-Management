@@ -121,6 +121,23 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     expect(incident.deadlineAt.getTime() - incident.createdAt.getTime()).toBe(72 * 3_600_000);
   });
 
+  it('stores the selected municipality and locality independently from the topic', async () => {
+    const category = await facility();
+    const incident = await harness.services.incidents.create({
+      requester: requesterA(),
+      text: 'Проблема в Балабаново',
+      userSelectedCategoryId: category.id,
+      problemMunicipalityCode: 'BOROVSKY',
+      problemMunicipalityName: 'Боровский округ',
+      problemLocality: 'Балабаново',
+    });
+
+    expect(incident.userSelectedCategoryId).toBe(category.id);
+    expect(incident.problemMunicipalityCode).toBe('BOROVSKY');
+    expect(incident.problemMunicipalityName).toBe('Боровский округ');
+    expect(incident.problemLocality).toBe('Балабаново');
+  });
+
   // --- §17-§18 distribution ------------------------------------------------
 
   it('routes an incident to a sector and records who did it', async () => {

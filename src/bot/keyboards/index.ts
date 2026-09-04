@@ -1,6 +1,7 @@
 import { Keyboard } from '@maxhub/max-bot-api';
 import type { Button } from '../../max/max-types';
 import type { Category } from '@prisma/client';
+import type { ProblemMunicipality } from '../../locations/problem-locations';
 
 import {
   incidentCallback,
@@ -56,6 +57,78 @@ export function requesterCategoryKeyboard(categories: Category[], page = 0): But
   }
 
   return rows;
+}
+
+export const MUNICIPALITY_PAGE_SIZE = 6;
+export const LOCALITY_OTHER = 'other';
+export const LOCALITY_SKIP = 'skip';
+
+function locationArgument(selectedCategoryId: string | null, ...parts: Array<string | number>): string {
+  return [selectedCategoryId ?? 'none', ...parts].join('~');
+}
+
+export function municipalityPageCount(total: number): number {
+  return Math.max(1, Math.ceil(total / MUNICIPALITY_PAGE_SIZE));
+}
+
+/** Территории на этапе создания обращения, по шесть кнопок на странице. */
+export function requesterMunicipalityKeyboard(
+  categoriesSelection: string | null,
+  municipalities: ProblemMunicipality[],
+  page = 0,
+): Button[][] {
+  const pages = municipalityPageCount(municipalities.length);
+  const current = Math.min(Math.max(page, 0), pages - 1);
+  const slice = municipalities.slice(
+    current * MUNICIPALITY_PAGE_SIZE,
+    (current + 1) * MUNICIPALITY_PAGE_SIZE,
+  );
+  const rows: Button[][] = slice.map((municipality) => [
+    button.callback(
+      municipality.name,
+      userCallback('municipality', locationArgument(categoriesSelection, municipality.code)),
+    ),
+  ]);
+
+  if (pages > 1) {
+    const nav: Button[] = [];
+    if (current > 0) {
+      nav.push(
+        button.callback(
+          '⬅️ Назад',
+          userCallback('location-page', locationArgument(categoriesSelection, current - 1)),
+        ),
+      );
+    }
+    nav.push(button.callback(`${current + 1} / ${pages}`, NOOP_CALLBACK));
+    if (current < pages - 1) {
+      nav.push(
+        button.callback(
+          'Вперёд ➡️',
+          userCallback('location-page', locationArgument(categoriesSelection, current + 1)),
+        ),
+      );
+    }
+    rows.push(nav);
+  }
+
+  return rows;
+}
+
+/** Населённые пункты выбранного округа плюс явные «Другой» и «Пропустить». */
+export function requesterLocalityKeyboard(
+  selectedCategoryId: string | null,
+  municipality: ProblemMunicipality,
+): Button[][] {
+  const argument = (localityCode: string) =>
+    locationArgument(selectedCategoryId, municipality.code, localityCode);
+  return [
+    ...municipality.localities.map((locality) => [
+      button.callback(locality.name, userCallback('locality', argument(locality.code))),
+    ]),
+    [button.callback('Другой', userCallback('locality', argument(LOCALITY_OTHER)))],
+    [button.callback('Пропустить', userCallback('locality', argument(LOCALITY_SKIP)))],
+  ];
 }
 
 /** Buttons under the distribution-chat card (§16). */

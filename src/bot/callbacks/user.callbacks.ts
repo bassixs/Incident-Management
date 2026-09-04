@@ -3,12 +3,28 @@ import { SessionType } from '@prisma/client';
 import type { AppServices } from '../../app/container';
 import type { CallbackPayload } from '../../max/callback-payload';
 import { REJECTION_MESSAGES, dailyLimitMessage } from '../../incidents/incident.service';
+import {
+  PROBLEM_MUNICIPALITIES,
+  findProblemLocality,
+  findProblemMunicipality,
+} from '../../locations/problem-locations';
+import { ValidationError } from '../../utils/errors';
 import { moduleLogger } from '../../utils/logger';
-import { mainMenuKeyboard, requesterCategoryKeyboard } from '../keyboards';
+import {
+  LOCALITY_OTHER,
+  LOCALITY_SKIP,
+  mainMenuKeyboard,
+  requesterCategoryKeyboard,
+  requesterLocalityKeyboard,
+  requesterMunicipalityKeyboard,
+} from '../keyboards';
 import {
   categoryPromptText,
+  customLocalityPromptText,
   greetingText,
   incidentPromptText,
+  localityPromptText,
+  municipalityPromptText,
   myIncidentsText,
   rulesText,
 } from '../views/cards';
@@ -67,11 +83,29 @@ export async function handleUserCallback(
         });
         return 'Дневной лимит исчерпан';
       }
+      await services.sessions.clear(actor.maxUserId, context.chatId ?? actor.maxUserId);
       const categories = await services.categories.listActive();
       await services.messages.send(target, {
         text: categoryPromptText(categories.length),
         keyboard: requesterCategoryKeyboard(categories, 0),
       });
+      return undefined;
+    }
+
+    case 'location-page': {
+      if (!context.messageId) return undefined;
+      const [categoryToken, pageToken] = parseLocationArgument(payload.argument, 2);
+      const selectedCategoryId = await requireActiveCategory(services, categoryToken);
+      const page = Number.parseInt(pageToken, 10);
+      await services.messages.editCardKeyboard(
+        context.messageId,
+        municipalityPromptText(PROBLEM_MUNICIPALITIES.length),
+        requesterMunicipalityKeyboard(
+          selectedCategoryId,
+          PROBLEM_MUNICIPALITIES,
+          Number.isFinite(page) ? page : 0,
+        ),
+      );
       return undefined;
     }
 
@@ -111,21 +145,139 @@ export async function handleUserCallback(
         await services.messages.finalizeCard(context.messageId, `Сфера обращения: ${chosenName}`);
       }
 
-      // The guess is stored on the session and copied onto the incident later;
-      // it never routes anything — every incident goes to distribution first.
-      await services.sessions.start({
-        maxUserId: actor.maxUserId,
-        chatId: context.chatId ?? actor.maxUserId,
-        type: SessionType.WAITING_INCIDENT_TEXT,
-        data: { selectedCategoryId },
+      await services.messages.send(target, {
+        text: municipalityPromptText(PROBLEM_MUNICIPALITIES.length),
+        keyboard: requesterMunicipalityKeyboard(selectedCategoryId, PROBLEM_MUNICIPALITIES, 0),
       });
+      log.debug({ maxUserId: actor.maxUserId.toString(), selectedCategoryId }, 'location picker opened');
+      return undefined;
+    }
 
+    case 'municipality': {
+      const [categoryToken, municipalityCode] = parseLocationArgument(payload.argument, 2);
+      const selectedCategoryId = await requireActiveCategory(services, categoryToken);
+      const municipality = findProblemMunicipality(municipalityCode);
+      if (!municipality) throw new ValidationError('Эта территория больше недоступна. Выберите её заново.');
+
+      if (context.messageId) {
+        await services.messages.finalizeCard(
+          context.messageId,
+          `Территория проблемы: ${municipality.name}`,
+        );
+      }
+
+      if (municipality.localities.length > 0) {
+        await services.messages.send(target, {
+          text: localityPromptText(municipality.name),
+          keyboard: requesterLocalityKeyboard(selectedCategoryId, municipality),
+        });
+        return undefined;
+      }
+
+      await startIncidentTextSession(services, actor.maxUserId, context.chatId, {
+        selectedCategoryId,
+        problemMunicipalityCode: municipality.code,
+        problemMunicipalityName: municipality.name,
+        problemLocality: null,
+      });
       await services.messages.send(target, { text: incidentPromptText() });
-      log.debug({ maxUserId: actor.maxUserId.toString(), selectedCategoryId }, 'incident draft started');
+      return undefined;
+    }
+
+    case 'locality': {
+      const [categoryToken, municipalityCode, localityCode] = parseLocationArgument(payload.argument, 3);
+      const selectedCategoryId = await requireActiveCategory(services, categoryToken);
+      const municipality = findProblemMunicipality(municipalityCode);
+      if (!municipality?.localities.length) {
+        throw new ValidationError('Эта территория больше недоступна. Выберите её заново.');
+      }
+
+      if (localityCode === LOCALITY_OTHER) {
+        if (context.messageId) {
+          await services.messages.finalizeCard(
+            context.messageId,
+            `Территория проблемы: ${municipality.name} → другой населённый пункт`,
+          );
+        }
+        await services.sessions.start({
+          maxUserId: actor.maxUserId,
+          chatId: context.chatId ?? actor.maxUserId,
+          type: SessionType.WAITING_CUSTOM_LOCALITY,
+          data: {
+            selectedCategoryId,
+            problemMunicipalityCode: municipality.code,
+            problemMunicipalityName: municipality.name,
+          },
+        });
+        await services.messages.send(target, { text: customLocalityPromptText(municipality.name) });
+        return undefined;
+      }
+
+      const locality =
+        localityCode === LOCALITY_SKIP ? null : findProblemLocality(municipality, localityCode);
+      if (localityCode !== LOCALITY_SKIP && !locality) {
+        throw new ValidationError('Этот населённый пункт больше недоступен. Выберите его заново.');
+      }
+
+      if (context.messageId) {
+        await services.messages.finalizeCard(
+          context.messageId,
+          `Территория проблемы: ${municipality.name}${locality ? ` → ${locality.name}` : ''}`,
+        );
+      }
+      await startIncidentTextSession(services, actor.maxUserId, context.chatId, {
+        selectedCategoryId,
+        problemMunicipalityCode: municipality.code,
+        problemMunicipalityName: municipality.name,
+        problemLocality: locality?.name ?? null,
+      });
+      await services.messages.send(target, { text: incidentPromptText() });
       return undefined;
     }
 
     default:
       return undefined;
   }
+}
+
+function parseLocationArgument(raw: string | undefined, expectedParts: 2): [string, string];
+function parseLocationArgument(raw: string | undefined, expectedParts: 3): [string, string, string];
+function parseLocationArgument(raw: string | undefined, expectedParts: 2 | 3): string[] {
+  const parts = raw?.split('~') ?? [];
+  if (parts.length !== expectedParts || parts.some((part) => part.length === 0)) {
+    throw new ValidationError('Кнопка устарела. Начните создание обращения заново.');
+  }
+  return parts;
+}
+
+async function requireActiveCategory(services: AppServices, token: string): Promise<string | null> {
+  if (token === 'none') return null;
+  const category = await services.categories.findById(token);
+  if (!category?.isActive) {
+    throw new ValidationError('Выбранная тема больше недоступна. Начните создание обращения заново.');
+  }
+  return category.id;
+}
+
+async function startIncidentTextSession(
+  services: AppServices,
+  maxUserId: bigint,
+  chatId: bigint | undefined,
+  data: {
+    selectedCategoryId: string | null;
+    problemMunicipalityCode: string;
+    problemMunicipalityName: string;
+    problemLocality: string | null;
+  },
+): Promise<void> {
+  await services.sessions.start({
+    maxUserId,
+    chatId: chatId ?? maxUserId,
+    type: SessionType.WAITING_INCIDENT_TEXT,
+    data,
+  });
+  log.debug(
+    { maxUserId: maxUserId.toString(), municipalityCode: data.problemMunicipalityCode },
+    'incident text requested',
+  );
 }
