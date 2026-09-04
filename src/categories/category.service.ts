@@ -4,11 +4,8 @@ import type { PrismaLike } from '../database/prisma';
 import { NotFoundError, ValidationError } from '../utils/errors';
 
 /**
- * Categories (сферы) are data, never code.
- *
- * Nothing in the handlers may branch on a hardcoded category code: keyboards
- * are built from this table and callbacks carry category ids, so adding a
- * seventh sector is an INSERT, not a deployment.
+ * Requester-facing topics are data, never code. They do not route incidents;
+ * operational destinations live in ResponsibleGroup.
  */
 export class CategoryService {
   constructor(private readonly prisma: PrismaClient) {}
@@ -22,20 +19,6 @@ export class CategoryService {
 
   async listAll(): Promise<Category[]> {
     return this.prisma.category.findMany({ orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] });
-  }
-
-  /**
-   * Сферы an incident can actually be routed to.
-   *
-   * A сфера without a working chat has nowhere to publish the card, so it is
-   * never offered to a dispatcher — better an absent button than a button that
-   * fails after the click.
-   */
-  async listRoutable(tx?: PrismaLike): Promise<Category[]> {
-    return (tx ?? this.prisma).category.findMany({
-      where: { isActive: true, maxChatId: { not: null } },
-      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
-    });
   }
 
   async findById(id: string, tx?: PrismaLike): Promise<Category | null> {
@@ -61,25 +44,14 @@ export class CategoryService {
   async create(input: {
     code: string;
     name: string;
-    maxChatId?: bigint | null;
-    answerTemplate?: string | null;
     sortOrder?: number;
   }): Promise<Category> {
     return this.prisma.category.create({
       data: {
         code: input.code.toUpperCase(),
         name: input.name,
-        maxChatId: input.maxChatId ?? null,
-        answerTemplate: input.answerTemplate ?? null,
         sortOrder: input.sortOrder ?? 100,
       },
-    });
-  }
-
-  async setChatId(code: string, maxChatId: bigint | null): Promise<Category> {
-    return this.prisma.category.update({
-      where: { code: code.toUpperCase() },
-      data: { maxChatId },
     });
   }
 
@@ -92,28 +64,4 @@ export class CategoryService {
     return this.prisma.category.update({ where: { code: code.toUpperCase() }, data: { name } });
   }
 
-  /**
-   * Official body that signs answers for this сфера.
-   * `null` clears it, and an unset authority simply omits the signature.
-   */
-  async setAuthority(code: string, authorityName: string | null): Promise<Category> {
-    return this.prisma.category.update({
-      where: { code: code.toUpperCase() },
-      data: { authorityName },
-    });
-  }
-
-  async setTemplate(code: string, answerTemplate: string | null): Promise<Category> {
-    return this.prisma.category.update({ where: { code: code.toUpperCase() }, data: { answerTemplate } });
-  }
-
-  /** The chat a distributed incident must be published to. */
-  requireChatId(category: Category): bigint {
-    if (category.maxChatId === null) {
-      throw new ValidationError(
-        `Для сферы «${category.name}» не настроен рабочий чат. Задайте его командой /category_chat ${category.code} <CHAT_ID>.`,
-      );
-    }
-    return category.maxChatId;
-  }
 }

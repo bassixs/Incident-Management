@@ -104,22 +104,15 @@ model User {
 }
 
 model Category {
-  id             String   @id @default(uuid())
-  code           String   @unique
-  name           String
-  maxChatId      BigInt?
-  /// Официальное название ведомства для подписи под ответом жителю.
-  /// Отличается от name: name — тема для маршрутизации («Дороги»), здесь —
-  /// организация, которая отвечает («Министерство транспорта Калужской области»).
-  authorityName  String?
-  answerTemplate String?
-  isActive       Boolean  @default(true)
-  sortOrder      Int      @default(100)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(100)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   userSelectedIncidents Incident[] @relation("UserSelectedCategory")
-  assignedIncidents     Incident[] @relation("AssignedCategory")
 
   @@index([isActive, sortOrder])
 }
@@ -160,8 +153,6 @@ model Incident {
 
   userSelectedCategoryId String?
   userSelectedCategory   Category?         @relation("UserSelectedCategory", fields: [userSelectedCategoryId], references: [id])
-  assignedCategoryId     String?
-  assignedCategory       Category?         @relation("AssignedCategory", fields: [assignedCategoryId], references: [id])
   assignedGroupId        String?
   assignedGroup          ResponsibleGroup? @relation("AssignedResponsibleGroup", fields: [assignedGroupId], references: [id])
 
@@ -211,7 +202,6 @@ model Incident {
   @@index([status])
   @@index([status, answeredAt])
   @@index([deadlineAt])
-  @@index([assignedCategoryId])
   @@index([assignedGroupId])
   @@index([problemMunicipalityCode])
   @@index([createdAt])

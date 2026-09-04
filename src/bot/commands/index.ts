@@ -304,57 +304,8 @@ export const COMMANDS: Record<string, CommandHandler> = {
     await reply(services, chatId, isDialog, actor, `Тема ${category.code} создана.`);
   },
 
-  category_chat: async ({ services, actor, chatId, isDialog, args }) => {
-    requirePermission(actor, 'admin.manage');
-    const [code, rawChatId] = args;
-    if (!code || !rawChatId) throw new ValidationError('Использование: /category_chat <КОД> <CHAT_ID>');
-    const category = await services.categories.setChatId(code, parseMaxId(rawChatId));
-    await recordAudit(services, actor, {
-      action: AuditAction.CATEGORY_CHAT_SET,
-      targetType: 'сфера',
-      targetId: category.code,
-      summary: `Для сферы ${category.code} задан чат ${category.maxChatId?.toString()}`,
-      metadata: { chatId: category.maxChatId?.toString() },
-    });
-    await reply(services, chatId, isDialog, actor, `Сфера ${category.code} → чат ${category.maxChatId?.toString()}`);
-  },
-
   category_on: async (context) => setCategoryActive(context, true),
   category_off: async (context) => setCategoryActive(context, false),
-
-  /**
-   * Sets the body that signs answers for a сфера. The signature is added to
-   * the answer automatically, so responders never type it.
-   */
-  category_authority: async ({ services, actor, chatId, isDialog, args }) => {
-    requirePermission(actor, 'admin.manage');
-    const [code, ...nameParts] = args;
-    if (!code) {
-      throw new ValidationError('Использование: /category_authority <КОД> <Название ведомства | ->');
-    }
-    const authority = nameParts.join(' ').trim();
-    const category = await services.categories.setAuthority(
-      code,
-      authority === '' || authority === '-' ? null : authority,
-    );
-    await recordAudit(services, actor, {
-      action: AuditAction.CATEGORY_AUTHORITY_SET,
-      targetType: 'сфера',
-      targetId: category.code,
-      summary: category.authorityName
-        ? `Для сферы ${category.code} задано ведомство «${category.authorityName}»`
-        : `Для сферы ${category.code} удалено ведомство`,
-    });
-    await reply(
-      services,
-      chatId,
-      isDialog,
-      actor,
-      category.authorityName
-        ? `Сфера ${category.code}: ответы будут подписаны «${category.authorityName}».`
-        : `Сфера ${category.code}: подпись ведомства убрана.`,
-    );
-  },
 
   /** Renames the display label; the code stays put so history keeps matching. */
   category_name: async ({ services, actor, chatId, isDialog, args }) => {
@@ -370,29 +321,6 @@ export const COMMANDS: Record<string, CommandHandler> = {
       summary: `Сфера ${category.code} переименована в «${category.name}»`,
     });
     await reply(services, chatId, isDialog, actor, `Сфера ${category.code} → «${category.name}»`);
-  },
-
-  category_template: async ({ services, actor, chatId, isDialog, args }) => {
-    requirePermission(actor, 'admin.manage');
-    const [code, ...templateParts] = args;
-    if (!code) throw new ValidationError('Использование: /category_template <КОД> <шаблон | ->');
-    const raw = templateParts.join(' ').trim();
-    const category = await services.categories.setTemplate(code, raw === '-' || raw === '' ? null : raw);
-    await recordAudit(services, actor, {
-      action: AuditAction.CATEGORY_TEMPLATE_SET,
-      targetType: 'сфера',
-      targetId: category.code,
-      summary: category.answerTemplate
-        ? `Для сферы ${category.code} обновлён шаблон ответа`
-        : `Для сферы ${category.code} удалён шаблон ответа`,
-    });
-    await reply(
-      services,
-      chatId,
-      isDialog,
-      actor,
-      category.answerTemplate ? `Шаблон сферы ${category.code} обновлён.` : `Шаблон сферы ${category.code} удалён.`,
-    );
   },
 
   role: async ({ services, actor, chatId, isDialog, args }) => {
