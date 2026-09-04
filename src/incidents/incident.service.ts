@@ -15,7 +15,7 @@ import type { IncidentRepository, IncidentWithRelations } from './incident.repos
 const log = moduleLogger('incidents');
 
 export type CreateIncidentInput = {
-  requester: { maxUserId: bigint; name: string; username?: string | null };
+  requester: { maxUserId: bigint; name: string; phone: string; username?: string | null };
   text: string;
   userSelectedCategoryId?: string | null;
   problemMunicipalityCode?: string | null;
@@ -23,6 +23,45 @@ export type CreateIncidentInput = {
   problemLocality?: string | null;
   media?: IncomingMedia[];
 };
+
+export function normaliseRequesterName(raw: string): string {
+  const value = normaliseIncidentText(raw).replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
+  const parts = value.split(' ').filter(Boolean);
+  if (
+    unicodeLength(value) < 5 ||
+    unicodeLength(value) > 150 ||
+    parts.length < 2 ||
+    !/^[\p{L}\s'\-’]+$/u.test(value)
+  ) {
+    throw new ValidationError(
+      'Укажите фамилию и имя текстом. Отчество — если оно есть.',
+      { reason: 'requester_name' },
+    );
+  }
+  return value;
+}
+
+export function normaliseRequesterPhone(raw: string): string {
+  const value = raw.trim();
+  if (!/^[+\d\s().-]+$/.test(value)) {
+    throw new ValidationError('Укажите номер телефона, например: +7 900 123-45-67.', {
+      reason: 'requester_phone',
+    });
+  }
+  let digits = value.replace(/\D/g, '');
+  if (!value.startsWith('+')) {
+    if (digits.length === 10) digits = `7${digits}`;
+    else if (digits.length === 11 && digits.startsWith('8')) digits = `7${digits.slice(1)}`;
+  }
+  if (digits.length < 10 || digits.length > 15) {
+    throw new ValidationError('Укажите номер телефона, например: +7 900 123-45-67.', {
+      reason: 'requester_phone',
+    });
+  }
+  return digits.length === 11 && digits.startsWith('7')
+    ? `+7 ${digits.slice(1, 4)} ${digits.slice(4, 7)}-${digits.slice(7, 9)}-${digits.slice(9, 11)}`
+    : `+${digits}`;
+}
 
 export const REJECTION_MESSAGES = {
   banned: 'Отправка обращений для вашей учётной записи временно недоступна.',
@@ -108,6 +147,8 @@ export class IncidentService {
   async create(input: CreateIncidentInput): Promise<Incident> {
     const config = getConfig();
     const { text } = this.validateSubmission(input.text, input.media ?? []);
+    const requesterName = normaliseRequesterName(input.requester.name);
+    const requesterPhone = normaliseRequesterPhone(input.requester.phone);
     await this.assertNotBanned(input.requester.maxUserId);
 
     const now = new Date();
@@ -138,7 +179,8 @@ export class IncidentService {
         publicCode,
         requesterId: user.id,
         requesterMaxUserId: user.maxUserId,
-        requesterName: user.displayName,
+        requesterName,
+        requesterPhone,
         text,
         userSelectedCategoryId: input.userSelectedCategoryId ?? null,
         problemMunicipalityCode: input.problemMunicipalityCode ?? null,

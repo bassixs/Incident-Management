@@ -3,6 +3,8 @@ import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
 
 import { HistoryAction } from '../../src/incidents/incident-history.service';
 import { handleIncidentCallback } from '../../src/bot/callbacks/incident.callbacks';
+import { handleRequesterMessage } from '../../src/bot/handlers/requester.handler';
+import type { Message } from '../../src/max/max-types';
 import { ConflictError, RateLimitError } from '../../src/utils/errors';
 import {
   actorFor,
@@ -37,12 +39,71 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     harness = await createHarness(prisma);
   });
 
-  const requesterA = () => ({ maxUserId: TEST_USERS.requesterA, name: 'Иван Иванов' });
-  const requesterB = () => ({ maxUserId: TEST_USERS.requesterB, name: 'Пётр Петров' });
+  const requesterA = () => ({ maxUserId: TEST_USERS.requesterA, name: 'Иван Иванов', phone: '+7 900 111-22-33' });
+  const requesterB = () => ({ maxUserId: TEST_USERS.requesterB, name: 'Пётр Петров', phone: '+7 900 444-55-66' });
 
   async function facility() {
     return (await harness.services.responsibleGroups.findByCode(CATEGORY_CODES.facility))!;
   }
+
+  function requesterMessage(text: string): Message {
+    return {
+      sender: { user_id: Number(TEST_USERS.requesterA), name: 'Профиль MAX', username: null },
+      recipient: { chat_id: Number(TEST_USERS.requesterA), chat_type: 'dialog' },
+      body: { mid: `mid-${text}`, text, attachments: null },
+    } as unknown as Message;
+  }
+
+  it('requires and stores full name and phone before an incident is created', async () => {
+    const actor = await actorFor(prisma, TEST_USERS.requesterA, 'Профиль MAX', []);
+    await harness.services.sessions.start({
+      maxUserId: actor.maxUserId,
+      chatId: actor.maxUserId,
+      type: 'WAITING_REQUESTER_NAME',
+    });
+
+    await handleRequesterMessage(
+      harness.services,
+      actor,
+      actor.maxUserId,
+      requesterMessage('Иванов Иван Иванович'),
+    );
+    expect((await harness.services.sessions.find(actor.maxUserId, actor.maxUserId))?.type).toBe(
+      'WAITING_REQUESTER_PHONE',
+    );
+
+    await handleRequesterMessage(harness.services, actor, actor.maxUserId, requesterMessage('телефона нет'));
+    expect((await harness.services.sessions.find(actor.maxUserId, actor.maxUserId))?.type).toBe(
+      'WAITING_REQUESTER_PHONE',
+    );
+    expect(await prisma.incident.count()).toBe(0);
+
+    await handleRequesterMessage(harness.services, actor, actor.maxUserId, requesterMessage('8 (900) 123-45-67'));
+    const selection = await harness.services.sessions.find(actor.maxUserId, actor.maxUserId);
+    expect(selection?.type).toBe('WAITING_INCIDENT_SELECTION');
+    expect(harness.services.sessions.readData(selection!).requesterPhone).toBe('+7 900 123-45-67');
+
+    await harness.services.sessions.start({
+      maxUserId: actor.maxUserId,
+      chatId: actor.maxUserId,
+      type: 'WAITING_INCIDENT_TEXT',
+      data: {
+        ...harness.services.sessions.readData(selection!),
+        problemMunicipalityCode: 'KALUGA_CITY',
+        problemMunicipalityName: 'Город Калуга',
+      },
+    });
+    await handleRequesterMessage(
+      harness.services,
+      actor,
+      actor.maxUserId,
+      requesterMessage('Не работает фонарь.'),
+    );
+
+    const incident = await prisma.incident.findFirstOrThrow();
+    expect(incident.requesterName).toBe('Иванов Иван Иванович');
+    expect(incident.requesterPhone).toBe('+7 900 123-45-67');
+  });
 
   // --- §11 daily limit -----------------------------------------------------
 

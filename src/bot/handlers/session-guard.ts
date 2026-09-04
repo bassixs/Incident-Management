@@ -5,6 +5,9 @@ import { sessionConflictKeyboard } from '../keyboards';
 import type { ResolvedActor } from './helpers';
 
 export const SESSION_PROMPTS: Record<SessionType, string> = {
+  [SessionType.WAITING_REQUESTER_NAME]: 'Ожидается ФИО заявителя.',
+  [SessionType.WAITING_REQUESTER_PHONE]: 'Ожидается номер телефона заявителя.',
+  [SessionType.WAITING_INCIDENT_SELECTION]: 'Ожидается выбор темы или территории кнопками.',
   [SessionType.WAITING_INCIDENT_TEXT]: 'Ожидается текст обращения.',
   [SessionType.WAITING_CUSTOM_LOCALITY]: 'Ожидается название населённого пункта.',
   [SessionType.WAITING_REJECTION_REASON]: 'Ожидается причина отклонения.',

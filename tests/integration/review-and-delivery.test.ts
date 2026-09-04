@@ -40,7 +40,7 @@ describeIntegration('review, revision and delivery (PostgreSQL)', () => {
   /** Register → distribute → answer, i.e. everything up to WAITING_REVIEW. */
   async function incidentAwaitingReview(requesterMaxUserId: bigint, text: string, answerText: string) {
     const incident = await harness.services.incidents.create({
-      requester: { maxUserId: requesterMaxUserId, name: `User ${requesterMaxUserId}` },
+      requester: { maxUserId: requesterMaxUserId, name: 'Иван Иванов', phone: '+7 900 111-22-33' },
       text,
     });
     const category = (await harness.services.responsibleGroups.findByCode(CATEGORY_CODES.facility))!;
@@ -53,7 +53,7 @@ describeIntegration('review, revision and delivery (PostgreSQL)', () => {
 
   it('lets a dispatcher answer for Kaluga Region without review', async () => {
     const incident = await harness.services.incidents.create({
-      requester: { maxUserId: TEST_USERS.requesterA, name: 'Заявитель' },
+      requester: { maxUserId: TEST_USERS.requesterA, name: 'Иван Иванов', phone: '+7 900 111-22-33' },
       text: 'Общий вопрос по области',
       problemMunicipalityCode: 'KALUGA_REGION',
       problemMunicipalityName: 'Калужская область (общий вопрос)',

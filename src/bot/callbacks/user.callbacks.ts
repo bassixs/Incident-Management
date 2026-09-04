@@ -34,6 +34,7 @@ import {
   municipalityPromptText,
   myIncidentsText,
   personalDataConsentText,
+  requesterNamePromptText,
   rulesText,
 } from '../views/cards';
 import type { ResolvedActor } from '../handlers/helpers';
@@ -196,6 +197,7 @@ export async function handleUserCallback(
 
     case 'location-page': {
       if (!context.messageId) return undefined;
+      await requireContactDraft(services, actor.maxUserId, context.chatId);
       const [categoryToken, pageToken] = parseLocationArgument(payload.argument, 2);
       const selectedCategoryId = await requireActiveCategory(services, categoryToken);
       const page = Number.parseInt(pageToken, 10);
@@ -214,6 +216,7 @@ export async function handleUserCallback(
     /** Paging the сфера picker: rewrite the same message, no new ones. */
     case 'page': {
       if (!context.messageId) return undefined;
+      await requireContactDraft(services, actor.maxUserId, context.chatId);
       const categories = await services.categories.listActive();
       const page = Number.parseInt(payload.argument ?? '0', 10);
       await services.messages.editCardKeyboard(
@@ -225,6 +228,7 @@ export async function handleUserCallback(
     }
 
     case 'category': {
+      const contact = await requireContactDraft(services, actor.maxUserId, context.chatId);
       const raw = payload.argument;
       let selectedCategoryId: string | null = null;
       let chosenName = 'не указана';
@@ -247,6 +251,13 @@ export async function handleUserCallback(
         await services.messages.finalizeCard(context.messageId, `Сфера обращения: ${chosenName}`);
       }
 
+      await services.sessions.start({
+        maxUserId: actor.maxUserId,
+        chatId: context.chatId ?? actor.maxUserId,
+        type: SessionType.WAITING_INCIDENT_SELECTION,
+        data: { ...contact, selectedCategoryId },
+      });
+
       await services.messages.send(target, {
         text: municipalityPromptText(PROBLEM_MUNICIPALITIES.length),
         keyboard: requesterMunicipalityKeyboard(selectedCategoryId, PROBLEM_MUNICIPALITIES, 0),
@@ -256,6 +267,7 @@ export async function handleUserCallback(
     }
 
     case 'municipality': {
+      const contact = await requireContactDraft(services, actor.maxUserId, context.chatId);
       const [categoryToken, municipalityCode] = parseLocationArgument(payload.argument, 2);
       const selectedCategoryId = await requireActiveCategory(services, categoryToken);
       const municipality = findProblemMunicipality(municipalityCode);
@@ -269,6 +281,17 @@ export async function handleUserCallback(
       }
 
       if (municipality.localities.length > 0) {
+        await services.sessions.start({
+          maxUserId: actor.maxUserId,
+          chatId: context.chatId ?? actor.maxUserId,
+          type: SessionType.WAITING_INCIDENT_SELECTION,
+          data: {
+            ...contact,
+            selectedCategoryId,
+            problemMunicipalityCode: municipality.code,
+            problemMunicipalityName: municipality.name,
+          },
+        });
         await services.messages.send(target, {
           text: localityPromptText(municipality.name),
           keyboard: requesterLocalityKeyboard(selectedCategoryId, municipality),
@@ -277,6 +300,7 @@ export async function handleUserCallback(
       }
 
       await startIncidentTextSession(services, actor.maxUserId, context.chatId, {
+        ...contact,
         selectedCategoryId,
         problemMunicipalityCode: municipality.code,
         problemMunicipalityName: municipality.name,
@@ -287,6 +311,7 @@ export async function handleUserCallback(
     }
 
     case 'locality': {
+      const contact = await requireContactDraft(services, actor.maxUserId, context.chatId);
       const [categoryToken, municipalityCode, localityCode] = parseLocationArgument(payload.argument, 3);
       const selectedCategoryId = await requireActiveCategory(services, categoryToken);
       const municipality = findProblemMunicipality(municipalityCode);
@@ -306,6 +331,7 @@ export async function handleUserCallback(
           chatId: context.chatId ?? actor.maxUserId,
           type: SessionType.WAITING_CUSTOM_LOCALITY,
           data: {
+            ...contact,
             selectedCategoryId,
             problemMunicipalityCode: municipality.code,
             problemMunicipalityName: municipality.name,
@@ -328,6 +354,7 @@ export async function handleUserCallback(
         );
       }
       await startIncidentTextSession(services, actor.maxUserId, context.chatId, {
+        ...contact,
         selectedCategoryId,
         problemMunicipalityCode: municipality.code,
         problemMunicipalityName: municipality.name,
@@ -368,11 +395,27 @@ async function beginNewIncident(context: UserCallbackContext): Promise<void> {
     return;
   }
   await services.sessions.clear(actor.maxUserId, context.chatId ?? actor.maxUserId);
-  const categories = await services.categories.listActive();
-  await services.messages.send(target, {
-    text: categoryPromptText(categories.length),
-    keyboard: requesterCategoryKeyboard(categories, 0),
+  await services.sessions.start({
+    maxUserId: actor.maxUserId,
+    chatId: context.chatId ?? actor.maxUserId,
+    type: SessionType.WAITING_REQUESTER_NAME,
   });
+  await services.messages.send(target, {
+    text: requesterNamePromptText(),
+  });
+}
+
+async function requireContactDraft(
+  services: AppServices,
+  maxUserId: bigint,
+  chatId: bigint | undefined,
+): Promise<{ requesterName: string; requesterPhone: string }> {
+  const session = await services.sessions.find(maxUserId, chatId ?? maxUserId);
+  const data = session ? services.sessions.readData(session) : {};
+  if (!data.requesterName || !data.requesterPhone) {
+    throw new ValidationError('Черновик устарел. Начните создание обращения заново.');
+  }
+  return { requesterName: data.requesterName, requesterPhone: data.requesterPhone };
 }
 
 function parseLocationArgument(raw: string | undefined, expectedParts: 2): [string, string];
@@ -399,6 +442,8 @@ async function startIncidentTextSession(
   maxUserId: bigint,
   chatId: bigint | undefined,
   data: {
+    requesterName: string;
+    requesterPhone: string;
     selectedCategoryId: string | null;
     problemMunicipalityCode: string;
     problemMunicipalityName: string;

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { IncidentService, REJECTION_MESSAGES } from '../../src/incidents/incident.service';
+import {
+  IncidentService,
+  REJECTION_MESSAGES,
+  normaliseRequesterName,
+  normaliseRequesterPhone,
+} from '../../src/incidents/incident.service';
 import type { IncomingMedia } from '../../src/media/media.service';
 import { ValidationError } from '../../src/utils/errors';
 import { unicodeLength } from '../../src/utils/text';
@@ -73,5 +78,26 @@ describe('incident submission validation', () => {
 
   it('requires text even when a photo is attached', () => {
     expect(() => service.validateSubmission('   ', [image])).toThrow(ValidationError);
+  });
+});
+
+describe('mandatory requester contacts', () => {
+  it('requires a surname and name', () => {
+    expect(normaliseRequesterName('  Иванов   Иван Иванович  ')).toBe('Иванов Иван Иванович');
+    expect(() => normaliseRequesterName('')).toThrow(ValidationError);
+    expect(() => normaliseRequesterName('Иван')).toThrow(ValidationError);
+    expect(() => normaliseRequesterName('Иванов 123')).toThrow(ValidationError);
+  });
+
+  it('normalises common Russian phone formats', () => {
+    expect(normaliseRequesterPhone('+7 (900) 123-45-67')).toBe('+7 900 123-45-67');
+    expect(normaliseRequesterPhone('8 900 123 45 67')).toBe('+7 900 123-45-67');
+    expect(normaliseRequesterPhone('9001234567')).toBe('+7 900 123-45-67');
+  });
+
+  it('rejects a missing or malformed phone', () => {
+    expect(() => normaliseRequesterPhone('')).toThrow(ValidationError);
+    expect(() => normaliseRequesterPhone('12345')).toThrow(ValidationError);
+    expect(() => normaliseRequesterPhone('номер не дам')).toThrow(ValidationError);
   });
 });

@@ -9,6 +9,9 @@ const log = moduleLogger('sessions');
 export { SessionType };
 
 export type SessionData = {
+  /** Mandatory contacts collected for the current requester draft. */
+  requesterName?: string;
+  requesterPhone?: string;
   /** Requester draft: the тема the requester selected, if any. */
   selectedCategoryId?: string | null;
   problemMunicipalityCode?: string;

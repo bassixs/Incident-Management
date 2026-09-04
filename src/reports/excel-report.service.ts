@@ -55,6 +55,7 @@ const COLUMNS: Column[] = [
   { header: 'Дедлайн', width: 20, value: (incident) => formatDateTime(incident.deadlineAt) },
   { header: 'Просрочено', width: 12, value: (incident) => (incident.isOverdue ? 'да' : 'нет') },
   { header: 'Пользователь', width: 28, value: (incident) => incident.requesterName },
+  { header: 'Телефон', width: 20, value: (incident) => incident.requesterPhone ?? '' },
   {
     header: 'MAX ID пользователя',
     width: 20,

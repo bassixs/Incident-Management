@@ -65,6 +65,9 @@ export function distributionCard(incident: IncidentWithRelations): string {
     'Пользователь:',
     incident.requesterName,
     '',
+    'Телефон:',
+    incident.requesterPhone ?? 'не указан',
+    '',
     'Сфера пользователя:',
     incident.userSelectedCategory?.name ?? 'Не знаю',
     '',
@@ -94,6 +97,12 @@ export function distributionResolvedNotice(
     'Ответственная группа:',
     group.name,
     '',
+    'Заявитель:',
+    incident.requesterName,
+    '',
+    'Телефон:',
+    incident.requesterPhone ?? 'не указан',
+    '',
     'Распределил:',
     dispatcherName,
   ].join('\n');
@@ -109,6 +118,12 @@ export function sectorCard(incident: IncidentWithRelations, group: ResponsibleGr
     '',
     'Ответственная группа:',
     group.name,
+    '',
+    'Заявитель:',
+    incident.requesterName,
+    '',
+    'Телефон:',
+    incident.requesterPhone ?? 'не указан',
     '',
     'Территория проблемы:',
     problemLocationText(incident),
@@ -142,6 +157,12 @@ export function reviewCard(
     '',
     'Ответственная группа:',
     group?.name ?? '—',
+    '',
+    'Заявитель:',
+    incident.requesterName,
+    '',
+    'Телефон:',
+    incident.requesterPhone ?? 'не указан',
     '',
     'Территория проблемы:',
     problemLocationText(incident),
@@ -260,6 +281,9 @@ export function incidentLookupCard(incident: IncidentWithRelations): string {
     '',
     'Автор:',
     `${incident.requesterName} (${incident.requesterMaxUserId.toString()})`,
+    '',
+    'Телефон:',
+    incident.requesterPhone ?? 'не указан',
   ].join('\n');
 }
 
@@ -269,6 +293,7 @@ export function rulesText(): string {
   return [
     'Правила подачи обращения:',
     '',
+    '• фамилия, имя и номер телефона обязательны;',
     '• одно сообщение = одно обращение;',
     `• максимум ${config.INCIDENT_MAX_LENGTH} символов;`,
     `• не более ${config.DAILY_INCIDENT_LIMIT} обращений в день;`,
@@ -357,6 +382,27 @@ export function legalAcceptanceCompleteText(): string {
     'Спасибо. Оба подтверждения сохранены.',
     '',
     'Теперь можно создать обращение. Если документы существенно изменятся, бот попросит подтвердить новую редакцию.',
+  ].join('\n');
+}
+
+export function requesterNamePromptText(): string {
+  return [
+    'Шаг 1. Укажите ваши фамилию и имя.',
+    '',
+    'Отчество — если оно есть.',
+    'Отправьте ФИО одним текстовым сообщением.',
+    '',
+    'Это обязательное поле.',
+  ].join('\n');
+}
+
+export function requesterPhonePromptText(): string {
+  return [
+    'Шаг 2. Укажите номер телефона.',
+    '',
+    'Например: +7 900 123-45-67.',
+    '',
+    'Это обязательное поле.',
   ].join('\n');
 }
 

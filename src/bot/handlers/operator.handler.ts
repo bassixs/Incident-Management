@@ -52,6 +52,9 @@ export async function handleOperatorMessage(
         break;
       case SessionType.WAITING_INCIDENT_TEXT:
       case SessionType.WAITING_CUSTOM_LOCALITY:
+      case SessionType.WAITING_REQUESTER_NAME:
+      case SessionType.WAITING_REQUESTER_PHONE:
+      case SessionType.WAITING_INCIDENT_SELECTION:
         // A requester draft leaking into a working chat: ignore it.
         await services.sessions.clear(actor.maxUserId, chatId);
         break;

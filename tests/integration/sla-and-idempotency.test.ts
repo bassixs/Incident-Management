@@ -39,7 +39,7 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
 
   async function routedIncident(text: string) {
     const incident = await harness.services.incidents.create({
-      requester: { maxUserId: TEST_USERS.requesterA, name: 'Иван Иванов' },
+      requester: { maxUserId: TEST_USERS.requesterA, name: 'Иван Иванов', phone: '+7 900 111-22-33' },
       text,
     });
     const category = (await harness.services.responsibleGroups.findByCode(CATEGORY_CODES.facility))!;
@@ -130,7 +130,7 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
   });
 
   it('does not create a second incident when the same message arrives twice', async () => {
-    const requester = { maxUserId: TEST_USERS.requesterB, name: 'Пётр' } as const;
+    const requester = { maxUserId: TEST_USERS.requesterB, name: 'Пётр Петров', phone: '+7 900 444-55-66' } as const;
     await harness.services.incidents.create({ requester, text: 'Единственное обращение' });
     expect(await prisma.incident.count()).toBe(1);
 
@@ -156,7 +156,7 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
     const created = await Promise.all(
       Array.from({ length: 5 }, (_, index) =>
         harness.services.incidents.create({
-          requester: { maxUserId: BigInt(6000 + index), name: `User ${index}` },
+          requester: { maxUserId: BigInt(6000 + index), name: 'Тестовый Пользователь', phone: `+7 901 000-00-0${index}` },
           text: `Обращение ${index}`,
         }),
       ),

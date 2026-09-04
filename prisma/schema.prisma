@@ -39,6 +39,9 @@ enum AttachmentType {
 }
 
 enum SessionType {
+  WAITING_REQUESTER_NAME
+  WAITING_REQUESTER_PHONE
+  WAITING_INCIDENT_SELECTION
   WAITING_INCIDENT_TEXT
   WAITING_CUSTOM_LOCALITY
   WAITING_REJECTION_REASON
@@ -177,6 +180,8 @@ model Incident {
   requester          User   @relation("IncidentRequester", fields: [requesterId], references: [id])
   requesterMaxUserId BigInt
   requesterName      String
+  /// Null only for legacy incidents created before mandatory contact collection.
+  requesterPhone     String?
 
   text String
 
