@@ -6,7 +6,7 @@ import { acquireAdvisoryLock, TRANSACTION_OPTIONS } from '../database/prisma';
 import type { IncomingMedia, MediaService, StoredMedia } from '../media/media.service';
 import type { UserService } from '../users/user.service';
 import { computeDeadline, dayBoundaries } from '../utils/datetime';
-import { RateLimitError, ValidationError } from '../utils/errors';
+import { ConflictError, RateLimitError, ValidationError } from '../utils/errors';
 import { incidentLogFields, moduleLogger } from '../utils/logger';
 import { normaliseIncidentText, unicodeLength } from '../utils/text';
 import { HistoryAction, type IncidentHistoryService } from './incident-history.service';
@@ -259,6 +259,59 @@ export class IncidentService {
 
   async listForRequester(maxUserId: bigint, take = getConfig().MY_INCIDENTS_LIMIT): Promise<Incident[]> {
     return this.repository.listForRequester(maxUserId, take);
+  }
+
+  /**
+   * Store the requester's first score for a delivered final answer.
+   *
+   * The guarded UPDATE is intentionally atomic: two rapid button presses can
+   * never overwrite each other, and a forged callback cannot rate somebody
+   * else's incident or an answer that has not actually been delivered.
+   */
+  async rateAnswer(incidentId: string, requesterMaxUserId: bigint, rating: number): Promise<Incident> {
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      throw new ValidationError('Оценка должна быть целым числом от 1 до 5.');
+    }
+
+    const ratedAt = new Date();
+    const saved = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.incident.updateMany({
+        where: {
+          id: incidentId,
+          requesterMaxUserId,
+          status: IncidentStatus.RESOLVED,
+          responseRating: null,
+          answers: { some: { deliveredAt: { not: null } } },
+        },
+        data: { responseRating: rating, ratedAt },
+      });
+      if (result.count !== 1) return false;
+
+      await this.history.record(
+        {
+          incidentId,
+          action: HistoryAction.ANSWER_RATED,
+          actorMaxUserId: requesterMaxUserId,
+          actorRole: 'REQUESTER',
+          metadata: { rating },
+        },
+        tx,
+      );
+      return true;
+    });
+
+    if (!saved) {
+      const incident = await this.prisma.incident.findFirst({
+        where: { id: incidentId, requesterMaxUserId },
+        select: { responseRating: true },
+      });
+      if (incident?.responseRating !== null && incident?.responseRating !== undefined) {
+        throw new ConflictError(`Вы уже оценили этот ответ на ${incident.responseRating} из 5.`);
+      }
+      throw new ValidationError('Оценить можно только полученный ответ по своему обращению.');
+    }
+
+    return this.prisma.incident.findUniqueOrThrow({ where: { id: incidentId } });
   }
 
   async setDistributionMessageId(incidentId: string, messageId: string | undefined): Promise<void> {

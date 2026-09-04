@@ -15,6 +15,7 @@ const ACTION_LABELS: Record<string, string> = {
   ANSWER_APPROVED: 'Ответ согласован',
   ANSWER_SENT_DIRECT: 'Ответ отправлен без согласования',
   ANSWER_SENT: 'Ответ доставлен заявителю',
+  ANSWER_RATED: 'Заявитель оценил ответ',
   INCIDENT_REJECTED: 'Обращение отклонено',
   USER_BANNED: 'Автор обращения заблокирован',
   USER_UNBANNED: 'Блокировка автора снята',
@@ -87,6 +88,9 @@ function historyDetails(action: string, metadata: Record<string, unknown>): stri
   if (metadata.reason) details.push(`Причина: ${String(metadata.reason)}`);
   if (metadata.targetMaxUserId) details.push(`Пользователь: ${String(metadata.targetMaxUserId)}`);
   if (metadata.deadlineAt) details.push(`Дедлайн: ${String(metadata.deadlineAt)}`);
+  if (action === 'ANSWER_RATED' && metadata.rating) {
+    details.push(`Оценка: ${String(metadata.rating)} из 5`);
+  }
   if (action === 'DELIVERY_FAILED') details.push('Подробности доступны через /delivery_errors.');
   return details;
 }

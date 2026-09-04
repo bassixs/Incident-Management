@@ -233,6 +233,8 @@ export function finalAnswerToRequester(
     '',
     'Дата ответа:',
     formatDate(answeredAt),
+    '',
+    'Оцените ответ по шкале от 1 до 5, где 1 — совсем не помог, а 5 — полностью помог.',
   ].join('\n');
 }
 

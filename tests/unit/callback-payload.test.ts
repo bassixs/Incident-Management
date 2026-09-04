@@ -49,6 +49,11 @@ describe('callback payloads', () => {
       action: 'draft-field',
       argument: 'phone',
     });
+    expect(parseCallbackPayload(userCallback('rate-answer', `${INCIDENT_ID}~5`))).toEqual({
+      kind: 'user',
+      action: 'rate-answer',
+      argument: `${INCIDENT_ID}~5`,
+    });
   });
 
   it('round-trips report period buttons', () => {
@@ -69,5 +74,6 @@ describe('callback payloads', () => {
 
   it('keeps payloads well under the MAX button payload budget', () => {
     expect(incidentCallback('assign-category', INCIDENT_ID, CATEGORY_ID).length).toBeLessThan(256);
+    expect(userCallback('rate-answer', `${INCIDENT_ID}~5`).length).toBeLessThan(256);
   });
 });

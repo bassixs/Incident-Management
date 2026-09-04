@@ -1,7 +1,7 @@
 import { SessionType } from '@prisma/client';
 
 import type { AppServices } from '../../app/container';
-import type { CallbackPayload } from '../../max/callback-payload';
+import { isUuid, type CallbackPayload } from '../../max/callback-payload';
 import { REJECTION_MESSAGES, dailyLimitMessage } from '../../incidents/incident.service';
 import {
   PROBLEM_MUNICIPALITIES,
@@ -133,6 +133,21 @@ export async function handleUserCallback(
       }
       await beginNewIncident(context);
       return undefined;
+    }
+
+    case 'rate-answer': {
+      const [incidentId, rawRating, extra] = (payload.argument ?? '').split('~');
+      const rating = Number(rawRating);
+      if (!incidentId || !isUuid(incidentId) || extra !== undefined || !Number.isInteger(rating)) {
+        throw new ValidationError('Кнопка оценки устарела.');
+      }
+      const incident = await services.incidents.rateAnswer(incidentId, actor.maxUserId, rating);
+      await services.messages.send(target, {
+        text: `Спасибо! Вы оценили ответ по обращению ${incident.publicCode} на ${rating} из 5.`,
+        keyboard: mainMenuKeyboard(),
+        delivery: { dedupeKey: `rating-confirmation:${incident.id}` },
+      });
+      return `Оценка ${rating} из 5 сохранена`;
     }
 
     case 'legal-continue': {

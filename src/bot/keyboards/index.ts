@@ -210,6 +210,15 @@ export function incidentDraftPhotoKeyboard(hasPhoto: boolean): Button[][] {
   ];
 }
 
+/** One immutable requester score for a delivered final answer. */
+export function answerRatingKeyboard(incidentId: string): Button[][] {
+  return [[1, 2, 3, 4, 5].map((rating) =>
+    button.callback(String(rating), userCallback('rate-answer', `${incidentId}~${rating}`), {
+      intent: rating >= 4 ? 'positive' : 'default',
+    }),
+  )];
+}
+
 /** Buttons under the distribution-chat card (§16). */
 export function distributionKeyboard(incidentId: string): Button[][] {
   return [

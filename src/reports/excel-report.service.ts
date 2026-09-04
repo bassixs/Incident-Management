@@ -27,6 +27,11 @@ const COLUMNS: Column[] = [
   { header: 'Обращение', width: 60, value: (incident) => incident.text },
   { header: 'Ответ', width: 60, value: (incident) => finalAnswerText(incident) },
   {
+    header: 'Оценка ответа (1–5)',
+    width: 20,
+    value: (incident) => incident.responseRating ?? '',
+  },
+  {
     header: 'Категория пользователя',
     width: 24,
     value: (incident) => incident.userSelectedCategory?.name ?? 'Не знаю',

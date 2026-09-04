@@ -97,6 +97,19 @@ describe('RequesterDeliveryService', () => {
     expect(messages.toUser(TEST_USERS.requesterA)[0]!.message.label).toBe('№ INC-20260823-0001');
   });
 
+  it('offers a one-to-five rating on the delivered answer', async () => {
+    await service.deliverAnswer('incident-a', 'answer-a', 'текст ответа');
+    const keyboard = messages.toUser(TEST_USERS.requesterA)[0]!.message.keyboard!;
+    expect(keyboard.flat().map((button) => button.text)).toEqual(['1', '2', '3', '4', '5']);
+    expect(keyboard.flat().map((button) => 'payload' in button ? button.payload : undefined)).toEqual([
+      'user:rate-answer:incident-a~1',
+      'user:rate-answer:incident-a~2',
+      'user:rate-answer:incident-a~3',
+      'user:rate-answer:incident-a~4',
+      'user:rate-answer:incident-a~5',
+    ]);
+  });
+
   it('refuses an answer that belongs to a different incident', async () => {
     await expect(service.deliverAnswer('incident-a', 'answer-b', 'подмена')).rejects.toBeInstanceOf(
       NotFoundError,

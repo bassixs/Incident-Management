@@ -1,8 +1,9 @@
 import { AnswerStatus, IncidentStatus, UserRole, type PrismaClient } from '@prisma/client';
+import ExcelJS from 'exceljs';
 import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
 
 import { HistoryAction } from '../../src/incidents/incident-history.service';
-import { ConflictError } from '../../src/utils/errors';
+import { ConflictError, ValidationError } from '../../src/utils/errors';
 import {
   actorFor,
   CATEGORY_CODES,
@@ -113,6 +114,50 @@ describeIntegration('review, revision and delivery (PostgreSQL)', () => {
       text: expect.stringContaining('🟢 ОТРАБОТАНО'),
       mode: 'finalize',
     });
+  });
+
+  it('stores only the requester first rating and includes it in the Excel report', async () => {
+    const { incident } = await incidentAwaitingReview(TEST_USERS.requesterA, 'Текст обращения', 'Итоговый ответ');
+    const approver = await actorFor(prisma, TEST_USERS.approver, 'Согласующий', [UserRole.APPROVER]);
+    await harness.services.review.approve(incident.id, approver);
+
+    const rated = await harness.services.incidents.rateAnswer(incident.id, TEST_USERS.requesterA, 5);
+    expect(rated.responseRating).toBe(5);
+    expect(rated.ratedAt).not.toBeNull();
+    await expect(
+      harness.services.incidents.rateAnswer(incident.id, TEST_USERS.requesterA, 2),
+    ).rejects.toBeInstanceOf(ConflictError);
+    await expect(
+      harness.services.incidents.rateAnswer(incident.id, TEST_USERS.requesterB, 4),
+    ).rejects.toBeInstanceOf(ValidationError);
+    expect(
+      await prisma.incidentHistory.count({
+        where: { incidentId: incident.id, action: HistoryAction.ANSWER_RATED },
+      }),
+    ).toBe(1);
+
+    const report = await harness.services.reports.build({ title: 'за всё время', slug: 'all' });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(report.buffer as never);
+    const sheet = workbook.getWorksheet('Обращения')!;
+    const headers = (sheet.getRow(1).values as unknown[]).map(String);
+    const ratingColumn = headers.indexOf('Оценка ответа (1–5)');
+    expect(ratingColumn).toBeGreaterThan(0);
+    expect(sheet.getRow(2).getCell(ratingColumn).value).toBe(5);
+  });
+
+  it('accepts just one of simultaneous rating button presses', async () => {
+    const { incident } = await incidentAwaitingReview(TEST_USERS.requesterA, 'Текст', 'Ответ');
+    const approver = await actorFor(prisma, TEST_USERS.approver, 'Согласующий', [UserRole.APPROVER]);
+    await harness.services.review.approve(incident.id, approver);
+
+    const results = await Promise.allSettled([
+      harness.services.incidents.rateAnswer(incident.id, TEST_USERS.requesterA, 1),
+      harness.services.incidents.rateAnswer(incident.id, TEST_USERS.requesterA, 5),
+    ]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect([1, 5]).toContain((await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).responseRating);
   });
 
   it('refuses a second approval', async () => {

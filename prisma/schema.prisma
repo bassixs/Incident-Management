@@ -203,6 +203,9 @@ model Incident {
   createdAt  DateTime  @default(now())
   deadlineAt DateTime
   answeredAt DateTime?
+  /// Optional one-time requester score for the delivered final answer.
+  responseRating Int?
+  ratedAt       DateTime?
   updatedAt  DateTime  @updatedAt
 
   // MAX message ids of the cards published in the working chats.
@@ -238,6 +241,7 @@ model Incident {
   @@index([requesterMaxUserId, createdAt])
   @@index([status])
   @@index([status, answeredAt])
+  @@index([responseRating])
   @@index([deadlineAt])
   @@index([assignedGroupId])
   @@index([problemMunicipalityCode])

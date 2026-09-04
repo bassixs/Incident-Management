@@ -1,6 +1,7 @@
 import type { PrismaClient } from '@prisma/client';
 
 import { codeLabel } from '../bot/views/cards';
+import { answerRatingKeyboard } from '../bot/keyboards';
 import { HistoryAction, type IncidentHistoryService } from '../incidents/incident-history.service';
 import type { IncidentRepository, IncidentWithRelations } from '../incidents/incident.repository';
 import { loadOutboundAttachments } from '../media/attachment-loader';
@@ -98,6 +99,7 @@ export class RequesterDeliveryService {
         text,
         label: codeLabel(incident),
         attachments,
+        keyboard: answerRatingKeyboard(incident.id),
         delivery: {
           dedupeKey: `answer:${answer.id}`,
           tracking: { type: 'ANSWER_TO_REQUESTER', incidentId, answerId: answer.id },

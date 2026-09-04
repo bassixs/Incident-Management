@@ -43,6 +43,7 @@ export const USER_ACTIONS = [
   'draft-edit',
   'draft-field',
   'draft-photo',
+  'rate-answer',
   'menu',
 ] as const;
 export type UserAction = (typeof USER_ACTIONS)[number];
