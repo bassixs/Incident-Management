@@ -21,6 +21,11 @@ describe('IncidentStateService', () => {
     expect(state.canTransition(IncidentStatus.REVISION_REQUIRED, IncidentStatus.WAITING_REVIEW)).toBe(true);
   });
 
+  it('allows a review-free group to complete an answer directly', () => {
+    expect(state.canTransition(IncidentStatus.ASSIGNED, IncidentStatus.RESOLVED)).toBe(true);
+    expect(state.canTransition(IncidentStatus.IN_PROGRESS, IncidentStatus.RESOLVED)).toBe(true);
+  });
+
   it('allows rejection only from distribution', () => {
     expect(state.canTransition(IncidentStatus.DISTRIBUTION, IncidentStatus.REJECTED)).toBe(true);
     expect(state.canTransition(IncidentStatus.IN_PROGRESS, IncidentStatus.REJECTED)).toBe(false);
@@ -29,7 +34,6 @@ describe('IncidentStateService', () => {
 
   it('refuses arbitrary jumps', () => {
     expect(state.canTransition(IncidentStatus.DISTRIBUTION, IncidentStatus.RESOLVED)).toBe(false);
-    expect(state.canTransition(IncidentStatus.ASSIGNED, IncidentStatus.RESOLVED)).toBe(false);
     expect(state.canTransition(IncidentStatus.NEW, IncidentStatus.WAITING_REVIEW)).toBe(false);
   });
 

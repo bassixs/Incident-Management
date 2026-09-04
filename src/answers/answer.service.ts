@@ -61,7 +61,8 @@ export class AnswerService {
   }
 
   /**
-   * Store a new answer version and push it to the review chat (§24, §28).
+   * Store a new answer version. Ordinary groups send it to review; the
+   * regional group completes and delivers it immediately.
    *
    * Versioning and the status change happen in one transaction under an
    * advisory lock on the incident, so two responders finishing at the same
@@ -73,7 +74,12 @@ export class AnswerService {
     actor: Actor,
     rawText: string,
     media: IncomingMedia[] = [],
-  ): Promise<{ incident: IncidentWithRelations; answer: IncidentAnswer }> {
+  ): Promise<{
+    incident: IncidentWithRelations;
+    answer: IncidentAnswer;
+    sentDirectly: boolean;
+    deliveryFailed: boolean;
+  }> {
     const { text } = this.validate(rawText, media);
 
     const before = await this.repository.findById(incidentId);
@@ -83,7 +89,10 @@ export class AnswerService {
         `Для ${before.publicCode} сейчас нельзя подготовить ответ (статус: ${before.status}).`,
       );
     }
-    this.state.assertTransition(before.status, IncidentStatus.WAITING_REVIEW, { incidentId });
+    const direct = Boolean(before.assignedGroup?.bypassReview);
+    const targetStatus = direct ? IncidentStatus.RESOLVED : IncidentStatus.WAITING_REVIEW;
+    this.state.assertTransition(before.status, targetStatus, { incidentId });
+    const answeredAt = direct ? new Date() : null;
 
     const answer = await this.prisma.$transaction(async (tx) => {
       await acquireAdvisoryLock(tx, 'incident-answer', incidentId);
@@ -108,13 +117,15 @@ export class AnswerService {
           version,
           text,
           createdByUserId: actor.userId,
-          status: AnswerStatus.WAITING_REVIEW,
+          status: direct ? AnswerStatus.APPROVED : AnswerStatus.WAITING_REVIEW,
+          approvedAt: answeredAt,
         },
       });
 
       const moved = await this.repository.transition(tx, incidentId, SUBMITTABLE, {
-        status: IncidentStatus.WAITING_REVIEW,
+        status: targetStatus,
         currentResponderId: actor.userId,
+        answeredAt,
         // deadlineAt is deliberately absent here and everywhere else after
         // creation: rework must never extend the SLA (§13, §33).
       });
@@ -133,15 +144,25 @@ export class AnswerService {
         tx,
       );
       await this.history.record(
-        {
-          incidentId,
-          action: HistoryAction.SENT_TO_REVIEW,
-          fromStatus: current.status,
-          toStatus: IncidentStatus.WAITING_REVIEW,
-          actorMaxUserId: actor.maxUserId,
-          actorRole: actor.role,
-          metadata: { answerId: created.id, version },
-        },
+        direct
+          ? {
+              incidentId,
+              action: HistoryAction.ANSWER_SENT_DIRECT,
+              fromStatus: current.status,
+              toStatus: IncidentStatus.RESOLVED,
+              actorMaxUserId: actor.maxUserId,
+              actorRole: actor.role,
+              metadata: { answerId: created.id, version, bypassReview: true },
+            }
+          : {
+              incidentId,
+              action: HistoryAction.SENT_TO_REVIEW,
+              fromStatus: current.status,
+              toStatus: IncidentStatus.WAITING_REVIEW,
+              actorMaxUserId: actor.maxUserId,
+              actorRole: actor.role,
+              metadata: { answerId: created.id, version },
+            },
         tx,
       );
 
@@ -155,16 +176,38 @@ export class AnswerService {
         incidentId,
         publicCode: before.publicCode,
         maxUserId: actor.maxUserId,
-        action: HistoryAction.SENT_TO_REVIEW,
+        action: direct ? HistoryAction.ANSWER_SENT_DIRECT : HistoryAction.SENT_TO_REVIEW,
       }),
-      'answer submitted for review',
+      direct ? 'regional answer completed without review' : 'answer submitted for review',
     );
 
     const incident = (await this.repository.findById(incidentId))!;
-    await this.review.publishCard(incidentId, answer.id);
-    await this.sector.notify(incident, `📝 ${incident.publicCode} отправлено на согласование.`);
+    let deliveryFailed = false;
+    if (direct) {
+      try {
+        await this.review.deliverApprovedAnswer(incident, answer);
+      } catch (error) {
+        await this.history.record({
+          incidentId,
+          action: HistoryAction.DELIVERY_FAILED,
+          actorMaxUserId: actor.maxUserId,
+          metadata: { answerId: answer.id, error: error instanceof Error ? error.message : String(error) },
+        });
+        await this.sector.notify(
+          incident,
+          `⚠️ ${incident.publicCode}: ответ подготовлен, но доставить его пользователю не удалось.\n\nПовторите отправку командой /resend ${incident.publicCode}.`,
+        );
+        deliveryFailed = true;
+      }
+      if (!deliveryFailed) {
+        await this.sector.notify(incident, `✅ ${incident.publicCode}: ответ отправлен пользователю без согласования.`);
+      }
+    } else {
+      await this.review.publishCard(incidentId, answer.id);
+      await this.sector.notify(incident, `📝 ${incident.publicCode} отправлено на согласование.`);
+    }
 
-    return { incident, answer };
+    return { incident, answer, sentDirectly: direct, deliveryFailed };
   }
 
   private async attachMedia(answerId: string, media: IncomingMedia[]): Promise<void> {

@@ -44,6 +44,7 @@ export const TEST_CHATS = {
   review: -1002n,
   sector: -1010n,
   otherSector: -1011n,
+  regional: -1012n,
 };
 
 export const TEST_USERS = {

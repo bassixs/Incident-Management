@@ -13,6 +13,7 @@ const ACTION_LABELS: Record<string, string> = {
   SENT_TO_REVIEW: 'Ответ отправлен на согласование',
   REVISION_REQUESTED: 'Ответ возвращён на доработку',
   ANSWER_APPROVED: 'Ответ согласован',
+  ANSWER_SENT_DIRECT: 'Ответ отправлен без согласования',
   ANSWER_SENT: 'Ответ доставлен заявителю',
   INCIDENT_REJECTED: 'Обращение отклонено',
   USER_BANNED: 'Автор обращения заблокирован',

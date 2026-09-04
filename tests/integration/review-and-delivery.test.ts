@@ -6,6 +6,7 @@ import { ConflictError } from '../../src/utils/errors';
 import {
   actorFor,
   CATEGORY_CODES,
+  GROUP_CODES,
   createHarness,
   createTestPrisma,
   describeIntegration,
@@ -49,6 +50,41 @@ describeIntegration('review, revision and delivery (PostgreSQL)', () => {
     const { answer } = await harness.services.answers.submit(incident.id, responder, answerText);
     return { incident, answer, responder, dispatcher };
   }
+
+  it('lets a dispatcher answer for Kaluga Region without review', async () => {
+    const incident = await harness.services.incidents.create({
+      requester: { maxUserId: TEST_USERS.requesterA, name: 'Заявитель' },
+      text: 'Общий вопрос по области',
+      problemMunicipalityCode: 'KALUGA_REGION',
+      problemMunicipalityName: 'Калужская область (общий вопрос)',
+    });
+    const regional = (await harness.services.responsibleGroups.findByCode(GROUP_CODES.regional))!;
+    const dispatcher = await actorFor(prisma, TEST_USERS.dispatcher, 'Диспетчер', [UserRole.DISPATCHER]);
+    await harness.services.distribution.assign(incident.id, regional.id, dispatcher);
+
+    const result = await harness.services.answers.submit(
+      incident.id,
+      dispatcher,
+      'Ответ подготовлен распределителями.',
+    );
+
+    expect(result.sentDirectly).toBe(true);
+    expect(result.deliveryFailed).toBe(false);
+    expect(result.answer.status).toBe(AnswerStatus.APPROVED);
+    expect(result.incident.status).toBe(IncidentStatus.RESOLVED);
+    expect(result.incident.approvedByUserId).toBeNull();
+    expect(harness.messages.toChat(TEST_CHATS.review)).toHaveLength(0);
+    expect(
+      harness.messages
+        .toUser(TEST_USERS.requesterA)
+        .some((entry) => entry.message.text.includes('Ответ подготовлен распределителями.')),
+    ).toBe(true);
+    expect(
+      await prisma.incidentHistory.count({
+        where: { incidentId: incident.id, action: HistoryAction.ANSWER_SENT_DIRECT },
+      }),
+    ).toBe(1);
+  });
 
   it('approves an answer and delivers it to the requester', async () => {
     const { incident } = await incidentAwaitingReview(

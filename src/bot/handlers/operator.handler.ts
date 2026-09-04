@@ -51,6 +51,7 @@ export async function handleOperatorMessage(
         await applyReportPeriod(services, actor, chatId, text);
         break;
       case SessionType.WAITING_INCIDENT_TEXT:
+      case SessionType.WAITING_CUSTOM_LOCALITY:
         // A requester draft leaking into a working chat: ignore it.
         await services.sessions.clear(actor.maxUserId, chatId);
         break;
@@ -138,12 +139,16 @@ async function applyAnswer(
   const incident = await loadIncident(services, incidentId);
   assertResponder(actor, incident, chatId);
 
-  const { answer } = await services.answers.submit(incidentId, actor, text, media);
+  const { answer, sentDirectly, deliveryFailed } = await services.answers.submit(incidentId, actor, text, media);
   await services.sessions.clear(actor.maxUserId, chatId);
   await services.messages.send(
     { chatId },
     {
-      text: `📝 ${incident.publicCode}: ответ (версия ${answer.version}) отправлен на согласование.`,
+      text: deliveryFailed
+        ? `⚠️ ${incident.publicCode}: ответ сохранён, но не доставлен. Повторите командой /resend ${incident.publicCode}.`
+        : sentDirectly
+        ? `✅ ${incident.publicCode}: ответ (версия ${answer.version}) отправлен пользователю без согласования.`
+        : `📝 ${incident.publicCode}: ответ (версия ${answer.version}) отправлен на согласование.`,
       label: codeLabel(incident),
     },
   );

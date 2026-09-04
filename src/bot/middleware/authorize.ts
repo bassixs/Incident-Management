@@ -57,12 +57,16 @@ export function assertResponder(
 ): void {
   if (actor.roles.includes(UserRole.ADMIN)) return;
 
-  const sectorChatId = incident.assignedGroup?.maxChatId ?? null;
+  const group = incident.assignedGroup;
+  const sectorChatId = group?.maxChatId ?? null;
   if (sectorChatId === null) {
     throw new ForbiddenError(`Для сферы обращения ${incident.publicCode} не настроен рабочий чат.`);
   }
   if (chatId === undefined || chatId !== sectorChatId) {
     throw new ForbiddenError('Это действие доступно только в профильном чате этого обращения.');
+  }
+  if (group?.bypassReview && !hasPermission(actor.roles, 'incident.distribute')) {
+    throw new ForbiddenError('В чате «Калужская область» отвечать могут только распределители.');
   }
 }
 

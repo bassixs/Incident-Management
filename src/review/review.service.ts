@@ -1,4 +1,4 @@
-import { AnswerStatus, IncidentStatus, type PrismaClient } from '@prisma/client';
+import { AnswerStatus, type IncidentAnswer, IncidentStatus, type PrismaClient } from '@prisma/client';
 
 import { reviewKeyboard } from '../bot/keyboards';
 import { codeLabel, finalAnswerToRequester, reviewCard } from '../bot/views/cards';
@@ -40,6 +40,23 @@ export class ReviewService {
       throw new AppError('REVIEW_CHAT_ID не настроен.', 'CONFIG_MISSING');
     }
     return chatId;
+  }
+
+  /** Shared delivery path for reviewed and explicitly review-free answers. */
+  async deliverApprovedAnswer(
+    incident: IncidentWithRelations,
+    answer: IncidentAnswer,
+  ): Promise<boolean> {
+    return this.delivery.deliverAnswer(
+      incident.id,
+      answer.id,
+      finalAnswerToRequester(
+        incident,
+        answer,
+        incident.answeredAt ?? answer.approvedAt ?? new Date(),
+        incident.assignedGroup?.authorityName,
+      ),
+    );
   }
 
   async publishCard(incidentId: string, answerId: string): Promise<void> {
@@ -121,11 +138,7 @@ export class ReviewService {
     });
 
     try {
-      await this.delivery.deliverAnswer(
-        incidentId,
-        answer.id,
-        finalAnswerToRequester(incident, answer, answeredAt, incident.assignedGroup?.authorityName),
-      );
+      await this.deliverApprovedAnswer({ ...incident, answeredAt }, { ...answer, approvedAt: answeredAt });
     } catch (error) {
       // The incident stays RESOLVED (it was approved), but the answer is not
       // marked delivered, so /resend can retry without touching the workflow.
@@ -250,16 +263,7 @@ export class ReviewService {
     if (!incident) throw new NotFoundError(`Incident ${incidentId} not found`);
     const answer = [...incident.answers].reverse().find((item) => item.status === AnswerStatus.APPROVED);
     if (!answer) throw new ConflictError(`У ${incident.publicCode} нет согласованного ответа.`);
-    return this.delivery.deliverAnswer(
-      incidentId,
-      answer.id,
-      finalAnswerToRequester(
-        incident,
-        answer,
-        incident.answeredAt ?? answer.approvedAt ?? new Date(),
-        incident.assignedGroup?.authorityName,
-      ),
-    );
+    return this.deliverApprovedAnswer(incident, answer);
   }
 
   private alreadyReviewedMessage(incident: IncidentWithRelations): string {

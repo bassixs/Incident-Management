@@ -76,6 +76,7 @@ export async function createHarness(prisma: PrismaClient): Promise<TestHarness> 
 }
 
 export const CATEGORY_CODES = { facility: 'FACILITY', it: 'IT' } as const;
+export const GROUP_CODES = { ...CATEGORY_CODES, regional: 'REGIONAL' } as const;
 
 export async function seedCategories(prisma: PrismaClient): Promise<void> {
   await prisma.category.createMany({
@@ -110,6 +111,16 @@ export async function seedCategories(prisma: PrismaClient): Promise<void> {
         maxChatId: TEST_CHATS.otherSector,
         answerTemplate: 'Обращение № {{incidentCode}}\n{{result}}',
         sortOrder: 20,
+      },
+      {
+        code: GROUP_CODES.regional,
+        name: 'Калужская область',
+        kind: 'REGIONAL',
+        maxChatId: TEST_CHATS.regional,
+        municipalityCode: 'KALUGA_REGION',
+        authorityName: 'Калужская область',
+        bypassReview: true,
+        sortOrder: 30,
       },
     ],
   });

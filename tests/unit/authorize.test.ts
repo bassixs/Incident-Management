@@ -38,6 +38,11 @@ const incident = {
   assignedGroup: { maxChatId: TEST_CHATS.sector },
 } as unknown as IncidentWithRelations;
 
+const regionalIncident = {
+  publicCode: 'INC-20260823-0002',
+  assignedGroup: { maxChatId: TEST_CHATS.regional, bypassReview: true },
+} as unknown as IncidentWithRelations;
+
 describe('role resolution', () => {
   it('merges env-provided roles with stored ones and always adds REQUESTER', () => {
     expect(resolveRoles(TEST_USERS.dispatcher, [])).toContain(UserRole.DISPATCHER);
@@ -105,6 +110,11 @@ describe('responder actions', () => {
 
   it('let an admin act from anywhere', () => {
     expect(() => assertResponder(admin, incident, TEST_CHATS.otherSector)).not.toThrow();
+  });
+
+  it('allows only dispatchers to answer in the Kaluga Region chat', () => {
+    expect(() => assertResponder(dispatcher, regionalIncident, TEST_CHATS.regional)).not.toThrow();
+    expect(() => assertResponder(responder, regionalIncident, TEST_CHATS.regional)).toThrow(ForbiddenError);
   });
 });
 
