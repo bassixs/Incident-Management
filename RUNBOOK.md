@@ -560,6 +560,52 @@ docker compose exec -T app npm run retention:run
 journalctl -u incident-bot-retention.service -n 100 --no-pager
 ```
 
+Управление автоматическим запуском:
+
+```bash
+# Посмотреть состояние и время следующего запуска
+systemctl status incident-bot-retention.timer --no-pager
+systemctl list-timers incident-bot-retention.timer --all
+
+# Временно остановить автоматическую очистку
+systemctl disable --now incident-bot-retention.timer
+
+# Снова включить автоматическую очистку
+systemctl enable --now incident-bot-retention.timer
+```
+
+Для внепланового запуска через systemd сначала обязательно выполните
+`npm run retention:preview` внутри контейнера и убедитесь, что количество
+найденных обращений ожидаемо. Затем:
+
+```bash
+systemctl start incident-bot-retention.service
+systemctl show incident-bot-retention.service \
+  -p Result -p ExecMainCode -p ExecMainStatus
+journalctl -u incident-bot-retention.service -n 100 --no-pager
+```
+
+Это одноразовая задача, поэтому после завершения состояние сервиса
+`inactive (dead)` является нормальным. Успех подтверждают значения
+`Result=success` и
+`ExecMainStatus=0`, а также отсутствие ошибок в журнале.
+
+Если очистка завершилась с ошибкой:
+
+1. Временно остановите таймер командой
+   `systemctl disable --now incident-bot-retention.timer`, чтобы исключить новый
+   автоматический запуск во время проверки.
+2. Посмотрите причину:
+   `journalctl -u incident-bot-retention.service -n 100 --no-pager`.
+3. Проверьте контейнеры командой `docker compose ps` из `/opt/incident-bot` и
+   устраните указанную в журнале проблему с базой, приложением или хранилищем
+   файлов. Не удаляйте записи или файлы вручную.
+4. Выполните `docker compose exec -T app npm run retention:preview` и проверьте
+   ожидаемое количество объектов.
+5. Запустите `systemctl start incident-bot-retention.service`, убедитесь в
+   `Result=success`, затем верните расписание командой
+   `systemctl enable --now incident-bot-retention.timer`.
+
 То же доступно администратору в закрытом рабочем чате командами
 `/retention_preview` и `/retention_run УДАЛИТЬ`. Ручной запуск записывается в
 `/audit`. Ошибки автоматического запуска отправляются в технический чат,
