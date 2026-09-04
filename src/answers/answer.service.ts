@@ -16,7 +16,7 @@ import type { ReviewService } from '../review/review.service';
 import { ConflictError, NotFoundError, ValidationError } from '../utils/errors';
 import { incidentLogFields, moduleLogger } from '../utils/logger';
 import { isBlank, renderTemplate } from '../utils/text';
-import type { Actor } from '../distribution/distribution.service';
+import type { Actor, DistributionService } from '../distribution/distribution.service';
 
 const log = moduleLogger('answers');
 
@@ -41,6 +41,7 @@ export class AnswerService {
     private readonly media: MediaService,
     private readonly review: ReviewService,
     private readonly sector: SectorService,
+    private readonly distribution: DistributionService,
   ) {}
 
   validate(text: string, media: IncomingMedia[] = []): { text: string } {
@@ -200,17 +201,12 @@ export class AnswerService {
         deliveryFailed = true;
       }
       if (!deliveryFailed) {
+        await this.distribution.markWorked(incident);
         await this.sector.notify(incident, `✅ ${incident.publicCode}: ответ отправлен пользователю без согласования.`);
       }
-      await this.sector.finalizeWorkedCard(
-        incident,
-        actor.displayName,
-        deliveryFailed ? 'delivery-failed' : 'delivered',
-      );
     } else {
       await this.review.publishCard(incidentId, answer.id);
       await this.sector.notify(incident, `📝 ${incident.publicCode} отправлено на согласование.`);
-      await this.sector.finalizeWorkedCard(incident, actor.displayName, 'review');
     }
 
     return { incident, answer, sentDirectly: direct, deliveryFailed };

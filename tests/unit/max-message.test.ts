@@ -19,6 +19,7 @@ type SentMessage = { text: string; attachments?: AttachmentRequest[] };
 function fakeMax() {
   const sent: SentMessage[] = [];
   const edits: Array<{ text: string; attachments?: AttachmentRequest[] }> = [];
+  const deleted: string[] = [];
   let counter = 0;
   const client = {
     async uploadImage(): Promise<AttachmentRequest> {
@@ -40,8 +41,11 @@ function fakeMax() {
     async editMessage(_mid: string, text: string, attachments?: AttachmentRequest[]) {
       edits.push({ text, attachments });
     },
+    async deleteMessage(mid: string) {
+      deleted.push(mid);
+    },
   };
-  return { client, sent, edits };
+  return { client, sent, edits, deleted };
 }
 
 const KEYBOARD = [[{ type: 'callback' as const, text: 'Кнопка', payload: 'noop' }]];
@@ -129,6 +133,15 @@ describe('editing a published card', () => {
 
     expect(edits).toHaveLength(1);
     expect(edits[0]!.attachments).toEqual([]);
+  });
+
+  it('deletes a temporary picker instead of leaving a duplicate card', async () => {
+    const { client, deleted } = fakeMax();
+    const service = new MaxMessageService(client as never);
+
+    await service.deleteCard('picker-mid');
+
+    expect(deleted).toEqual(['picker-mid']);
   });
 });
 

@@ -6,7 +6,13 @@ import {
 } from '@prisma/client';
 
 import { distributionKeyboard } from '../bot/keyboards';
-import { codeLabel, distributionCard, distributionResolvedNotice, rejectionToRequester } from '../bot/views/cards';
+import {
+  codeLabel,
+  distributionCard,
+  distributionResolvedNotice,
+  distributionWorkedNotice,
+  rejectionToRequester,
+} from '../bot/views/cards';
 import { getConfig } from '../config';
 import type { RequesterDeliveryService } from '../delivery/requester-delivery.service';
 import type { ResponsibleGroupService } from '../responsible-groups/responsible-group.service';
@@ -173,6 +179,15 @@ export class DistributionService {
 
     await this.sector.publishCard(incidentId);
     return (await this.repository.findById(incidentId))!;
+  }
+
+  /** Turn the original distribution card green after the answer reaches the requester. */
+  async markWorked(incident: IncidentWithRelations): Promise<void> {
+    if (!incident.distributionMessageId || !incident.assignedGroup) return;
+    await this.messages.finalizeCard(
+      incident.distributionMessageId,
+      distributionWorkedNotice(incident, incident.assignedGroup),
+    );
   }
 
   /** §19 — reject with a mandatory reason and tell the requester. */

@@ -103,8 +103,6 @@ export function distributionResolvedNotice(
 export function sectorCard(incident: IncidentWithRelations, group: ResponsibleGroup): string {
   const photoCount = incident.attachments.filter((item) => item.type === 'IMAGE').length;
   return [
-    '🟡 РАСПРЕДЕЛЕНО',
-    '',
     '📥 НОВОЕ ОБРАЩЕНИЕ',
     '',
     codeLabel(incident),
@@ -291,30 +289,17 @@ export function greetingText(): string {
   ].join('\n');
 }
 
-/** Replaces the actionable sector card after the group has prepared its answer. */
-export function sectorWorkedNotice(
-  incident: Incident,
-  group: ResponsibleGroup,
-  responderName: string,
-  outcome: 'review' | 'delivered' | 'delivery-failed',
-): string {
-  const failed = outcome === 'delivery-failed';
+/** Final state shown only on the original card in the distribution chat. */
+export function distributionWorkedNotice(incident: Incident, group: ResponsibleGroup): string {
   return [
-    failed ? '🟠 ТРЕБУЕТ ВНИМАНИЯ' : '🟢 ОТРАБОТАНО',
+    '🟢 ОТРАБОТАНО',
     '',
     incident.publicCode,
     '',
     'Ответственная группа:',
     group.name,
     '',
-    'Ответ подготовил:',
-    responderName,
-    '',
-    outcome === 'review'
-      ? 'Ответ передан на согласование.'
-      : outcome === 'delivered'
-        ? 'Ответ отправлен пользователю.'
-        : 'Ответ подготовлен, но не доставлен. Используйте /resend.',
+    'Ответ отправлен пользователю.',
   ].join('\n');
 }
 

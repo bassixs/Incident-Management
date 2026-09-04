@@ -92,6 +92,7 @@ describeIntegration('review, revision and delivery (PostgreSQL)', () => {
       'Не работает освещение возле входа.',
       'Освещение восстановлено. Выполнена замена светильника.',
     );
+    await harness.services.incidents.setDistributionMessageId(incident.id, 'distribution-mid');
     const approver = await actorFor(prisma, TEST_USERS.approver, 'Согласующий', [UserRole.APPROVER]);
 
     const resolved = await harness.services.review.approve(incident.id, approver);
@@ -107,6 +108,11 @@ describeIntegration('review, revision and delivery (PostgreSQL)', () => {
     const delivered = harness.messages.toUser(TEST_USERS.requesterA);
     expect(delivered.at(-1)!.message.text).toContain('Получен ответ по вашему обращению');
     expect(delivered.at(-1)!.message.text).toContain(incident.publicCode);
+    expect(harness.messages.edits).toContainEqual({
+      messageId: 'distribution-mid',
+      text: expect.stringContaining('🟢 ОТРАБОТАНО'),
+      mode: 'finalize',
+    });
   });
 
   it('refuses a second approval', async () => {

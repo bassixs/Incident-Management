@@ -175,11 +175,7 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
       { kind: 'incident', action: 'assign-group', incidentId: incident.id, argument: category.id },
     );
 
-    expect(harness.messages.edits).toContainEqual({
-      messageId: 'assignment-picker-mid',
-      text: expect.stringContaining('🟡 РАСПРЕДЕЛЕНО'),
-      mode: 'finalize',
-    });
+    expect(harness.messages.deleted).toContain('assignment-picker-mid');
   });
 
   it('reuses the same picker message when a distribution branch is opened', async () => {
@@ -310,9 +306,6 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     const fresh = await harness.services.repository.findById(incident.id);
     expect(fresh!.status).toBe(IncidentStatus.WAITING_REVIEW);
     expect(harness.messages.toChat(TEST_CHATS.review).length).toBeGreaterThan(0);
-    expect(harness.messages.edits.some((edit) =>
-      edit.mode === 'finalize' && edit.text.startsWith('🟢 ОТРАБОТАНО'),
-    )).toBe(true);
   });
 
   it('lets only one of two concurrent answer submissions through', async () => {

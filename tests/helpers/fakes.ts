@@ -8,6 +8,7 @@ export type RecordedEdit = { messageId: string; text: string; mode: 'text' | 'fi
 export class FakeMessageService {
   readonly sent: RecordedSend[] = [];
   readonly edits: RecordedEdit[] = [];
+  readonly deleted: string[] = [];
 
   async send(target: SendTarget, message: CompositeMessage): Promise<MessageSendResult> {
     this.sent.push({ target, message });
@@ -26,6 +27,11 @@ export class FakeMessageService {
 
   async editCardKeyboard(messageId: string, text: string, _keyboard: Button[][]): Promise<boolean> {
     this.edits.push({ messageId, text, mode: 'keyboard' });
+    return true;
+  }
+
+  async deleteCard(messageId: string): Promise<boolean> {
+    this.deleted.push(messageId);
     return true;
   }
 

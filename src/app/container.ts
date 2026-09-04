@@ -121,20 +121,6 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
     messages,
     media,
   );
-  const review = new ReviewService(
-    prisma,
-    repository,
-    incidents,
-    history,
-    state,
-    responsibleGroups,
-    messages,
-    media,
-    sector,
-    delivery,
-  );
-  const answers = new AnswerService(prisma, repository, history, state, media, review, sector);
-
   const distribution = new DistributionService(
     prisma,
     repository,
@@ -147,6 +133,20 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
     sector,
     delivery,
   );
+  const review = new ReviewService(
+    prisma,
+    repository,
+    incidents,
+    history,
+    state,
+    responsibleGroups,
+    messages,
+    media,
+    sector,
+    delivery,
+    distribution,
+  );
+  const answers = new AnswerService(prisma, repository, history, state, media, review, sector, distribution);
 
   const sla = new SlaService(prisma, repository, history, sector, distribution, sessions);
   const reports = new ExcelReportService(repository);

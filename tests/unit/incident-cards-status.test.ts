@@ -4,8 +4,8 @@ import { describe, expect, it } from 'vitest';
 import {
   distributionCard,
   distributionResolvedNotice,
+  distributionWorkedNotice,
   sectorCard,
-  sectorWorkedNotice,
 } from '../../src/bot/views/cards';
 import type { IncidentWithRelations } from '../../src/incidents/incident.repository';
 
@@ -45,13 +45,13 @@ describe('staff card status markers', () => {
     expect(distributionResolvedNotice(incident, group, 'Диспетчер').startsWith('🟡 РАСПРЕДЕЛЕНО')).toBe(true);
   });
 
-  it('marks the receiving group card as distributed', () => {
-    expect(sectorCard(incident, group).startsWith('🟡 РАСПРЕДЕЛЕНО')).toBe(true);
+  it('does not show distribution markers in the receiving group card', () => {
+    const text = sectorCard(incident, group);
+    expect(text.startsWith('📥 НОВОЕ ОБРАЩЕНИЕ')).toBe(true);
+    expect(text).not.toContain('РАСПРЕДЕЛЕНО');
   });
 
-  it('marks a closed sector card as worked', () => {
-    const text = sectorWorkedNotice(incident, group, 'Ответственный', 'review');
-    expect(text.startsWith('🟢 ОТРАБОТАНО')).toBe(true);
-    expect(text).toContain('Ответ передан на согласование.');
+  it('marks the final distribution card as worked', () => {
+    expect(distributionWorkedNotice(incident, group).startsWith('🟢 ОТРАБОТАНО')).toBe(true);
   });
 });

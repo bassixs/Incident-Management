@@ -4,7 +4,7 @@ import { reviewKeyboard } from '../bot/keyboards';
 import { codeLabel, finalAnswerToRequester, reviewCard } from '../bot/views/cards';
 import { getConfig } from '../config';
 import type { RequesterDeliveryService } from '../delivery/requester-delivery.service';
-import type { Actor } from '../distribution/distribution.service';
+import type { Actor, DistributionService } from '../distribution/distribution.service';
 import { HistoryAction, type IncidentHistoryService } from '../incidents/incident-history.service';
 import type { IncidentStateService } from '../incidents/incident-state.service';
 import type { IncidentRepository, IncidentWithRelations } from '../incidents/incident.repository';
@@ -32,6 +32,7 @@ export class ReviewService {
     private readonly media: MediaService,
     private readonly sector: SectorService,
     private readonly delivery: RequesterDeliveryService,
+    private readonly distribution: DistributionService,
   ) {}
 
   chatId(): bigint {
@@ -161,9 +162,7 @@ export class ReviewService {
       await this.messages.finalizeCard(
         incident.reviewMessageId,
         [
-          '🟢 ОТРАБОТАНО',
-          '',
-          `${incident.publicCode} согласовано и отправлено пользователю.`,
+          `✅ ${incident.publicCode} согласовано и отправлено пользователю.`,
           '',
           'Согласовал:',
           actor.displayName,
@@ -173,6 +172,7 @@ export class ReviewService {
         ].join('\n'),
       );
     }
+    await this.distribution.markWorked(incident);
     await this.sector.notify(incident, `✅ ${incident.publicCode} согласовано и отправлено пользователю.`);
 
     log.info(

@@ -6,7 +6,7 @@ import {
 } from '@prisma/client';
 
 import { revisionKeyboard, sectorKeyboard } from '../bot/keyboards';
-import { codeLabel, revisionCard, sectorCard, sectorWorkedNotice } from '../bot/views/cards';
+import { codeLabel, revisionCard, sectorCard } from '../bot/views/cards';
 import { getConfig } from '../config';
 import { HistoryAction, type IncidentHistoryService } from '../incidents/incident-history.service';
 import type { IncidentStateService } from '../incidents/incident-state.service';
@@ -88,19 +88,6 @@ export class SectorService {
     await this.messages.editCardText(
       incident.sectorMessageId,
       sectorCard(incident, incident.assignedGroup),
-    );
-  }
-
-  /** Close the sector card and remove its stale action buttons after an answer is prepared. */
-  async finalizeWorkedCard(
-    incident: IncidentWithRelations,
-    responderName: string,
-    outcome: 'review' | 'delivered' | 'delivery-failed',
-  ): Promise<void> {
-    if (!incident.sectorMessageId || !incident.assignedGroup) return;
-    await this.messages.finalizeCard(
-      incident.sectorMessageId,
-      sectorWorkedNotice(incident, incident.assignedGroup, responderName, outcome),
     );
   }
 

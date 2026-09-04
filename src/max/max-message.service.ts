@@ -418,6 +418,20 @@ export class MaxMessageService {
     return this.edit(messageId, text, []);
   }
 
+  /** Remove a temporary picker after its choice has been applied. */
+  async deleteCard(messageId: string): Promise<boolean> {
+    try {
+      await this.max.deleteMessage(messageId);
+      return true;
+    } catch (error) {
+      log.warn(
+        { messageId, err: error instanceof Error ? error.message : String(error) },
+        'failed to delete MAX card',
+      );
+      return false;
+    }
+  }
+
   /**
    * Swap the buttons on a message, e.g. paging the сфера picker.
    * The attachment list is replaced, so any media on that message is dropped —

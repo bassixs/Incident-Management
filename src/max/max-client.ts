@@ -112,6 +112,10 @@ export class MaxClient {
     );
   }
 
+  async deleteMessage(messageId: string): Promise<void> {
+    await this.call('deleteMessage', () => this.api.deleteMessage(messageId));
+  }
+
   async answerCallback(callbackId: string, notification?: string): Promise<void> {
     await this.call('answerOnCallback', () =>
       this.api.answerOnCallback(callbackId, notification ? { notification } : {}),

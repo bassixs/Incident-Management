@@ -11,7 +11,7 @@ import {
   assignmentGroupKeyboard,
   type AssignmentBranch,
 } from '../keyboards';
-import { codeLabel, distributionResolvedNotice } from '../views/cards';
+import { codeLabel } from '../views/cards';
 import type { ResolvedActor } from '../handlers/helpers';
 import { ensureFreeSession } from '../handlers/session-guard';
 
@@ -212,12 +212,9 @@ async function completeAssignment(
   const updated = await services.distribution.assign(incident.id, groupId, actor);
 
   // The picker is a separate MAX message from the original incident card.
-  // Close it as well, otherwise its now-stale buttons keep looking active.
+  // Remove it: the original card already shows the final distribution state.
   if (messageId && messageId !== incident.distributionMessageId && updated.assignedGroup) {
-    await services.messages.finalizeCard(
-      messageId,
-      distributionResolvedNotice(updated, updated.assignedGroup, actor.displayName),
-    );
+    await services.messages.deleteCard(messageId);
   }
   return `${updated.publicCode} → ${updated.assignedGroup?.name ?? ''}`;
 }
