@@ -98,7 +98,7 @@ export const RESPONSIBLE_GROUPS: ResponsibleGroupSeed[] = [
     'Управление по охране объектов культурного наследия',
     -78541767450682n,
   ),
-  executive('EA_ARCHITECTURE', 'Управление архитектуры и градостроительства', -78541795004986n),
+  executive('EA_ARCHITECTURE', 'Управление архитектуры и градостроительства', -78541797204026n),
   executive('EA_VETERINARY', 'Комитет ветеринарии', -78541827219514n),
   executive('EA_YOUTH', 'Управление молодежной политики', -78541851336762n),
   executive('EA_GOSSTROYNADZOR', 'Госстройнадзор', -78541877878842n),
