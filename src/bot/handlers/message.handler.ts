@@ -1,3 +1,4 @@
+import { reportActionError } from '../../utils/errors';
 import type { Context } from '@maxhub/max-bot-api';
 
 import type { AppServices } from '../../app/container';
@@ -50,9 +51,8 @@ export async function handleMessageUpdate(services: AppServices, ctx: Context): 
         { command: command.name, maxUserId: actor.maxUserId.toString(), chatId: chatId.toString() },
         `command failed: ${error instanceof Error ? error.message : String(error)}`,
       );
-      await services.messages
-        .send(dialog ? { userId: actor.maxUserId } : { chatId }, { text: userFacingError(error) })
-        .catch(() => undefined);
+      await reportActionError(error, () => services.messages
+        .send(dialog ? { userId: actor.maxUserId } : { chatId }, { text: userFacingError(error) }));
     }
     return;
   }

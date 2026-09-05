@@ -50,3 +50,19 @@ export class RateLimitError extends AppError {
     super(message, 'RATE_LIMIT', details);
   }
 }
+
+const EXPECTED_USER_CODES = new Set(['VALIDATION', 'FORBIDDEN', 'CONFLICT', 'INVALID_TRANSITION', 'NOT_FOUND', 'RATE_LIMIT', 'BAD_PAYLOAD']);
+
+export function isExpectedUserError(error: unknown): error is AppError {
+  return error instanceof AppError && EXPECTED_USER_CODES.has(error.code);
+}
+
+/** Show feedback, but preserve technical failures for the durable inbox. */
+export async function reportActionError(error: unknown, notify: () => Promise<unknown>): Promise<void> {
+  try {
+    await notify();
+  } catch (feedbackError) {
+    if (isExpectedUserError(error)) throw feedbackError;
+  }
+  if (!isExpectedUserError(error)) throw error;
+}

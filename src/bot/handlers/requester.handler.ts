@@ -1,3 +1,4 @@
+import { reportActionError } from '../../utils/errors';
 import { SessionType } from '@prisma/client';
 
 import type { AppServices } from '../../app/container';
@@ -147,9 +148,9 @@ export async function handleRequesterMessage(
         keyboard: requesterContactKeyboard(),
       });
     } catch (error) {
-      await services.messages.send(target, {
+      await reportActionError(error, () => services.messages.send(target, {
         text: error instanceof ValidationError ? error.message : 'Не удалось сохранить ФИО. Попробуйте ещё раз.',
-      });
+      }));
     }
     return;
   }
@@ -169,9 +170,9 @@ export async function handleRequesterMessage(
         requesterPhone,
       );
     } catch (error) {
-      await services.messages.send(target, {
+      await reportActionError(error, () => services.messages.send(target, {
         text: error instanceof ValidationError ? error.message : 'Не удалось сохранить номер. Попробуйте ещё раз.',
-      });
+      }));
     }
     return;
   }
@@ -231,9 +232,9 @@ export async function handleRequesterMessage(
           throw new ValidationError('Черновик устарел. Начните создание обращения заново.');
       }
     } catch (error) {
-      await services.messages.send(target, {
+      await reportActionError(error, () => services.messages.send(target, {
         text: error instanceof ValidationError ? error.message : 'Не удалось сохранить изменение. Попробуйте ещё раз.',
-      });
+      }));
       return;
     }
   }
@@ -311,9 +312,9 @@ export async function handleRequesterMessage(
       await services.messages.send(target, { text: error.message });
       return;
     }
-    await services.messages.send(target, {
+    await reportActionError(error, () => services.messages.send(target, {
       text: 'Не удалось сохранить черновик. Попробуйте ещё раз позже.',
-    });
+    }));
   }
 }
 

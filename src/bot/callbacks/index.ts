@@ -1,3 +1,4 @@
+import { reportActionError } from '../../utils/errors';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import type { Context } from '@maxhub/max-bot-api';
@@ -75,15 +76,17 @@ export async function handleCallbackUpdate(services: AppServices, ctx: Context):
       }),
       `callback failed: ${error instanceof Error ? error.message : String(error)}`,
     );
-    if (acknowledged) {
-      const target =
-        update.message?.recipient?.chat_type === 'dialog' || chatId === undefined
-          ? ({ userId: actor.maxUserId } as const)
-          : ({ chatId } as const);
-      await services.messages.send(target, { text: `⚠️ ${errorNotice(error)}` });
-    } else {
-      await answerCallback(services, callback.callback_id, errorNotice(error));
-    }
+    await reportActionError(error, async () => {
+      if (acknowledged) {
+        const target =
+          update.message?.recipient?.chat_type === 'dialog' || chatId === undefined
+            ? ({ userId: actor.maxUserId } as const)
+            : ({ chatId } as const);
+        await services.messages.send(target, { text: `⚠️ ${errorNotice(error)}` });
+      } else {
+        await answerCallback(services, callback.callback_id, errorNotice(error));
+      }
+    });
   }
 }
 

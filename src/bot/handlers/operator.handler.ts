@@ -5,7 +5,7 @@ import type { AppServices } from '../../app/container';
 import { HistoryAction } from '../../incidents/incident-history.service';
 import type { Message } from '../../max/max-types';
 import { classifyAttachments } from '../../media/media.service';
-import { AppError, ValidationError } from '../../utils/errors';
+import { AppError, ValidationError, reportActionError } from '../../utils/errors';
 import { incidentLogFields, moduleLogger } from '../../utils/logger';
 import { isBlank } from '../../utils/text';
 import { parseReportRange } from '../../reports/report-range';
@@ -76,10 +76,10 @@ export async function handleOperatorMessage(
       }),
       `operator action failed: ${error instanceof Error ? error.message : String(error)}`,
     );
-    await services.messages.send(
+    await reportActionError(error, () => services.messages.send(
       { chatId },
       { text: error instanceof AppError ? error.message : 'Не удалось выполнить действие. Попробуйте ещё раз.' },
-    );
+    ));
   }
 }
 
@@ -184,8 +184,8 @@ async function applyReportPeriod(
 ): Promise<void> {
   requirePermission(actor, 'report.generate');
   const range = parseReportRange(text);
-  await services.sessions.clear(actor.maxUserId, chatId);
   await sendReport(services, chatId, range, actor.maxUserId);
+  await services.sessions.clear(actor.maxUserId, chatId);
 }
 
 async function applyBan(
