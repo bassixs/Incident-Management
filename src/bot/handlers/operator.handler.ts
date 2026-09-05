@@ -124,7 +124,12 @@ async function applyRevision(
   if (isBlank(reason)) throw new ValidationError('Причина возврата не может быть пустой.');
 
   const incidentId = requireIncidentId(session);
-  const incident = await services.review.requestRevision(incidentId, reason, actor);
+  const data = session.data as { reviewAnswerId?: string } | null;
+  if (!data?.reviewAnswerId) {
+    await services.sessions.clear(actor.maxUserId, chatId);
+    throw new ValidationError('Действие устарело. Нажмите «На доработку» в актуальной карточке ответа.');
+  }
+  const incident = await services.review.requestRevision(incidentId, reason, actor, data.reviewAnswerId);
   await services.sessions.clear(actor.maxUserId, chatId);
   await services.messages.send(
     { chatId },

@@ -332,10 +332,10 @@ export function sectorKeyboard(incidentId: string, options: { hasTemplate: boole
 }
 
 /** Buttons under the review-chat card (§29). */
-export function reviewKeyboard(incidentId: string): Button[][] {
+export function reviewKeyboard(incidentId: string, answerId: string): Button[][] {
   return [
-    [button.callback('✅ Согласовать', incidentCallback('approve', incidentId), { intent: 'positive' })],
-    [button.callback('↩️ На доработку', incidentCallback('revision', incidentId), { intent: 'negative' })],
+    [button.callback('✅ Согласовать', incidentCallback('approve', incidentId, answerId), { intent: 'positive' })],
+    [button.callback('↩️ На доработку', incidentCallback('revision', incidentId, answerId), { intent: 'negative' })],
   ];
 }
 

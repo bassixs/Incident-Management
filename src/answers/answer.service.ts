@@ -131,6 +131,7 @@ export class AnswerService {
 
       const moved = await this.repository.transition(tx, incidentId, SUBMITTABLE, {
         status: targetStatus,
+        reviewMessageId: null,
         currentResponderId: actor.userId,
         answeredAt,
         // deadlineAt is deliberately absent here and everywhere else after

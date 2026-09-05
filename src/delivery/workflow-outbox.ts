@@ -74,7 +74,7 @@ export async function queueAnswer(tx: Tx, incidentId: string, answerId: string, 
       text: direct ? finalAnswerToRequester(incident, answer, incident.answeredAt ?? answer.approvedAt ?? new Date(), incident.assignedGroup?.authorityName)
         : reviewCard(incident, answer, incident.assignedGroup),
       label: codeLabel(incident),
-      keyboard: direct ? answerRatingKeyboard(incidentId) : reviewKeyboard(incidentId),
+      keyboard: direct ? answerRatingKeyboard(incidentId) : reviewKeyboard(incidentId, answerId),
       delivery: { dedupeKey: `${direct ? 'answer' : 'review-card'}:${answerId}`,
         tracking: { type: direct ? 'ANSWER_TO_REQUESTER' : 'REVIEW_CARD', incidentId, answerId } },
     }, incidentId, answer.attachments,

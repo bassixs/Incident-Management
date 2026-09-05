@@ -1,6 +1,7 @@
 import { UserRole, type PrismaClient } from '@prisma/client';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 
+import { handleIncidentCallback } from '../../src/bot/callbacks/incident.callbacks';
 import * as outbox from '../../src/delivery/workflow-outbox';
 import { MaxMessageService } from '../../src/max/max-message.service';
 import { buildServices } from '../../src/app/container';
@@ -29,6 +30,56 @@ describeIntegration('transactional workflow and recovery', () => {
     const { answer } = await h.services.answers.submit(incident.id, await actor(), 'Фонарь заменён');
     return { incident, answer };
   }
+
+  it('binds approval and revision to the answer version shown on the card', async () => {
+    const { incident, answer: first } = await awaitingReview();
+    const reviewer = await actor();
+    await h.services.review.requestRevision(incident.id, 'Уточните', reviewer, first.id);
+    const { answer: second } = await h.services.answers.submit(incident.id, reviewer, 'Уточнённый ответ');
+    await expect(h.services.review.approve(incident.id, reviewer, first.id)).rejects.toThrow('устарела');
+    await expect(h.services.review.requestRevision(incident.id, 'Старая причина', reviewer, first.id)).rejects.toThrow('устарела');
+    const context = { services: h.services, actor: { ...reviewer, roles: [UserRole.ADMIN] }, chatId: TEST_CHATS.review, messageId: 'old-card' };
+    await expect(handleIncidentCallback(context, { kind: 'incident', action: 'approve', incidentId: incident.id, argument: first.id })).rejects.toThrow('устарела');
+    expect((await prisma.incidentAnswer.findUniqueOrThrow({ where: { id: second.id } })).status).toBe('WAITING_REVIEW');
+    await h.services.review.approve(incident.id, reviewer, second.id);
+    expect((await prisma.incidentAnswer.findUniqueOrThrow({ where: { id: second.id } })).status).toBe('APPROVED');
+  });
+
+  it('rolls back a stale approval even when revision and resubmission race with its initial read', async () => {
+    const { incident, answer } = await awaitingReview();
+    const reviewer = await actor();
+    const original = h.services.repository.findById.bind(h.services.repository);
+    vi.spyOn(h.services.repository, 'findById').mockImplementationOnce(async id => {
+      const stale = await original(id);
+      await h.services.review.requestRevision(id, 'Уточните', reviewer, answer.id);
+      await h.services.answers.submit(id, reviewer, 'Новая версия');
+      return stale;
+    });
+    await expect(h.services.review.approve(incident.id, reviewer, answer.id)).rejects.toThrow('Версия ответа изменилась');
+    expect((await original(incident.id))?.status).toBe('WAITING_REVIEW');
+    expect(await prisma.incidentAnswer.count({ where: { status: 'APPROVED' } })).toBe(0);
+  });
+
+  it('tracks the newest review card and ignores late delivery of an older version', async () => {
+    const { incident, answer: first } = await awaitingReview();
+    const reviewer = await actor();
+    await h.services.review.requestRevision(incident.id, 'Уточните', reviewer, first.id);
+    const { answer: second } = await h.services.answers.submit(incident.id, reviewer, 'Новый ответ');
+    let counter = 0;
+    const max = { sendToChat: async () => ({ body: { mid: `tracked-${++counter}` } }), sendToUser: async () => ({ body: { mid: `tracked-${++counter}` } }) };
+    const worker = new MaxMessageService(max as never, { prisma, storage: {} as never });
+    await worker.flush();
+    const delivery = await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: `review-card:${second.id}` } });
+    expect((await h.services.repository.findById(incident.id))?.reviewMessageId).toBe(delivery.firstMessageId);
+    await prisma.outboundMessage.update({ where: { dedupeKey: `review-card:${first.id}` }, data: { status: 'PENDING', nextAttemptAt: new Date(0) } });
+    await worker.flush();
+    expect((await h.services.repository.findById(incident.id))?.reviewMessageId).toBe(delivery.firstMessageId);
+    // A pre-upgrade button without a version is safe only with matching outbox evidence.
+    const context = { services: h.services, actor: { ...reviewer, roles: [UserRole.ADMIN] }, chatId: TEST_CHATS.review, messageId: delivery.firstMessageId! };
+    await handleIncidentCallback(context, { kind: 'incident', action: 'revision', incidentId: incident.id });
+    const session = await h.services.sessions.find(reviewer.maxUserId, TEST_CHATS.review);
+    expect(session?.data).toMatchObject({ reviewAnswerId: second.id });
+  });
 
   it('commits registration, history, consumed draft and both outgoing messages together', async () => {
     const session = await h.services.sessions.start({ maxUserId: TEST_USERS.requesterA, chatId: TEST_USERS.requesterA, type: 'WAITING_INCIDENT_CONFIRMATION' });

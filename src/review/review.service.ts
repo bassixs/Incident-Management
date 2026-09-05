@@ -75,7 +75,7 @@ export class ReviewService {
       {
         text: reviewCard(incident, answer, incident.assignedGroup),
         label: codeLabel(incident),
-        keyboard: reviewKeyboard(incident.id),
+        keyboard: reviewKeyboard(incident.id, answer.id),
         attachments: await loadOutboundAttachments(this.media, answer.attachments),
         delivery: {
           dedupeKey: `review-card:${answer.id}`,
@@ -105,7 +105,7 @@ export class ReviewService {
    * double tap) cannot cause a second delivery. Delivery itself is separately
    * idempotent through IncidentAnswer.deliveredAt.
    */
-  async approve(incidentId: string, actor: Actor): Promise<IncidentWithRelations> {
+  async approve(incidentId: string, actor: Actor, expectedAnswerId?: string): Promise<IncidentWithRelations> {
     const incident = await this.repository.findById(incidentId);
     if (!incident) throw new NotFoundError(`Incident ${incidentId} not found`);
     if (incident.status !== IncidentStatus.WAITING_REVIEW) {
@@ -115,6 +115,9 @@ export class ReviewService {
 
     const answer = incident.answers.at(-1);
     if (!answer) throw new ConflictError(`Для ${incident.publicCode} нет подготовленного ответа.`);
+    if (expectedAnswerId !== undefined && answer.id !== expectedAnswerId) {
+      throw new ConflictError('Эта версия ответа устарела. Откройте последнюю карточку согласования.');
+    }
 
     const answeredAt = new Date();
     await this.prisma.$transaction(async (tx) => {
@@ -129,6 +132,10 @@ export class ReviewService {
         throw new ConflictError(this.alreadyReviewedMessage(fresh ?? incident));
       }
 
+      const latest = await this.repository.latestAnswer(incidentId, tx);
+      if (latest?.id !== answer.id || latest.status !== AnswerStatus.WAITING_REVIEW) {
+        throw new ConflictError('Версия ответа изменилась. Откройте последнюю карточку согласования.');
+      }
       await tx.incidentAnswer.update({
         where: { id: answer.id },
         data: { status: AnswerStatus.APPROVED, approvedAt: answeredAt, approvedByUserId: actor.userId },
@@ -191,7 +198,7 @@ export class ReviewService {
   }
 
   /** "↩️ На доработку" (§32). The deadline is explicitly left alone. */
-  async requestRevision(incidentId: string, reason: string, actor: Actor): Promise<IncidentWithRelations> {
+  async requestRevision(incidentId: string, reason: string, actor: Actor, expectedAnswerId?: string): Promise<IncidentWithRelations> {
     const incident = await this.repository.findById(incidentId);
     if (!incident) throw new NotFoundError(`Incident ${incidentId} not found`);
     if (incident.status !== IncidentStatus.WAITING_REVIEW) {
@@ -201,6 +208,9 @@ export class ReviewService {
 
     const answer = incident.answers.at(-1);
     if (!answer) throw new ConflictError(`Для ${incident.publicCode} нет подготовленного ответа.`);
+    if (expectedAnswerId !== undefined && answer.id !== expectedAnswerId) {
+      throw new ConflictError('Эта версия ответа устарела. Откройте последнюю карточку согласования.');
+    }
 
     await this.prisma.$transaction(async (tx) => {
       const claimed = await this.repository.transition(tx, incidentId, IncidentStatus.WAITING_REVIEW, {
@@ -214,6 +224,10 @@ export class ReviewService {
         throw new ConflictError(this.alreadyReviewedMessage(fresh ?? incident));
       }
 
+      const latest = await this.repository.latestAnswer(incidentId, tx);
+      if (latest?.id !== answer.id || latest.status !== AnswerStatus.WAITING_REVIEW) {
+        throw new ConflictError('Версия ответа изменилась. Откройте последнюю карточку согласования.');
+      }
       await tx.incidentAnswer.update({
         where: { id: answer.id },
         data: { status: AnswerStatus.REVISION_REQUIRED, revisionReason: reason },

@@ -3,7 +3,7 @@ import { IncidentStatus, ResponsibleGroupKind, SessionType } from '@prisma/clien
 import type { AppServices } from '../../app/container';
 import type { CallbackPayload } from '../../max/callback-payload';
 import type { IncidentWithRelations } from '../../incidents/incident.repository';
-import { AppError, ForbiddenError, NotFoundError } from '../../utils/errors';
+import { AppError, ConflictError, ForbiddenError, NotFoundError } from '../../utils/errors';
 import { incidentLogFields, moduleLogger } from '../../utils/logger';
 import { assertApprover, assertDispatcher, assertResponder, requirePermission } from '../middleware/authorize';
 import {
@@ -83,10 +83,10 @@ export async function handleIncidentCallback(
       return startTemplateAnswer(services, actor, chatId, incident);
 
     case 'approve':
-      return approve(services, actor, chatId, incident);
+      return approve(services, actor, chatId, incident, await reviewAnswerId(context, incident, payload.argument));
 
     case 'revision':
-      return startRevision(services, actor, chatId, incident);
+      return startRevision(services, actor, chatId, incident, await reviewAnswerId(context, incident, payload.argument));
 
     case 'cancel': {
       await services.sessions.clear(actor.maxUserId, chatId);
@@ -347,9 +347,10 @@ async function approve(
   actor: ResolvedActor,
   chatId: bigint,
   incident: IncidentWithRelations,
+  answerId: string,
 ): Promise<string> {
   assertApprover(services, actor, chatId);
-  const updated = await services.review.approve(incident.id, actor);
+  const updated = await services.review.approve(incident.id, actor, answerId);
   return updated.answers.some(a => a.deliveredAt)
     ? `${updated.publicCode}: ответ согласован и доставлен`
     : `${updated.publicCode}: ответ согласован, ожидает доставки`;
@@ -360,6 +361,7 @@ async function startRevision(
   actor: ResolvedActor,
   chatId: bigint,
   incident: IncidentWithRelations,
+  answerId: string,
 ): Promise<string | undefined> {
   assertApprover(services, actor, chatId);
   if (incident.status !== IncidentStatus.WAITING_REVIEW) {
@@ -371,6 +373,7 @@ async function startRevision(
     maxUserId: actor.maxUserId,
     chatId,
     type: SessionType.WAITING_REVISION_REASON,
+    data: { reviewAnswerId: answerId },
     incidentId: incident.id,
   });
   await services.messages.send(
@@ -378,4 +381,20 @@ async function startRevision(
     { text: `Укажите причину возврата ответа ${incident.publicCode}.` },
   );
   return undefined;
+}
+
+/** Old cards are accepted only when durable delivery identifies their version. */
+async function reviewAnswerId(context: IncidentCallbackContext, incident: IncidentWithRelations, argument?: string): Promise<string> {
+  assertApprover(context.services, context.actor, context.chatId);
+  const latest = incident.answers.at(-1);
+  if (!latest) throw new ConflictError('Нет ответа для согласования.');
+  if (argument === latest.id) return latest.id;
+  if (!argument && context.messageId) {
+    const delivery = await context.services.prisma.outboundMessage.findFirst({
+      where: { incidentId: incident.id, answerId: latest.id, trackingType: 'REVIEW_CARD',
+        firstMessageId: context.messageId, status: 'SENT' }, select: { id: true },
+    });
+    if (delivery) return latest.id;
+  }
+  throw new ConflictError('Эта карточка устарела. Откройте последнюю карточку согласования.');
 }

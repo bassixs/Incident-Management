@@ -349,6 +349,14 @@ export class MaxMessageService {
       }
 
       if (!row.incidentId || !firstMessageId) return;
+      if (row.trackingType === DeliveryTrackingType.REVIEW_CARD) {
+        const answer = await tx.incidentAnswer.findUnique({ where: { id: row.answerId! } });
+        if (answer) await tx.incident.updateMany({
+          where: { id: row.incidentId, answers: { none: { version: { gt: answer.version } } } },
+          data: { reviewMessageId: firstMessageId },
+        });
+        return;
+      }
       const field =
         row.trackingType === DeliveryTrackingType.DISTRIBUTION_CARD
           ? 'distributionMessageId'
@@ -390,7 +398,7 @@ export class MaxMessageService {
   private async refreshDeliveryCard(operation: NonNullable<CompositeMessage['operation']>): Promise<{ firstMessageId?: string }> {
     const incident = await this.durable!.prisma.incident.findUnique({ where: { id: operation.incidentId }, include: INCIDENT_INCLUDE });
     const answer = incident?.answers.find(a => a.id === operation.answerId);
-    if (!incident || !answer) return {};
+    if (!incident || !answer || incident.answers.at(-1)?.id !== answer.id) return {};
     if (operation.card === 'distribution') {
       if (answer.deliveredAt && incident.distributionMessageId && incident.assignedGroup) {
         await this.max.editMessage(incident.distributionMessageId, distributionWorkedNotice(incident, incident.assignedGroup), []);
