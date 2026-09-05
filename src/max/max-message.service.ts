@@ -65,6 +65,8 @@ type StagedAttachment = {
   type: 'IMAGE' | 'FILE';
   storageKey: string;
   originalName?: string | null | undefined;
+  /** false for original incident/answer files, which the outbox must never delete. */
+  owned?: boolean;
 };
 
 const OUTBOX_INTERVAL_MS = 5_000;
@@ -182,6 +184,10 @@ export class MaxMessageService {
 
   private async enqueue(target: SendTarget, message: CompositeMessage): Promise<OutboundMessage> {
     const durable = this.durable!;
+    if (message.delivery?.dedupeKey) {
+      const existing = await durable.prisma.outboundMessage.findUnique({ where: { dedupeKey: message.delivery.dedupeKey } });
+      if (existing) return existing;
+    }
     const id = randomUUID();
     const staged: StagedAttachment[] = [];
 
@@ -368,7 +374,7 @@ export class MaxMessageService {
   private async cleanupAttachments(attachments: StagedAttachment[]): Promise<void> {
     if (!this.durable) return;
     await Promise.all(
-      attachments.map((item) => this.durable!.storage.remove(item.storageKey).catch(() => undefined)),
+      attachments.filter(item => item.owned !== false).map((item) => this.durable!.storage.remove(item.storageKey).catch(() => undefined)),
     );
   }
 

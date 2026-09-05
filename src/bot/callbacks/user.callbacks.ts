@@ -235,7 +235,10 @@ export async function handleUserCallback(
       let incident;
       try {
         const requester = await services.users.requireByMaxId(actor.maxUserId);
+        const draftSession = await services.sessions.find(actor.maxUserId, chatId);
+        if (!draftSession) throw new ValidationError('Черновик устарел.');
         incident = await services.incidents.create({
+          draftSessionId: draftSession.id,
           requester: {
             maxUserId: actor.maxUserId,
             name: draft.requesterName,
@@ -290,6 +293,7 @@ export async function handleUserCallback(
       await services.messages.send(target, {
         text: registrationConfirmation(incident),
         keyboard: mainMenuKeyboard(),
+        delivery: { dedupeKey: `registration:${incident.id}` },
       });
       return 'Обращение зарегистрировано';
     }

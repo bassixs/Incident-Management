@@ -1,3 +1,5 @@
+import { TRANSACTION_OPTIONS } from '../database/prisma';
+import { queueSector, queueRejection } from '../delivery/workflow-outbox';
 import {
   IncidentStatus,
   type PrismaClient,
@@ -138,26 +140,29 @@ export class DistributionService {
     this.groups.requireChatId(group);
 
     const now = new Date();
-    const claimed = await this.repository.transition(this.prisma, incidentId, IncidentStatus.DISTRIBUTION, {
-      status: IncidentStatus.ASSIGNED,
-      assignedGroupId: group.id,
-      assignedByUserId: actor.userId,
-      assignedAt: now,
-    });
-    if (!claimed) {
-      const fresh = await this.repository.findById(incidentId);
-      throw new ConflictError(this.alreadyHandledMessage(fresh ?? incident));
-    }
+    await this.prisma.$transaction(async (tx) => {
+      const claimed = await this.repository.transition(tx, incidentId, IncidentStatus.DISTRIBUTION, {
+        status: IncidentStatus.ASSIGNED,
+        assignedGroupId: group.id,
+        assignedByUserId: actor.userId,
+        assignedAt: now,
+      });
+      if (!claimed) {
+        const fresh = await this.repository.findById(incidentId, tx);
+        throw new ConflictError(this.alreadyHandledMessage(fresh ?? incident));
+      }
 
-    await this.history.record({
-      incidentId,
-      action: HistoryAction.ASSIGNED,
-      fromStatus: IncidentStatus.DISTRIBUTION,
-      toStatus: IncidentStatus.ASSIGNED,
-      actorMaxUserId: actor.maxUserId,
-      actorRole: actor.role,
-      metadata: { groupId: group.id, groupCode: group.code, dispatcher: actor.displayName },
-    });
+      await this.history.record({
+        incidentId,
+        action: HistoryAction.ASSIGNED,
+        fromStatus: IncidentStatus.DISTRIBUTION,
+        toStatus: IncidentStatus.ASSIGNED,
+        actorMaxUserId: actor.maxUserId,
+        actorRole: actor.role,
+        metadata: { groupId: group.id, groupCode: group.code, dispatcher: actor.displayName },
+      }, tx);
+      await queueSector(tx, incidentId);
+    }, TRANSACTION_OPTIONS);
 
     log.info(
       incidentLogFields({
@@ -200,25 +205,28 @@ export class DistributionService {
     }
     this.state.assertTransition(incident.status, IncidentStatus.REJECTED, { incidentId });
 
-    const claimed = await this.repository.transition(this.prisma, incidentId, IncidentStatus.DISTRIBUTION, {
-      status: IncidentStatus.REJECTED,
-      rejectionReason: reason,
-      answeredAt: new Date(),
-    });
-    if (!claimed) {
-      const fresh = await this.repository.findById(incidentId);
-      throw new ConflictError(this.alreadyHandledMessage(fresh ?? incident));
-    }
+    await this.prisma.$transaction(async (tx) => {
+      const claimed = await this.repository.transition(tx, incidentId, IncidentStatus.DISTRIBUTION, {
+        status: IncidentStatus.REJECTED,
+        rejectionReason: reason,
+        answeredAt: new Date(),
+      });
+      if (!claimed) {
+        const fresh = await this.repository.findById(incidentId, tx);
+        throw new ConflictError(this.alreadyHandledMessage(fresh ?? incident));
+      }
 
-    await this.history.record({
-      incidentId,
-      action: HistoryAction.INCIDENT_REJECTED,
-      fromStatus: IncidentStatus.DISTRIBUTION,
-      toStatus: IncidentStatus.REJECTED,
-      actorMaxUserId: actor.maxUserId,
-      actorRole: actor.role,
-      metadata: { reason, dispatcher: actor.displayName },
-    });
+      await this.history.record({
+        incidentId,
+        action: HistoryAction.INCIDENT_REJECTED,
+        fromStatus: IncidentStatus.DISTRIBUTION,
+        toStatus: IncidentStatus.REJECTED,
+        actorMaxUserId: actor.maxUserId,
+        actorRole: actor.role,
+        metadata: { reason, dispatcher: actor.displayName },
+      }, tx);
+      await queueRejection(tx, incidentId, reason);
+    }, TRANSACTION_OPTIONS);
 
     await this.delivery.notify(
       incidentId,
@@ -255,8 +263,8 @@ export class DistributionService {
   }
 
   /** Plain notice into the distribution chat. */
-  async notify(text: string): Promise<void> {
-    await this.messages.send({ chatId: this.chatId() }, { text });
+  async notify(text: string, dedupeKey?: string): Promise<void> {
+    await this.messages.send({ chatId: this.chatId() }, { text, ...(dedupeKey ? { delivery: { dedupeKey } } : {}) });
   }
 
   private alreadyHandledMessage(incident: IncidentWithRelations): string {

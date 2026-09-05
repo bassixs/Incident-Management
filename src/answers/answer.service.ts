@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { queueAnswer } from '../delivery/workflow-outbox';
+import type { Tx } from '../database/prisma';
 import {
   AnswerStatus,
   AttachmentType,
@@ -10,7 +13,7 @@ import { acquireAdvisoryLock, TRANSACTION_OPTIONS } from '../database/prisma';
 import { HistoryAction, type IncidentHistoryService } from '../incidents/incident-history.service';
 import type { IncidentStateService } from '../incidents/incident-state.service';
 import type { IncidentRepository, IncidentWithRelations } from '../incidents/incident.repository';
-import type { IncomingMedia, MediaService } from '../media/media.service';
+import type { IncomingMedia, MediaService, StoredMedia } from '../media/media.service';
 import type { ReviewService } from '../review/review.service';
 import { ConflictError, NotFoundError, ValidationError } from '../utils/errors';
 import { incidentLogFields, moduleLogger } from '../utils/logger';
@@ -93,6 +96,8 @@ export class AnswerService {
     this.state.assertTransition(before.status, targetStatus, { incidentId });
     const answeredAt = direct ? new Date() : null;
 
+    const answerId = randomUUID();
+    const stored = await this.media.ingestAll(`answers/${answerId}`, media.filter(m => m.kind === 'IMAGE' || m.kind === 'FILE'));
     const answer = await this.prisma.$transaction(async (tx) => {
       await acquireAdvisoryLock(tx, 'incident-answer', incidentId);
 
@@ -112,6 +117,7 @@ export class AnswerService {
 
       const created = await tx.incidentAnswer.create({
         data: {
+          id: answerId,
           incidentId,
           version,
           text,
@@ -165,10 +171,11 @@ export class AnswerService {
         tx,
       );
 
+      await this.attachMedia(tx, created.id, stored);
+      await queueAnswer(tx, incidentId, created.id, direct);
       return created;
     }, TRANSACTION_OPTIONS);
 
-    await this.attachMedia(answer.id, media);
 
     log.info(
       incidentLogFields({
@@ -204,12 +211,9 @@ export class AnswerService {
     return { incident, answer, sentDirectly: direct, deliveryFailed };
   }
 
-  private async attachMedia(answerId: string, media: IncomingMedia[]): Promise<void> {
-    const usable = media.filter((item) => item.kind === 'IMAGE' || item.kind === 'FILE');
-    if (usable.length === 0) return;
-    const stored = await this.media.ingestAll(`answers/${answerId}`, usable);
+  private async attachMedia(tx: Tx, answerId: string, stored: StoredMedia[]): Promise<void> {
     if (stored.length === 0) return;
-    await this.prisma.answerAttachment.createMany({
+    await tx.answerAttachment.createMany({
       data: stored.map((item) => ({
         answerId,
         type: item.type === 'IMAGE' ? AttachmentType.IMAGE : AttachmentType.FILE,

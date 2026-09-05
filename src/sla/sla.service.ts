@@ -1,4 +1,8 @@
 import type { Incident, PrismaClient } from '@prisma/client';
+import { TRANSACTION_OPTIONS } from '../database/prisma';
+import { queueMessage } from '../delivery/workflow-outbox';
+import { codeLabel } from '../bot/views/cards';
+import { AppError } from '../utils/errors';
 
 import type { DistributionService } from '../distribution/distribution.service';
 import { HistoryAction, type IncidentHistoryService } from '../incidents/incident-history.service';
@@ -100,15 +104,6 @@ export class SlaService {
     if (alreadySent) return false;
 
     // Claim the notification before sending so two workers cannot both send it.
-    const claimed = await this.prisma.incident.updateMany({
-      where: {
-        id: incident.id,
-        ...(hours === 24 ? { slaWarn24SentAt: null } : { slaWarn6SentAt: null }),
-      },
-      data: hours === 24 ? { slaWarn24SentAt: now } : { slaWarn6SentAt: now },
-    });
-    if (claimed.count !== 1) return false;
-
     const text = [
       `⚠️ ${incident.publicCode}`,
       '',
@@ -118,30 +113,17 @@ export class SlaService {
       formatDateTime(incident.deadlineAt),
     ].join('\n');
 
-    await this.notify(incident, text);
-    await this.history.record({
-      incidentId: incident.id,
-      action: hours === 24 ? HistoryAction.SLA_WARNING_24H : HistoryAction.SLA_WARNING_6H,
-      metadata: { deadlineAt: incident.deadlineAt.toISOString() },
-    });
+    const key = `sla:${incident.id}:${hours}`;
+    if (!(await this.queueWarning(incident, hours, text, key, now))) return false;
+    await this.notify(incident, text, key);
     return true;
   }
 
   private async markOverdue(incident: Incident, now: Date): Promise<boolean> {
-    const claimed = await this.prisma.incident.updateMany({
-      where: { id: incident.id, overdueNotifiedAt: null },
-      // Status is deliberately untouched: работа продолжается (§14).
-      data: { isOverdue: true, overdueNotifiedAt: now },
-    });
-    if (claimed.count !== 1) return false;
-
     const text = ['🚨 ПРОСРОЧЕНО', '', incident.publicCode, 'Срок ответа истёк.'].join('\n');
-    await this.notify(incident, text);
-    await this.history.record({
-      incidentId: incident.id,
-      action: HistoryAction.SLA_OVERDUE,
-      metadata: { deadlineAt: incident.deadlineAt.toISOString() },
-    });
+    const key = `sla:${incident.id}:overdue`;
+    if (!(await this.queueWarning(incident, 0, text, key, now))) return false;
+    await this.notify(incident, text, key);
     log.warn(
       incidentLogFields({
         incidentId: incident.id,
@@ -154,11 +136,32 @@ export class SlaService {
   }
 
   /** Warnings go where the work is: the sector chat, or distribution if unrouted. */
-  private async notify(incident: Incident, text: string): Promise<void> {
+  private async queueWarning(incident: Incident, hours: 0 | 6 | 24, text: string, key: string, now: Date): Promise<boolean> {
+    return this.prisma.$transaction(async tx => {
+      const field = hours === 24 ? 'slaWarn24SentAt' : hours === 6 ? 'slaWarn6SentAt' : 'overdueNotifiedAt';
+      const claimed = await tx.incident.updateMany({
+        where: { id: incident.id, [field]: null, status: { notIn: ['RESOLVED', 'REJECTED'] } },
+        data: { [field]: now, ...(hours === 0 ? { isOverdue: true } : {}) },
+      });
+      if (claimed.count !== 1) return false;
+      const fresh = await tx.incident.findUniqueOrThrow({ where: { id: incident.id }, include: { assignedGroup: true } });
+      const chatId = fresh.assignedGroupId ? fresh.assignedGroup?.maxChatId : getConfig().DISTRIBUTION_CHAT_ID;
+      if (chatId == null) throw new AppError('Рабочий чат для SLA не настроен.', 'CONFIG_MISSING');
+      await this.history.record({
+        incidentId: incident.id,
+        action: hours === 24 ? HistoryAction.SLA_WARNING_24H : hours === 6 ? HistoryAction.SLA_WARNING_6H : HistoryAction.SLA_OVERDUE,
+        metadata: { deadlineAt: incident.deadlineAt.toISOString() },
+      }, tx);
+      await queueMessage(tx, { chatId }, { text, label: codeLabel(incident), delivery: { dedupeKey: key } }, incident.id);
+      return true;
+    }, TRANSACTION_OPTIONS);
+  }
+
+  private async notify(incident: Incident, text: string, dedupeKey: string): Promise<void> {
     if (incident.assignedGroupId) {
-      await this.sector.notify(incident, text);
+      await this.sector.notify(incident, text, dedupeKey);
       return;
     }
-    await this.distribution.notify(text);
+    await this.distribution.notify(text, dedupeKey);
   }
 }

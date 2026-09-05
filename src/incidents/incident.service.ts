@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { queueDistribution } from '../delivery/workflow-outbox';
+import type { Tx } from '../database/prisma';
 import { AttachmentType, type Incident, IncidentStatus, type PrismaClient } from '@prisma/client';
 
 import type { BanService } from '../bans/ban.service';
@@ -15,6 +18,7 @@ import type { IncidentRepository, IncidentWithRelations } from './incident.repos
 const log = moduleLogger('incidents');
 
 export type CreateIncidentInput = {
+  draftSessionId?: string;
   requester: { maxUserId: bigint; name: string; phone: string; username?: string | null };
   text: string;
   userSelectedCategoryId?: string | null;
@@ -154,9 +158,15 @@ export class IncidentService {
     const now = new Date();
     const { start, end } = dayBoundaries(now, config.APP_TIMEZONE);
 
+    const incidentId = randomUUID();
+    const stored = await this.media.ingestAll(`incidents/${incidentId}`, (input.media ?? []).filter(m => m.kind === 'IMAGE'));
     const incident = await this.prisma.$transaction(async (tx) => {
       await acquireAdvisoryLock(tx, 'incident-quota', input.requester.maxUserId.toString());
 
+      if (input.draftSessionId) {
+        const consumed = await tx.operatorSession.deleteMany({ where: { id: input.draftSessionId, maxUserId: input.requester.maxUserId, type: 'WAITING_INCIDENT_CONFIRMATION' } });
+        if (consumed.count !== 1) throw new ConflictError('Черновик уже подтверждён или устарел.');
+      }
       const used = await this.repository.countCreatedBetween(tx, input.requester.maxUserId, start, end);
       if (used >= config.DAILY_INCIDENT_LIMIT) {
         throw new RateLimitError(dailyLimitMessage(config.DAILY_INCIDENT_LIMIT), {
@@ -177,6 +187,7 @@ export class IncidentService {
 
       const publicCode = await this.repository.nextPublicCode(tx, now, config.APP_TIMEZONE);
       const created = await this.repository.create(tx, {
+        id: incidentId,
         publicCode,
         requesterId: user.id,
         requesterMaxUserId: user.maxUserId,
@@ -211,6 +222,8 @@ export class IncidentService {
         tx,
       );
 
+      await this.attachMedia(tx, created.id, stored);
+      await queueDistribution(tx, created.id);
       return created;
     }, TRANSACTION_OPTIONS);
 
@@ -224,19 +237,12 @@ export class IncidentService {
       'incident registered',
     );
 
-    // Media is copied out of MAX after the incident exists: a failed download
-    // must not roll back a registration the user has already been charged for.
-    await this.attachMedia(incident.id, input.media ?? []);
-
     return incident;
   }
 
-  private async attachMedia(incidentId: string, media: IncomingMedia[]): Promise<void> {
-    const images = media.filter((item) => item.kind === 'IMAGE');
-    if (images.length === 0) return;
-    const stored = await this.media.ingestAll(`incidents/${incidentId}`, images);
+  private async attachMedia(tx: Tx, incidentId: string, stored: StoredMedia[]): Promise<void> {
     if (stored.length === 0) return;
-    await this.prisma.incidentAttachment.createMany({
+    await tx.incidentAttachment.createMany({
       data: stored.map((item: StoredMedia) => ({
         incidentId,
         type: AttachmentType.IMAGE,

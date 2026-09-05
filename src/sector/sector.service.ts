@@ -1,3 +1,4 @@
+import { TRANSACTION_OPTIONS } from '../database/prisma';
 import {
   type Incident,
   IncidentStatus,
@@ -113,28 +114,30 @@ export class SectorService {
 
     this.state.assertTransition(incident.status, IncidentStatus.IN_PROGRESS, { incidentId });
 
-    const claimed = await this.repository.transition(
-      this.prisma,
-      incidentId,
-      [IncidentStatus.ASSIGNED, IncidentStatus.REVISION_REQUIRED],
-      { status: IncidentStatus.IN_PROGRESS, currentResponderId: actor.userId },
-    );
-    if (!claimed) {
-      const fresh = await this.repository.findById(incidentId);
-      throw new ConflictError(
-        `${incident.publicCode} уже взято в работу (${fresh?.currentResponder?.displayName ?? '—'}).`,
+    await this.prisma.$transaction(async (tx) => {
+      const claimed = await this.repository.transition(
+        tx,
+        incidentId,
+        [IncidentStatus.ASSIGNED, IncidentStatus.REVISION_REQUIRED],
+        { status: IncidentStatus.IN_PROGRESS, currentResponderId: actor.userId },
       );
-    }
+      if (!claimed) {
+        const fresh = await this.repository.findById(incidentId, tx);
+        throw new ConflictError(
+          `${incident.publicCode} уже взято в работу (${fresh?.currentResponder?.displayName ?? '—'}).`,
+        );
+      }
 
-    await this.history.record({
-      incidentId,
-      action: HistoryAction.TAKEN_IN_WORK,
-      fromStatus: incident.status,
-      toStatus: IncidentStatus.IN_PROGRESS,
-      actorMaxUserId: actor.maxUserId,
-      actorRole: actor.role,
-      metadata: { responder: actor.displayName },
-    });
+      await this.history.record({
+        incidentId,
+        action: HistoryAction.TAKEN_IN_WORK,
+        fromStatus: incident.status,
+        toStatus: IncidentStatus.IN_PROGRESS,
+        actorMaxUserId: actor.maxUserId,
+        actorRole: actor.role,
+        metadata: { responder: actor.displayName },
+      }, tx);
+    }, TRANSACTION_OPTIONS);
 
     await this.refreshCard(incidentId);
     log.info(
@@ -164,16 +167,17 @@ export class SectorService {
         text: revisionCard(incident, answerVersion, reason),
         label: codeLabel(incident),
         keyboard: revisionKeyboard(incident.id),
+        delivery: { dedupeKey: `revision:${incident.id}:${answerVersion}` },
       },
     );
   }
 
   /** Plain notice into the sector chat (SLA warnings, status echoes). */
-  async notify(incident: Incident, text: string): Promise<void> {
+  async notify(incident: Incident, text: string, dedupeKey?: string): Promise<void> {
     const groupId = incident.assignedGroupId;
     if (!groupId) return;
     const group = await this.groups.findById(groupId);
     if (!group?.maxChatId) return;
-    await this.messages.send({ chatId: group.maxChatId }, { text, label: codeLabel(incident) });
+    await this.messages.send({ chatId: group.maxChatId }, { text, label: codeLabel(incident), ...(dedupeKey ? { delivery: { dedupeKey } } : {}) });
   }
 }

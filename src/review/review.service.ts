@@ -1,3 +1,5 @@
+import { TRANSACTION_OPTIONS } from '../database/prisma';
+import { queueAnswer, queueRevision } from '../delivery/workflow-outbox';
 import { AnswerStatus, type IncidentAnswer, IncidentStatus, type PrismaClient } from '@prisma/client';
 
 import { reviewKeyboard } from '../bot/keyboards';
@@ -113,30 +115,33 @@ export class ReviewService {
     if (!answer) throw new ConflictError(`Для ${incident.publicCode} нет подготовленного ответа.`);
 
     const answeredAt = new Date();
-    const claimed = await this.repository.transition(this.prisma, incidentId, IncidentStatus.WAITING_REVIEW, {
-      status: IncidentStatus.RESOLVED,
-      answeredAt,
-      approvedByUserId: actor.userId,
-      // deadlineAt untouched — see §33.
-    });
-    if (!claimed) {
-      const fresh = await this.repository.findById(incidentId);
-      throw new ConflictError(this.alreadyReviewedMessage(fresh ?? incident));
-    }
+    await this.prisma.$transaction(async (tx) => {
+      const claimed = await this.repository.transition(tx, incidentId, IncidentStatus.WAITING_REVIEW, {
+        status: IncidentStatus.RESOLVED,
+        answeredAt,
+        approvedByUserId: actor.userId,
+        // deadlineAt untouched — see §33.
+      });
+      if (!claimed) {
+        const fresh = await this.repository.findById(incidentId, tx);
+        throw new ConflictError(this.alreadyReviewedMessage(fresh ?? incident));
+      }
 
-    await this.prisma.incidentAnswer.update({
-      where: { id: answer.id },
-      data: { status: AnswerStatus.APPROVED, approvedAt: answeredAt, approvedByUserId: actor.userId },
-    });
-    await this.history.record({
-      incidentId,
-      action: HistoryAction.ANSWER_APPROVED,
-      fromStatus: IncidentStatus.WAITING_REVIEW,
-      toStatus: IncidentStatus.RESOLVED,
-      actorMaxUserId: actor.maxUserId,
-      actorRole: actor.role,
-      metadata: { answerId: answer.id, version: answer.version, approver: actor.displayName },
-    });
+      await tx.incidentAnswer.update({
+        where: { id: answer.id },
+        data: { status: AnswerStatus.APPROVED, approvedAt: answeredAt, approvedByUserId: actor.userId },
+      });
+      await this.history.record({
+        incidentId,
+        action: HistoryAction.ANSWER_APPROVED,
+        fromStatus: IncidentStatus.WAITING_REVIEW,
+        toStatus: IncidentStatus.RESOLVED,
+        actorMaxUserId: actor.maxUserId,
+        actorRole: actor.role,
+        metadata: { answerId: answer.id, version: answer.version, approver: actor.displayName },
+      }, tx);
+      await queueAnswer(tx, incidentId, answer.id, true);
+    }, TRANSACTION_OPTIONS);
 
     try {
       await this.deliverApprovedAnswer({ ...incident, answeredAt }, { ...answer, approvedAt: answeredAt });
@@ -200,30 +205,33 @@ export class ReviewService {
     const answer = incident.answers.at(-1);
     if (!answer) throw new ConflictError(`Для ${incident.publicCode} нет подготовленного ответа.`);
 
-    const claimed = await this.repository.transition(this.prisma, incidentId, IncidentStatus.WAITING_REVIEW, {
-      status: IncidentStatus.REVISION_REQUIRED,
-      revisionReason: reason,
-      revisionCount: { increment: 1 },
-      // deadlineAt untouched — rework never extends the SLA (§13, §33).
-    });
-    if (!claimed) {
-      const fresh = await this.repository.findById(incidentId);
-      throw new ConflictError(this.alreadyReviewedMessage(fresh ?? incident));
-    }
+    await this.prisma.$transaction(async (tx) => {
+      const claimed = await this.repository.transition(tx, incidentId, IncidentStatus.WAITING_REVIEW, {
+        status: IncidentStatus.REVISION_REQUIRED,
+        revisionReason: reason,
+        revisionCount: { increment: 1 },
+        // deadlineAt untouched — rework never extends the SLA (§13, §33).
+      });
+      if (!claimed) {
+        const fresh = await this.repository.findById(incidentId, tx);
+        throw new ConflictError(this.alreadyReviewedMessage(fresh ?? incident));
+      }
 
-    await this.prisma.incidentAnswer.update({
-      where: { id: answer.id },
-      data: { status: AnswerStatus.REVISION_REQUIRED, revisionReason: reason },
-    });
-    await this.history.record({
-      incidentId,
-      action: HistoryAction.REVISION_REQUESTED,
-      fromStatus: IncidentStatus.WAITING_REVIEW,
-      toStatus: IncidentStatus.REVISION_REQUIRED,
-      actorMaxUserId: actor.maxUserId,
-      actorRole: actor.role,
-      metadata: { reason, answerId: answer.id, version: answer.version, approver: actor.displayName },
-    });
+      await tx.incidentAnswer.update({
+        where: { id: answer.id },
+        data: { status: AnswerStatus.REVISION_REQUIRED, revisionReason: reason },
+      });
+      await this.history.record({
+        incidentId,
+        action: HistoryAction.REVISION_REQUESTED,
+        fromStatus: IncidentStatus.WAITING_REVIEW,
+        toStatus: IncidentStatus.REVISION_REQUIRED,
+        actorMaxUserId: actor.maxUserId,
+        actorRole: actor.role,
+        metadata: { reason, answerId: answer.id, version: answer.version, approver: actor.displayName },
+      }, tx);
+      await queueRevision(tx, incidentId, answer.version, reason);
+    }, TRANSACTION_OPTIONS);
 
     const updated = (await this.repository.findById(incidentId))!;
     if (updated.assignedGroup) {
