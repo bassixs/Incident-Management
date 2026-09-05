@@ -273,11 +273,10 @@ export async function handleUserCallback(
       }
       await services.sessions.clear(actor.maxUserId, chatId);
       if (context.messageId) {
+        // Registration confirmation is already durable. Remove its draft
+        // preview instead of turning it into a second confirmation message.
         await services.messages
-          .finalizeCard(
-            context.messageId,
-            `✅ Данные подтверждены.\n\nОбращение зарегистрировано: ${incident.publicCode}`,
-          )
+          .deleteCard(context.messageId)
           .catch(() => false);
       }
       await services.distribution.publishCard(incident.id).catch((error) =>
