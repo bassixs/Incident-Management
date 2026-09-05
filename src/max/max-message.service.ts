@@ -18,6 +18,7 @@ import { MaxClient } from './max-client';
 import { queueDeliveryStatus, reviewDeliveryNotice } from '../delivery/delivery-status';
 import { INCIDENT_INCLUDE } from '../incidents/incident.repository';
 import { distributionWorkedNotice } from '../bot/views/cards';
+import { slaNotification, slaStage, type SlaStage } from '../sla/sla-notification';
 
 const log = moduleLogger('max-message');
 
@@ -36,7 +37,9 @@ export type SendTarget = { chatId: bigint } | { userId: bigint };
 
 export type CompositeMessage = {
   text: string;
-  operation?: { type: 'delivery-card'; incidentId: string; answerId: string; card: 'review' | 'distribution' };
+  operation?: { type: 'delivery-card'; incidentId: string; answerId: string; card: 'review' | 'distribution' }
+    | { type: 'sla-reminder'; incidentId: string; stage: SlaStage };
+  replyToMessageId?: string;
   /** Prefix repeated on every follow-up part, e.g. `№ INC-20260823-0001`. */
   label?: string;
   keyboard?: Button[][];
@@ -62,6 +65,7 @@ type DurableMessageDependencies = { prisma: PrismaClient; storage: MediaStorage 
 type StoredPayload = {
   text: string;
   operation?: CompositeMessage['operation'];
+  replyToMessageId?: string;
   label?: string | undefined;
   keyboard?: Button[][] | undefined;
   disableLinkPreview?: boolean | undefined;
@@ -156,6 +160,7 @@ export class MaxMessageService {
         parts[index]!,
         attachments.length ? attachments : undefined,
         message.disableLinkPreview,
+        index === 0 ? message.replyToMessageId : undefined,
       );
       firstMessageId ??= sent?.body?.mid;
     }
@@ -221,6 +226,7 @@ export class MaxMessageService {
       const payload: StoredPayload = {
         text: message.text,
         ...(message.operation ? { operation: message.operation } : {}),
+        ...(message.replyToMessageId ? { replyToMessageId: message.replyToMessageId } : {}),
         ...(message.label === undefined ? {} : { label: message.label }),
         ...(message.keyboard === undefined ? {} : { keyboard: message.keyboard }),
         ...(message.disableLinkPreview === undefined
@@ -298,7 +304,9 @@ export class MaxMessageService {
       }
       const target: SendTarget =
         row.targetType === 'chat' ? { chatId: row.targetId } : { userId: row.targetId };
-      const result = payload.operation
+      const result = payload.operation?.type === 'sla-reminder'
+        ? await this.deliverSlaReminder(payload.operation)
+        : payload.operation
         ? await this.refreshDeliveryCard(payload.operation)
         : await this.deliverLogical(target, { ...payload, attachments }, true);
       await this.complete(row, result.firstMessageId);
@@ -410,7 +418,19 @@ export class MaxMessageService {
     );
   }
 
-  private async refreshDeliveryCard(operation: NonNullable<CompositeMessage['operation']>): Promise<{ firstMessageId?: string }> {
+  private async deliverSlaReminder(operation: Extract<CompositeMessage['operation'], { type: 'sla-reminder' }>): Promise<{ firstMessageId?: string }> {
+    const incident = await this.durable!.prisma.incident.findUnique({
+      where: { id: operation.incidentId }, include: { assignedGroup: true, currentResponder: true },
+    });
+    // A delayed retry must not send a reminder after closure or after a later stage is due.
+    if (!incident || slaStage(incident, new Date()) !== operation.stage) return {};
+    const { target, message } = slaNotification(incident, operation.stage);
+    // The card itself may still be retrying. Keep the reminder queued until it exists.
+    if (!message.replyToMessageId) throw new Error('SLA reminder is waiting for the incident card');
+    return this.deliverLogical(target, message);
+  }
+
+  private async refreshDeliveryCard(operation: Extract<CompositeMessage['operation'], { type: 'delivery-card' }>): Promise<{ firstMessageId?: string }> {
     const incident = await this.durable!.prisma.incident.findUnique({ where: { id: operation.incidentId }, include: INCIDENT_INCLUDE });
     const answer = incident?.answers.find(a => a.id === operation.answerId);
     if (!incident || !answer || incident.answers.at(-1)?.id !== answer.id) return {};
@@ -516,10 +536,12 @@ export class MaxMessageService {
     text: string,
     attachments?: AttachmentRequest[],
     disableLinkPreview?: boolean,
+    replyToMessageId?: string,
   ): Promise<Message | undefined> {
     const extra = {
       ...(attachments?.length ? { attachments } : {}),
       ...(disableLinkPreview ? { disable_link_preview: true } : {}),
+      ...(replyToMessageId ? { link: { type: 'reply' as const, mid: replyToMessageId } } : {}),
     };
     try {
       return 'chatId' in target

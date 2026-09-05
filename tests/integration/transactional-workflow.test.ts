@@ -205,9 +205,9 @@ describeIntegration('transactional workflow and recovery', () => {
     const now = new Date(incident.deadlineAt.getTime() - 3_600_000);
     vi.spyOn(outbox, 'queueMessage').mockRejectedValueOnce(new Error('queue failed'));
     await h.services.sla.sweep(now);
-    expect((await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).slaWarn6SentAt).toBeNull();
+    expect((await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).slaWarn24SentAt).toBeNull();
     await h.services.sla.sweep(now);
-    expect(await prisma.outboundMessage.count({ where: { dedupeKey: `sla:${incident.id}:6` } })).toBe(1);
+    expect(await prisma.outboundMessage.count({ where: { dedupeKey: `sla:${incident.id}:24` } })).toBe(1);
   });
 
   it('does not delete borrowed answer attachments after delivery', async () => {

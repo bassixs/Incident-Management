@@ -2,27 +2,21 @@ import { AsyncActivity } from '../utils/async-activity';
 import type { Incident, PrismaClient } from '@prisma/client';
 import { TRANSACTION_OPTIONS } from '../database/prisma';
 import { queueMessage } from '../delivery/workflow-outbox';
-import { codeLabel } from '../bot/views/cards';
-import { AppError } from '../utils/errors';
+import type { MaxMessageService } from '../max/max-message.service';
+import { slaNotification, slaStage, type SlaStage } from './sla-notification';
 
-import type { DistributionService } from '../distribution/distribution.service';
 import { HistoryAction, type IncidentHistoryService } from '../incidents/incident-history.service';
 import type { IncidentRepository } from '../incidents/incident.repository';
-import type { SectorService } from '../sector/sector.service';
 import type { OperatorSessionService } from '../sessions/operator-session.service';
 import { getConfig } from '../config';
-import { formatDateTime, hoursUntil } from '../utils/datetime';
 import { incidentLogFields, moduleLogger } from '../utils/logger';
 
 const log = moduleLogger('sla');
 
-const WARN_24H = 24;
-const WARN_6H = 6;
-
 export type SlaSweepResult = {
   checked: number;
   warned24: number;
-  warned6: number;
+  warned48: number;
   overdue: number;
   sessionsPurged: number;
 };
@@ -43,8 +37,7 @@ export class SlaService {
     private readonly prisma: PrismaClient,
     private readonly repository: IncidentRepository,
     private readonly history: IncidentHistoryService,
-    private readonly sector: SectorService,
-    private readonly distribution: DistributionService,
+    private readonly messages: MaxMessageService,
     private readonly sessions: OperatorSessionService,
   ) {}
 
@@ -81,21 +74,19 @@ export class SlaService {
   }
 
   private async sweepNow(now: Date): Promise<SlaSweepResult> {
-    const result: SlaSweepResult = { checked: 0, warned24: 0, warned6: 0, overdue: 0, sessionsPurged: 0 };
+    const result: SlaSweepResult = { checked: 0, warned24: 0, warned48: 0, overdue: 0, sessionsPurged: 0 };
     result.sessionsPurged = await this.sessions.purgeExpired();
 
-    const candidates = await this.repository.listActiveForSla(now, WARN_24H);
+    const candidates = await this.repository.listActiveForSla(now);
     result.checked = candidates.length;
 
     for (const incident of candidates) {
-      const remaining = hoursUntil(incident.deadlineAt, now);
+      const stage = slaStage(incident, now);
       try {
-        if (remaining <= 0) {
-          if (await this.markOverdue(incident, now)) result.overdue += 1;
-        } else if (remaining <= WARN_6H) {
-          if (await this.warn(incident, 6, now)) result.warned6 += 1;
-        } else if (remaining <= WARN_24H) {
-          if (await this.warn(incident, 24, now)) result.warned24 += 1;
+        if (stage !== undefined && await this.queueWarning(incident, stage, now)) {
+          if (stage === 'overdue') result.overdue += 1;
+          else if (stage === 48) result.warned48 += 1;
+          else result.warned24 += 1;
         }
       } catch (error) {
         log.error(
@@ -109,69 +100,27 @@ export class SlaService {
     return result;
   }
 
-  private async warn(incident: Incident, hours: 6 | 24, now: Date): Promise<boolean> {
-    const alreadySent = hours === 24 ? incident.slaWarn24SentAt : incident.slaWarn6SentAt;
-    if (alreadySent) return false;
-
-    // Claim the notification before sending so two workers cannot both send it.
-    const text = [
-      `⚠️ ${incident.publicCode}`,
-      '',
-      `До окончания срока ответа осталось менее ${hours} часов.`,
-      '',
-      'Срок:',
-      formatDateTime(incident.deadlineAt),
-    ].join('\n');
-
-    const key = `sla:${incident.id}:${hours}`;
-    if (!(await this.queueWarning(incident, hours, text, key, now))) return false;
-    await this.notify(incident, text, key);
-    return true;
-  }
-
-  private async markOverdue(incident: Incident, now: Date): Promise<boolean> {
-    const text = ['🚨 ПРОСРОЧЕНО', '', incident.publicCode, 'Срок ответа истёк.'].join('\n');
-    const key = `sla:${incident.id}:overdue`;
-    if (!(await this.queueWarning(incident, 0, text, key, now))) return false;
-    await this.notify(incident, text, key);
-    log.warn(
-      incidentLogFields({
-        incidentId: incident.id,
-        publicCode: incident.publicCode,
-        action: HistoryAction.SLA_OVERDUE,
-      }),
-      'incident is overdue',
-    );
-    return true;
-  }
-
-  /** Warnings go where the work is: the sector chat, or distribution if unrouted. */
-  private async queueWarning(incident: Incident, hours: 0 | 6 | 24, text: string, key: string, now: Date): Promise<boolean> {
-    return this.prisma.$transaction(async tx => {
-      const field = hours === 24 ? 'slaWarn24SentAt' : hours === 6 ? 'slaWarn6SentAt' : 'overdueNotifiedAt';
+  /** Claim the stage, history and delivery together; send only the latest due stage. */
+  private async queueWarning(incident: Incident, stage: SlaStage, now: Date): Promise<boolean> {
+    const notification = await this.prisma.$transaction(async tx => {
+      const field = stage === 24 ? 'slaReminder24SentAt' : stage === 48 ? 'slaWarn24SentAt' : 'overdueNotifiedAt';
       const claimed = await tx.incident.updateMany({
         where: { id: incident.id, [field]: null, status: { notIn: ['RESOLVED', 'REJECTED'] } },
-        data: { [field]: now, ...(hours === 0 ? { isOverdue: true } : {}) },
+        data: { [field]: now, ...(stage === 'overdue' ? { isOverdue: true } : {}) },
       });
-      if (claimed.count !== 1) return false;
-      const fresh = await tx.incident.findUniqueOrThrow({ where: { id: incident.id }, include: { assignedGroup: true } });
-      const chatId = fresh.assignedGroupId ? fresh.assignedGroup?.maxChatId : getConfig().DISTRIBUTION_CHAT_ID;
-      if (chatId == null) throw new AppError('Рабочий чат для SLA не настроен.', 'CONFIG_MISSING');
+      if (claimed.count !== 1) return null;
+      const fresh = await tx.incident.findUniqueOrThrow({ where: { id: incident.id }, include: { assignedGroup: true, currentResponder: true } });
+      const prepared = slaNotification(fresh, stage);
       await this.history.record({
         incidentId: incident.id,
-        action: hours === 24 ? HistoryAction.SLA_WARNING_24H : hours === 6 ? HistoryAction.SLA_WARNING_6H : HistoryAction.SLA_OVERDUE,
-        metadata: { deadlineAt: incident.deadlineAt.toISOString() },
+        action: stage === 24 ? HistoryAction.SLA_REMINDER_24H : stage === 48 ? HistoryAction.SLA_REMINDER_48H : HistoryAction.SLA_OVERDUE,
+        metadata: { deadlineAt: fresh.deadlineAt.toISOString(), stage },
       }, tx);
-      await queueMessage(tx, { chatId }, { text, label: codeLabel(incident), delivery: { dedupeKey: key } }, incident.id);
-      return true;
+      await queueMessage(tx, prepared.target, prepared.message, incident.id);
+      return prepared;
     }, TRANSACTION_OPTIONS);
-  }
-
-  private async notify(incident: Incident, text: string, dedupeKey: string): Promise<void> {
-    if (incident.assignedGroupId) {
-      await this.sector.notify(incident, text, dedupeKey);
-      return;
-    }
-    await this.distribution.notify(text, dedupeKey);
+    if (!notification) return false;
+    await this.messages.send(notification.target, notification.message);
+    return true;
   }
 }

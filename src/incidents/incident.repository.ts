@@ -117,12 +117,12 @@ export class IncidentRepository {
   }
 
   /** Active incidents whose deadline needs an SLA decision. */
-  async listActiveForSla(now: Date, horizonHours: number): Promise<Incident[]> {
-    const horizon = new Date(now.getTime() + horizonHours * 3_600_000);
+  async listActiveForSla(now: Date): Promise<Incident[]> {
+    const firstReminder = new Date(now.getTime() - 24 * 3_600_000);
     return this.prisma.incident.findMany({
       where: {
         status: { notIn: [IncidentStatus.RESOLVED, IncidentStatus.REJECTED] },
-        deadlineAt: { lt: horizon },
+        OR: [{ createdAt: { lte: firstReminder } }, { deadlineAt: { lte: now } }],
       },
       orderBy: { deadlineAt: 'asc' },
     });

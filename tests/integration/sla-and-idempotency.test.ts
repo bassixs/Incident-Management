@@ -1,6 +1,7 @@
 import { IncidentStatus, UserRole, type PrismaClient } from '@prisma/client';
-import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 
+import { MaxMessageService } from '../../src/max/max-message.service';
 import { HistoryAction } from '../../src/incidents/incident-history.service';
 import type { Update } from '../../src/max/max-types';
 import { UpdateDispatcher } from '../../src/server/update-dispatcher';
@@ -48,21 +49,23 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
     return incident;
   }
 
-  it('warns once at 24h, once at 6h and then marks the incident overdue', async () => {
+  it('warns exactly at elapsed 24h and 48h, replies to the sector card and expires at 72h', async () => {
     const incident = await routedIncident('Проверка SLA');
     const deadline = incident.deadlineAt;
 
-    const at23h = new Date(deadline.getTime() - 23 * 3_600_000);
-    let result = await harness.services.sla.sweep(at23h);
+    const at24h = new Date(incident.createdAt.getTime() + 24 * 3_600_000);
+    expect((await harness.services.sla.sweep(new Date(at24h.getTime() - 1))).warned24).toBe(0);
+    let result = await harness.services.sla.sweep(at24h);
     expect(result.warned24).toBe(1);
-    expect((await harness.services.sla.sweep(at23h)).warned24).toBe(0);
+    expect((await harness.services.sla.sweep(at24h)).warned24).toBe(0);
 
-    const at5h = new Date(deadline.getTime() - 5 * 3_600_000);
-    result = await harness.services.sla.sweep(at5h);
-    expect(result.warned6).toBe(1);
-    expect((await harness.services.sla.sweep(at5h)).warned6).toBe(0);
+    const at48h = new Date(incident.createdAt.getTime() + 48 * 3_600_000);
+    expect((await harness.services.sla.sweep(new Date(at48h.getTime() - 1))).warned48).toBe(0);
+    result = await harness.services.sla.sweep(at48h);
+    expect(result.warned48).toBe(1);
+    expect((await harness.services.sla.sweep(at48h)).warned48).toBe(0);
 
-    const afterDeadline = new Date(deadline.getTime() + 60_000);
+    const afterDeadline = new Date(deadline.getTime());
     result = await harness.services.sla.sweep(afterDeadline);
     expect(result.overdue).toBe(1);
     expect((await harness.services.sla.sweep(afterDeadline)).overdue).toBe(0);
@@ -72,15 +75,88 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
     // §14: an overdue incident keeps its workflow status and stays open.
     expect(fresh!.status).toBe(IncidentStatus.ASSIGNED);
 
+    const reminders = harness.messages.toChat(TEST_CHATS.sector).filter(entry => entry.message.operation?.type === 'sla-reminder');
+    expect(reminders).toHaveLength(3);
+    for (const entry of reminders) {
+      expect(entry.message.replyToMessageId).toBe(fresh!.sectorMessageId);
+      expect(entry.message.text).toContain('Хозяйственная группа');
+    }
+    expect((await harness.services.sla.sweep(new Date(deadline.getTime() + 86_400_000))).overdue).toBe(0);
+
     const events = await prisma.incidentHistory.findMany({ where: { incidentId: incident.id } });
     const actions = events.map((event) => event.action);
-    expect(actions).toContain(HistoryAction.SLA_WARNING_24H);
-    expect(actions).toContain(HistoryAction.SLA_WARNING_6H);
+    expect(actions).toContain(HistoryAction.SLA_REMINDER_24H);
+    expect(actions).toContain(HistoryAction.SLA_REMINDER_48H);
     expect(actions).toContain(HistoryAction.SLA_OVERDUE);
 
     expect(harness.messages.toChat(TEST_CHATS.sector).some((entry) => entry.message.text.includes('ПРОСРОЧЕНО'))).toBe(
       true,
     );
+  });
+
+  it('sends only the latest due stage after downtime and survives concurrent sweeps', async () => {
+    const incident = await routedIncident('Пропущены первые сутки');
+    const now = new Date(incident.createdAt.getTime() + 50 * 3_600_000);
+    const results = await Promise.all([harness.services.sla.sweep(now), harness.services.sla.sweep(now)]);
+    expect(results.reduce((sum, item) => sum + item.warned48, 0)).toBe(1);
+    expect(results.every(item => item.warned24 === 0)).toBe(true);
+    expect(await prisma.outboundMessage.count({ where: { dedupeKey: `sla:${incident.id}:24` } })).toBe(1);
+  });
+
+  it('preserves the legacy two-day mark without sending a duplicate', async () => {
+    const incident = await routedIncident('Существующее напоминание');
+    await prisma.incident.update({ where: { id: incident.id }, data: { slaWarn24SentAt: new Date() } });
+    expect((await harness.services.sla.sweep(new Date(incident.createdAt.getTime() + 49 * 3_600_000))).warned48).toBe(0);
+  });
+
+  it('replies to the distribution card while no group is assigned', async () => {
+    const incident = await harness.services.incidents.create({ requester: { maxUserId: TEST_USERS.requesterA, name: 'Иван Иванов', phone: '+7 900 111-22-33' }, text: 'Нужно распределить' });
+    await harness.services.sla.sweep(new Date(incident.createdAt.getTime() + 24 * 3_600_000));
+    const fresh = await harness.services.repository.findById(incident.id);
+    const reminder = harness.messages.toChat(TEST_CHATS.distribution).find(entry => entry.message.operation?.type === 'sla-reminder');
+    expect(reminder?.message.replyToMessageId).toBe(fresh!.distributionMessageId);
+    expect(reminder?.message.text).toContain('требуется распределение');
+  });
+
+  for (const status of ['WAITING_REVIEW', 'REVISION_REQUIRED', 'REJECTED'] as const) it(`handles status ${status}`, async () => {
+    const incident = await routedIncident('Проверка статуса');
+    const responder = await actorFor(prisma, TEST_USERS.responder, 'Анна Ответственная', [UserRole.RESPONDER]);
+    await prisma.incident.update({ where: { id: incident.id }, data: { status, currentResponderId: responder.userId } });
+    const result = await harness.services.sla.sweep(new Date(incident.createdAt.getTime() + 24 * 3_600_000));
+    expect(result.warned24).toBe(status === 'REJECTED' ? 0 : 1);
+    if (status !== 'REJECTED') expect(harness.messages.sent.at(-1)?.message.text).toContain('Анна Ответственная');
+  });
+
+  for (const outcome of ['retry', 'closed', 'superseded', 'missing-card'] as const) it(`durable reminder: ${outcome}`, async () => {
+    const original = await routedIncident('Доставка напоминания');
+    const incident = await prisma.incident.update({ where: { id: original.id }, data: {
+      createdAt: new Date(Date.now() - 25 * 3_600_000), deadlineAt: new Date(Date.now() + 47 * 3_600_000),
+    } });
+    await harness.services.sla.sweep();
+    const key = `sla:${incident.id}:elapsed24`;
+    // Deliver just the reminder: workflow cards have already been simulated by the harness.
+    await prisma.outboundMessage.updateMany({ where: { dedupeKey: { not: key } }, data: { status: 'SENT' } });
+    const max = { sendToChat: vi.fn().mockRejectedValueOnce(new Error('MAX unavailable')).mockResolvedValue({ body: { mid: 'reminder-delivered' } }) };
+    const worker = new MaxMessageService(max as never, { prisma, storage: {} as never });
+    await worker.flush();
+    expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: key } })).status).toBe('PENDING');
+    if (outcome === 'closed') await prisma.incident.update({ where: { id: incident.id }, data: { status: 'RESOLVED' } });
+    if (outcome === 'superseded') await prisma.incident.update({ where: { id: incident.id }, data: { createdAt: new Date(Date.now() - 49 * 3_600_000) } });
+    if (outcome === 'missing-card') await prisma.incident.update({ where: { id: incident.id }, data: { sectorMessageId: null } });
+    await prisma.outboundMessage.update({ where: { dedupeKey: key }, data: { nextAttemptAt: new Date(0) } });
+    const resumed = new MaxMessageService(max as never, { prisma, storage: {} as never });
+    await resumed.flush();
+    expect(max.sendToChat).toHaveBeenCalledTimes(outcome === 'retry' ? 2 : 1);
+    if (outcome === 'missing-card') {
+      expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: key } })).status).toBe('PENDING');
+      await prisma.incident.update({ where: { id: incident.id }, data: { sectorMessageId: 'restored-card' } });
+      await prisma.outboundMessage.update({ where: { dedupeKey: key }, data: { nextAttemptAt: new Date(0) } });
+      await resumed.flush();
+      expect(max.sendToChat.mock.calls.at(-1)?.[2]).toEqual({ link: { type: 'reply', mid: 'restored-card' } });
+    } else if (outcome === 'retry') {
+      expect(max.sendToChat.mock.calls.at(-1)?.[2]).toEqual({ link: { type: 'reply', mid: (await harness.services.repository.findById(incident.id))!.sectorMessageId } });
+    }
+    expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: key } })).status).toBe('SENT');
   });
 
   it('ignores resolved incidents', async () => {

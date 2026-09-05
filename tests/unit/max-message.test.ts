@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { AttachmentRequest } from '../../src/max/max-types';
 import {
@@ -213,4 +213,13 @@ describe('truncate', () => {
     expect(truncate('короткий', 20)).toBe('короткий');
     expect(unicodeLength(truncate('я'.repeat(50), 10))).toBe(10);
   });
+});
+
+it('links only the first part of a long reply to the original card', async () => {
+  const sendToChat = vi.fn().mockResolvedValue({ body: { mid: 'reply' } });
+  const service = new MaxMessageService({ sendToChat } as never);
+  await service.send({ chatId: -1n }, { text: 'a'.repeat(4000), replyToMessageId: 'original' });
+  expect(sendToChat).toHaveBeenCalledTimes(2);
+  expect(sendToChat.mock.calls[0]?.[2]).toEqual({ link: { type: 'reply', mid: 'original' } });
+  expect(sendToChat.mock.calls[1]?.[2]).toEqual({});
 });

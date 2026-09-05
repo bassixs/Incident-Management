@@ -231,6 +231,8 @@ model Incident {
   revisionReason  String?
 
   isOverdue         Boolean   @default(false)
+  slaReminder24SentAt DateTime?
+  /// Legacy name: also records the reminder at 48h after creation.
   slaWarn24SentAt   DateTime?
   slaWarn6SentAt    DateTime?
   overdueNotifiedAt DateTime?

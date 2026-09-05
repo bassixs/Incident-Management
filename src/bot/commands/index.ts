@@ -377,8 +377,8 @@ export const COMMANDS: Record<string, CommandHandler> = {
       [
         'Проверка сроков выполнена.',
         `Проверено: ${result.checked}`,
-        `Предупреждений 24ч: ${result.warned24}`,
-        `Предупреждений 6ч: ${result.warned6}`,
+        `Напоминаний через 24ч: ${result.warned24}`,
+        `Напоминаний через 48ч: ${result.warned48}`,
         `Просрочено: ${result.overdue}`,
         `Сессий очищено: ${result.sessionsPurged}`,
       ].join('\n'),
