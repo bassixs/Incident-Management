@@ -36,6 +36,10 @@ export class DeliveryAlertService {
     this.timer = undefined;
   }
 
+  async waitForIdle(): Promise<void> {
+    await this.sweepPromise;
+  }
+
   async checkNow(): Promise<void> {
     await this.kick();
   }

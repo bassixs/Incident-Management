@@ -1,3 +1,4 @@
+import { completeShutdown } from './server/shutdown';
 import type { FastifyInstance } from 'fastify';
 
 import { buildServices, type AppServices } from './app/container';
@@ -50,18 +51,33 @@ async function main(): Promise<void> {
 
   services.sla.start();
 
-  const shutdown = async (signal: string): Promise<void> => {
-    log.info({ signal }, 'shutting down');
-    services.sla.stop();
-    services.messages.stop();
-    services.deliveryAlerts.stop();
-    dispatcher.stop();
-    polling?.stop();
-    services.bot.stop();
-    await server?.close().catch(() => undefined);
-    await services.messages.flush().catch(() => undefined);
-    await disconnectDatabase();
-    process.exit(0);
+  let shutdownPromise: Promise<void> | undefined;
+  const shutdown = (signal: string): Promise<void> => {
+    if (shutdownPromise) return shutdownPromise;
+    shutdownPromise = (async () => {
+      log.info({ signal }, 'shutting down');
+      dispatcher.stop();
+      polling?.stop();
+      services.sla.stop();
+      services.deliveryAlerts.stop();
+      services.messages.stop();
+      await completeShutdown({
+        closeIngress: async () => server?.close(),
+        waitForHandlers: async () => Promise.all([
+          dispatcher.waitForIdle(), polling?.waitForIdle(),
+          services.sla.waitForIdle(), services.deliveryAlerts.waitForIdle(),
+        ]),
+        waitForMessages: () => services.messages.waitForIdle(),
+        disconnect: disconnectDatabase,
+      });
+      services.bot.stop();
+      log.info('graceful shutdown completed');
+      process.exit(0);
+    })().catch(error => {
+      log.fatal({ err: error instanceof Error ? error.message : String(error) }, 'shutdown did not complete; durable jobs retained');
+      process.exit(1);
+    });
+    return shutdownPromise;
   };
 
   process.on('SIGINT', () => void shutdown('SIGINT'));

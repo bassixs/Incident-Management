@@ -62,6 +62,58 @@ describeIntegration('durable delivery and button guards', () => {
     });
   }
 
+  it('finishes the active inbox update on stop and leaves the next one pending for a new worker', async () => {
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const active = new Promise<void>(resolve => { release = resolve; });
+    const max = { dispatch: vi.fn(async () => { entered(); await active; }) };
+    const dispatcher = new UpdateDispatcher(prisma, max as never);
+    const update = (id: string) => ({ update_type: 'message_created', timestamp: 1,
+      message: { sender: { user_id: 5, name: 'User' }, recipient: { chat_id: 5, chat_type: 'dialog' }, body: { mid: id, text: 'Текст' } } }) as unknown as Update;
+    await dispatcher.reserve(update('first'));
+    await dispatcher.reserve(update('second'));
+    const processing = dispatcher.kick();
+    await started;
+    dispatcher.stop();
+    let idle = false;
+    const stopped = dispatcher.waitForIdle().then(() => { idle = true; });
+    await expect(dispatcher.reserve(update('third'))).rejects.toThrow('shutting down');
+    expect(idle).toBe(false);
+    release();
+    await Promise.all([processing, stopped]);
+    expect(max.dispatch).toHaveBeenCalledTimes(1);
+    expect(await prisma.inboundUpdate.count({ where: { status: 'PROCESSED' } })).toBe(1);
+    expect(await prisma.inboundUpdate.count({ where: { status: 'PENDING' } })).toBe(1);
+    const resumed = new UpdateDispatcher(prisma, { dispatch: async () => undefined } as never);
+    await resumed.kick();
+    expect(await prisma.inboundUpdate.count({ where: { status: 'PROCESSED' } })).toBe(2);
+  });
+
+  it('waits for an immediate MAX send and persists later sends for the next process', async () => {
+    let entered!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const active = new Promise<void>(resolve => { release = resolve; });
+    const max = { sendToUser: vi.fn(async () => { entered(); await active; return { body: { mid: 'sent' } }; }) };
+    const worker = new MaxMessageService(max as never, { prisma, storage: {} as never });
+    const sending = worker.send({ userId: 5n }, { text: 'Первое', delivery: { dedupeKey: 'shutdown-first' } });
+    await started;
+    worker.stop();
+    let idle = false;
+    const stopped = worker.waitForIdle().then(() => { idle = true; });
+    expect((await worker.send({ userId: 5n }, { text: 'Следующее', delivery: { dedupeKey: 'shutdown-next' } })).state).toBe('queued');
+    expect(idle).toBe(false);
+    expect(max.sendToUser).toHaveBeenCalledTimes(1);
+    release();
+    await Promise.all([sending, stopped]);
+    expect(await prisma.outboundMessage.count({ where: { status: 'SENT' } })).toBe(1);
+    expect(await prisma.outboundMessage.count({ where: { status: 'PENDING' } })).toBe(1);
+    const resumed = new MaxMessageService(max as never, { prisma, storage: {} as never });
+    await resumed.flush();
+    expect(await prisma.outboundMessage.count({ where: { status: 'SENT' } })).toBe(2);
+  });
+
   it('allows only one concurrent press and reclaims an expired lease', async () => {
     const guard = new ActionGuardService(prisma);
     const now = new Date('2026-09-02T12:00:00.000Z');

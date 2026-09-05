@@ -1,3 +1,4 @@
+import { AsyncActivity } from '../utils/async-activity';
 import { randomUUID } from 'node:crypto';
 
 import {
@@ -87,6 +88,8 @@ const OUTBOX_MAX_ATTEMPTS = 12;
  * incident the fragment belongs to.
  */
 export class MaxMessageService {
+  private stopping = false;
+  private readonly activity = new AsyncActivity();
   private timer?: NodeJS.Timeout;
   private drainPromise?: Promise<void>;
 
@@ -105,6 +108,10 @@ export class MaxMessageService {
    * kind have to travel (MAX groups media by type).
    */
   async send(target: SendTarget, message: CompositeMessage): Promise<MessageSendResult> {
+    return this.activity.run(() => this.sendNow(target, message));
+  }
+
+  private async sendNow(target: SendTarget, message: CompositeMessage): Promise<MessageSendResult> {
     if (!this.durable) {
       const { firstMessageId } = await this.deliverLogical(target, message);
       return { firstMessageId, state: 'sent', trackingApplied: false };
@@ -118,6 +125,7 @@ export class MaxMessageService {
         trackingApplied: row.trackingApplied,
       };
     }
+    if (this.stopping) return { state: 'queued', trackingApplied: false };
     return this.attempt(row.id);
   }
 
@@ -167,9 +175,10 @@ export class MaxMessageService {
   /** Start the persistent outbox worker. Immediate delivery still happens in send(). */
   start(): void {
     if (!this.durable || this.timer) return;
+    this.stopping = false;
     const cutoff = new Date(Date.now() - 30 * 86_400_000);
-    void this.durable.prisma.outboundMessage
-      .deleteMany({ where: { status: OutboxStatus.SENT, sentAt: { lt: cutoff } } })
+    void this.activity.run(() => this.durable!.prisma.outboundMessage
+      .deleteMany({ where: { status: OutboxStatus.SENT, sentAt: { lt: cutoff } } }))
       .catch((error) =>
         log.warn({ err: error instanceof Error ? error.message : String(error) }, 'outbox cleanup failed'),
       );
@@ -179,8 +188,14 @@ export class MaxMessageService {
   }
 
   stop(): void {
+    this.stopping = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+  }
+
+  async waitForIdle(): Promise<void> {
+    await this.drainPromise;
+    await this.activity.waitForIdle();
   }
 
   async flush(): Promise<void> {
@@ -410,7 +425,7 @@ export class MaxMessageService {
   }
 
   private async kick(): Promise<void> {
-    if (!this.durable) return;
+    if (!this.durable || this.stopping) return;
     if (this.drainPromise) return this.drainPromise;
     this.drainPromise = this.drain().finally(() => {
       this.drainPromise = undefined;
@@ -420,7 +435,7 @@ export class MaxMessageService {
 
   private async drain(): Promise<void> {
     const prisma = this.durable!.prisma;
-    for (let processed = 0; processed < 50; processed += 1) {
+    for (let processed = 0; processed < 50 && !this.stopping; processed += 1) {
       const now = new Date();
       const stale = new Date(now.getTime() - OUTBOX_LEASE_MS);
       const candidate = await prisma.outboundMessage.findFirst({
@@ -433,7 +448,7 @@ export class MaxMessageService {
         orderBy: { createdAt: 'asc' },
         select: { id: true },
       });
-      if (!candidate) break;
+      if (!candidate || this.stopping) break;
       await this.attempt(candidate.id);
     }
   }

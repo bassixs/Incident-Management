@@ -20,6 +20,7 @@ const LONG_POLL_TIMEOUT_SECONDS = 30;
  */
 export class PollingRunner {
   private running = false;
+  private loopPromise?: Promise<void>;
 
   constructor(
     private readonly prisma: PrismaClient,
@@ -31,11 +32,15 @@ export class PollingRunner {
     if (this.running) return;
     this.running = true;
     log.warn('starting long polling — not for production use');
-    void this.loop();
+    this.loopPromise = this.loop();
   }
 
   stop(): void {
     this.running = false;
+  }
+
+  async waitForIdle(): Promise<void> {
+    await this.loopPromise;
   }
 
   private async loop(): Promise<void> {
@@ -47,9 +52,12 @@ export class PollingRunner {
           ...(marker === undefined ? {} : { marker }),
         });
 
+        if (!this.running) return;
         for (const update of response.updates ?? []) {
+          if (!this.running) return;
           await this.dispatcher.handle(update);
         }
+        if (!this.running) return;
 
         if (typeof response.marker === 'number') {
           await this.writeMarker(response.marker);

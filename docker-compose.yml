@@ -20,6 +20,7 @@ services:
 
   app:
     build: .
+    stop_grace_period: 75s
     restart: unless-stopped
     env_file:
       - .env
@@ -47,7 +48,7 @@ services:
       - uploads:/app/data/uploads
       - ./deploy/russian-trusted-ca.pem:/etc/ssl/max/russian-trusted-ca.pem:ro
     # Migrations are applied on start so a fresh volume comes up ready.
-    command: sh -c "npx prisma migrate deploy && node dist/index.js"
+    command: sh -c "npx prisma migrate deploy && exec node dist/index.js"
 
   # TLS termination for the webhook. Start with:
   #   docker compose --profile tls up -d

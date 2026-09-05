@@ -1,3 +1,4 @@
+import { AsyncActivity } from '../utils/async-activity';
 import { InboxStatus, Prisma, type PrismaClient } from '@prisma/client';
 
 import { isUniqueViolation } from '../database/prisma';
@@ -20,6 +21,8 @@ export type Reservation = { id?: string; key: string; fresh: boolean };
  * rollout and continue to protect against old redeliveries.
  */
 export class UpdateDispatcher {
+  private stopping = false;
+  private readonly activity = new AsyncActivity();
   private timer?: NodeJS.Timeout;
   private drainPromise?: Promise<void>;
 
@@ -29,6 +32,7 @@ export class UpdateDispatcher {
   ) {}
 
   async reserve(update: Update): Promise<Reservation> {
+    if (this.stopping) throw new Error('Dispatcher is shutting down; retry update later');
     const key = buildUpdateKey(update);
     const legacy = await this.prisma.processedUpdate.findUnique({
       where: { externalUpdateKey: key },
@@ -56,6 +60,7 @@ export class UpdateDispatcher {
 
   async start(): Promise<void> {
     if (this.timer) return;
+    this.stopping = false;
     const interrupted = await this.prisma.inboundUpdate.updateMany({
       where: { status: InboxStatus.PROCESSING },
       data: {
@@ -74,11 +79,18 @@ export class UpdateDispatcher {
   }
 
   stop(): void {
+    this.stopping = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
   }
 
+  async waitForIdle(): Promise<void> {
+    await this.drainPromise;
+    await this.activity.waitForIdle();
+  }
+
   async kick(): Promise<void> {
+    if (this.stopping) return;
     if (this.drainPromise) return this.drainPromise;
     this.drainPromise = this.drain().finally(() => {
       this.drainPromise = undefined;
@@ -87,18 +99,23 @@ export class UpdateDispatcher {
   }
 
   private async drain(): Promise<void> {
-    for (let processed = 0; processed < 100; processed += 1) {
+    for (let processed = 0; processed < 100 && !this.stopping; processed += 1) {
       const row = await this.prisma.inboundUpdate.findFirst({
         where: { status: InboxStatus.PENDING, nextAttemptAt: { lte: new Date() } },
         orderBy: { receivedAt: 'asc' },
         select: { id: true },
       });
-      if (!row) break;
+      if (!row || this.stopping) break;
       await this.processById(row.id);
     }
   }
 
   private async processById(id: string): Promise<void> {
+    if (this.stopping) return;
+    return this.activity.run(() => this.processClaimed(id));
+  }
+
+  private async processClaimed(id: string): Promise<void> {
     const claimed = await this.prisma.inboundUpdate.updateMany({
       where: { id, status: InboxStatus.PENDING },
       data: { status: InboxStatus.PROCESSING, lockedAt: new Date(), attempts: { increment: 1 } },

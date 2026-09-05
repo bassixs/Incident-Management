@@ -1,3 +1,4 @@
+import { AsyncActivity } from '../utils/async-activity';
 import type { Incident, PrismaClient } from '@prisma/client';
 import { TRANSACTION_OPTIONS } from '../database/prisma';
 import { queueMessage } from '../delivery/workflow-outbox';
@@ -35,6 +36,7 @@ export type SlaSweepResult = {
  * restart or a second worker cannot spam a chat.
  */
 export class SlaService {
+  private readonly activity = new AsyncActivity();
   private timer?: NodeJS.Timeout;
 
   constructor(
@@ -70,7 +72,15 @@ export class SlaService {
     this.timer = undefined;
   }
 
+  async waitForIdle(): Promise<void> {
+    await this.activity.waitForIdle();
+  }
+
   async sweep(now = new Date()): Promise<SlaSweepResult> {
+    return this.activity.run(() => this.sweepNow(now));
+  }
+
+  private async sweepNow(now: Date): Promise<SlaSweepResult> {
     const result: SlaSweepResult = { checked: 0, warned24: 0, warned6: 0, overdue: 0, sessionsPurged: 0 };
     result.sessionsPurged = await this.sessions.purgeExpired();
 
