@@ -12,8 +12,8 @@ export type StoredAttachmentRecord = {
 /**
  * Re-hydrate stored attachments for an outgoing MAX message.
  *
- * Files that can no longer be read are skipped rather than aborting delivery —
- * an answer without its photo still has to reach the requester.
+ * A missing attachment must fail the attempt; the durable outbox can retry
+ * without falsely claiming that the complete answer reached the requester.
  */
 export async function loadOutboundAttachments(
   media: MediaService,
@@ -21,8 +21,7 @@ export async function loadOutboundAttachments(
 ): Promise<OutboundAttachment[]> {
   const outbound: OutboundAttachment[] = [];
   for (const record of records) {
-    const body = await media.tryLoad(record.storageKey);
-    if (!body) continue;
+    const body = await media.load(record.storageKey);
     outbound.push({ type: record.type, body, originalName: record.originalName });
   }
   return outbound;

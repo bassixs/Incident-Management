@@ -1,3 +1,4 @@
+import { AppError, ValidationError } from '../utils/errors';
 import { randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 
@@ -99,17 +100,17 @@ export class MediaService {
     private readonly max: MaxClient,
   ) {}
 
-  /** Download one MAX attachment and persist it. Returns null if unusable. */
-  async ingest(prefix: string, media: IncomingMedia): Promise<StoredMedia | null> {
-    if (media.kind !== 'IMAGE' && media.kind !== 'FILE') return null;
+  /** Every accepted attachment must be persisted, otherwise fail the submission. */
+  async ingest(prefix: string, media: IncomingMedia): Promise<StoredMedia> {
+    if (media.kind !== 'IMAGE' && media.kind !== 'FILE') throw new ValidationError('Этот тип вложения не поддерживается.');
     if (!media.url) {
-      log.warn({ prefix, kind: media.kind }, 'attachment has no download url, skipping');
-      return null;
+      throw new AppError('Не удалось получить вложение из MAX. Прикрепите его заново и повторите отправку.', 'MEDIA_UNAVAILABLE');
     }
+    let key: string | undefined;
     try {
       const { body, mimeType } = await this.max.downloadFromUrl(media.url);
       const extension = pickExtension(media.filename, mimeType, media.kind);
-      const key = `${prefix}/${randomUUID()}${extension}`;
+      key = `${prefix}/${randomUUID()}${extension}`;
       const stored = await this.storage.save({ key, body, mimeType });
       return {
         type: media.kind,
@@ -125,35 +126,33 @@ export class MediaService {
         { prefix, err: error instanceof Error ? error.message : String(error) },
         'failed to ingest MAX attachment',
       );
-      return null;
+      if (key) await this.storage.remove(key).catch(() => undefined);
+      throw new AppError('Не удалось сохранить вложение. Повторите отправку с фотографией или файлом.', 'MEDIA_UNAVAILABLE');
     }
   }
 
   async ingestAll(prefix: string, media: IncomingMedia[]): Promise<StoredMedia[]> {
     const stored: StoredMedia[] = [];
-    for (const item of media) {
-      const result = await this.ingest(prefix, item);
-      if (result) stored.push(result);
+    try {
+      for (const item of media) stored.push(await this.ingest(prefix, item));
+      return stored;
+    } catch (error) {
+      await this.discard(stored);
+      throw error;
     }
-    return stored;
   }
 
   async load(storageKey: string): Promise<Buffer> {
     return this.storage.load(storageKey);
   }
 
-  /** Best-effort read; a missing file must not break answer delivery. */
-  async tryLoad(storageKey: string): Promise<Buffer | null> {
-    try {
-      return await this.storage.load(storageKey);
-    } catch (error) {
-      log.error(
-        { storageKey, err: error instanceof Error ? error.message : String(error) },
-        'stored attachment could not be read',
-      );
-      return null;
-    }
+  /** Only for newly ingested files verified to have no committed DB owner. */
+  async discard(stored: StoredMedia[]): Promise<void> {
+    await Promise.all(stored.map(item => this.storage.remove(item.storageKey).catch(error => {
+      log.warn({ storageKey: item.storageKey, err: String(error) }, 'uncommitted attachment cleanup failed');
+    })));
   }
+
 }
 
 const MIME_EXTENSIONS: Record<string, string> = {

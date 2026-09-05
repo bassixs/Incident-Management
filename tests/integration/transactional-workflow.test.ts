@@ -1,3 +1,4 @@
+import { MediaService } from '../../src/media/media.service';
 import { UserRole, type PrismaClient } from '@prisma/client';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 
@@ -79,6 +80,54 @@ describeIntegration('transactional workflow and recovery', () => {
     await handleIncidentCallback(context, { kind: 'incident', action: 'revision', incidentId: incident.id });
     const session = await h.services.sessions.find(reviewer.maxUserId, TEST_CHATS.review);
     expect(session?.data).toMatchObject({ reviewAnswerId: second.id });
+  });
+
+  it('does not consume a draft or advance an answer when saving its photo fails', async () => {
+    const photo = [{ kind: 'IMAGE' as const, url: 'https://example.test/photo' }];
+    vi.spyOn(h.services.media, 'ingestAll').mockRejectedValueOnce(new Error('photo unavailable'));
+    const session = await h.services.sessions.start({ maxUserId: TEST_USERS.requesterA, chatId: TEST_USERS.requesterA, type: 'WAITING_INCIDENT_CONFIRMATION' });
+    await expect(h.services.incidents.create({ requester: { maxUserId: TEST_USERS.requesterA, name: 'Иванов Иван', phone: '+79001234567' }, text: 'Фонарь', media: photo, draftSessionId: session.id })).rejects.toThrow('photo unavailable');
+    expect(await prisma.incident.count()).toBe(0);
+    expect(await prisma.operatorSession.count()).toBe(1);
+    const incident = await assigned();
+    vi.spyOn(h.services.media, 'ingestAll').mockRejectedValueOnce(new Error('photo unavailable'));
+    await expect(h.services.answers.submit(incident.id, await actor(), 'Ответ', photo)).rejects.toThrow('photo unavailable');
+    expect((await h.services.repository.findById(incident.id))?.status).toBe('ASSIGNED');
+    expect(await prisma.incidentAnswer.count()).toBe(0);
+  });
+
+  it('removes newly ingested photos only after verifying the transaction did not commit', async () => {
+    const files = new Map<string, Buffer>();
+    const storage = { save: async ({ key, body }: { key: string; body: Buffer }) => { files.set(key, body); return { storageKey: key, size: body.length }; }, remove: async (key: string) => { files.delete(key); } };
+    const media = new MediaService(storage as never, { downloadFromUrl: async () => ({ body: Buffer.from('photo') }) } as never);
+    const services = buildServices(prisma, { media, messages: h.messages as never });
+    vi.spyOn(outbox, 'queueDistribution').mockRejectedValueOnce(new Error('queue failed'));
+    await expect(services.incidents.create({ requester: { maxUserId: TEST_USERS.requesterA, name: 'Иванов Иван', phone: '+79001234567' }, text: 'Фонарь', media: [{ kind: 'IMAGE', url: 'https://example.test/photo' }] })).rejects.toThrow('queue failed');
+    expect(files.size).toBe(0);
+    expect(await prisma.incident.count()).toBe(0);
+  });
+
+  it('keeps an answer undelivered until its missing stored file is restored', async () => {
+    const { incident, answer } = await awaitingReview();
+    await prisma.answerAttachment.create({ data: { answerId: answer.id, type: 'FILE', storageKey: 'answer.pdf', originalName: 'answer.pdf', size: 3 } });
+    await h.services.review.approve(incident.id, await actor());
+    // The fake immediate transport above is only setup; exercise the real worker below.
+    await prisma.incidentAnswer.update({ where: { id: answer.id }, data: { deliveredAt: null } });
+    let available = false;
+    const uploadFile = vi.fn().mockResolvedValue({ type: 'file', payload: { token: 'test' } });
+    const max = { uploadFile, sendToUser: vi.fn().mockResolvedValue({ body: { mid: 'delivered' } }), sendToChat: async () => ({ body: { mid: 'chat' } }), editMessage: async () => undefined };
+    const storage = { load: async () => { if (!available) throw new Error('file temporarily unavailable'); return Buffer.from('pdf'); }, remove: async () => undefined };
+    const worker = new MaxMessageService(max as never, { prisma, storage: storage as never });
+    // Isolate the answer from setup notifications.
+    await prisma.outboundMessage.updateMany({ where: { NOT: { dedupeKey: `answer:${answer.id}` } }, data: { status: 'SENT' } });
+    await worker.flush();
+    expect((await prisma.incidentAnswer.findUniqueOrThrow({ where: { id: answer.id } })).deliveredAt).toBeNull();
+    expect(max.sendToUser).not.toHaveBeenCalled();
+    available = true;
+    await prisma.outboundMessage.update({ where: { dedupeKey: `answer:${answer.id}` }, data: { nextAttemptAt: new Date(0) } });
+    await worker.flush();
+    expect(uploadFile).toHaveBeenCalledWith(Buffer.from('pdf'), 'answer.pdf');
+    expect((await prisma.incidentAnswer.findUniqueOrThrow({ where: { id: answer.id } })).deliveredAt).not.toBeNull();
   });
 
   it('commits registration, history, consumed draft and both outgoing messages together', async () => {

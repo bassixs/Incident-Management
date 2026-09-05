@@ -118,6 +118,9 @@ export class IncidentService {
     if (media.some((item) => item.kind === 'AUDIO')) {
       throw new ValidationError(REJECTION_MESSAGES.audio, { reason: 'audio' });
     }
+    if (media.some(item => item.kind !== 'IMAGE')) {
+      throw new ValidationError('К обращению можно приложить только фотографии. Удалите другие вложения и повторите отправку.');
+    }
     const normalised = normaliseIncidentText(text ?? '');
     if (normalised.length === 0) {
       throw new ValidationError(REJECTION_MESSAGES.empty, { reason: 'empty' });
@@ -160,6 +163,7 @@ export class IncidentService {
 
     const incidentId = randomUUID();
     const stored = await this.media.ingestAll(`incidents/${incidentId}`, (input.media ?? []).filter(m => m.kind === 'IMAGE'));
+    let transactionBodyCompleted = false;
     const incident = await this.prisma.$transaction(async (tx) => {
       await acquireAdvisoryLock(tx, 'incident-quota', input.requester.maxUserId.toString());
 
@@ -224,8 +228,17 @@ export class IncidentService {
 
       await this.attachMedia(tx, created.id, stored);
       await queueDistribution(tx, created.id);
+      transactionBodyCompleted = true;
       return created;
-    }, TRANSACTION_OPTIONS);
+    }, TRANSACTION_OPTIONS).catch(async error => {
+      // Never remove files after an ambiguous COMMIT/network failure.
+      if (stored.length && !transactionBodyCompleted) {
+        try {
+          if (!(await this.prisma.incident.findUnique({ where: { id: incidentId }, select: { id: true } }))) await this.media.discard(stored);
+        } catch { log.warn({ incidentId }, 'unable to verify attachment ownership after transaction failure; retaining files'); }
+      }
+      throw error;
+    });
 
     log.info(
       incidentLogFields({

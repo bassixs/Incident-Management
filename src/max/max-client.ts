@@ -158,8 +158,9 @@ export class MaxClient {
 
   /** Fetch an attachment MAX hosts behind a temporary URL. */
   async downloadFromUrl(url: string): Promise<{ body: Buffer; mimeType?: string }> {
+    const signal = AbortSignal.timeout(30_000);
     return this.call('downloadFromUrl', async () => {
-      const response = await fetch(url);
+      const response = await fetch(url, { signal });
       if (!response.ok) {
         throw new Error(`Failed to download MAX attachment: HTTP ${response.status}`);
       }

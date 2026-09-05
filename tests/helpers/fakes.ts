@@ -45,6 +45,7 @@ export class FakeMessageService {
 }
 
 export class FakeMediaService {
+  async discard(): Promise<void> {}
   async tryLoad(): Promise<Buffer | null> {
     return null;
   }

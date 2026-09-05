@@ -124,7 +124,7 @@ export class MaxMessageService {
   private async deliverLogical(
     target: SendTarget,
     message: Omit<CompositeMessage, 'delivery'>,
-    strictAttachments = false,
+    strictAttachments = true,
   ): Promise<{ firstMessageId?: string }> {
     const parts = splitText(message.text, message.label);
     const keyboardAttachment: AttachmentRequest | undefined = message.keyboard?.length
