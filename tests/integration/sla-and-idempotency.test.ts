@@ -111,6 +111,7 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
 
   it('replies to the distribution card while no group is assigned', async () => {
     const incident = await harness.services.incidents.create({ requester: { maxUserId: TEST_USERS.requesterA, name: 'Иван Иванов', phone: '+7 900 111-22-33' }, text: 'Нужно распределить' });
+    await harness.services.distribution.publishCard(incident.id);
     await harness.services.sla.sweep(new Date(incident.createdAt.getTime() + 24 * 3_600_000));
     const fresh = await harness.services.repository.findById(incident.id);
     const reminder = harness.messages.toChat(TEST_CHATS.distribution).find(entry => entry.message.operation?.type === 'sla-reminder');
