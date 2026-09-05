@@ -3,7 +3,7 @@ import { SessionType } from '@prisma/client';
 import type { AppServices } from '../../app/container';
 import type { CallbackPayload } from '../../max/callback-payload';
 import { PERIOD_TEMPLATE, rangeForPreset, type ReportPreset } from '../../reports/report-range';
-import { requirePermission } from '../middleware/authorize';
+import { assertWorkingChat, requirePermission } from '../middleware/authorize';
 import { ensureFreeSession } from '../handlers/session-guard';
 import type { ResolvedActor } from '../handlers/helpers';
 import { sendReport } from '../views/report';
@@ -12,6 +12,7 @@ export type ReportCallbackContext = {
   services: AppServices;
   actor: ResolvedActor;
   chatId: bigint | undefined;
+  isDialog: boolean;
 };
 
 /**
@@ -26,6 +27,7 @@ export async function handleReportCallback(
 ): Promise<string | undefined> {
   const { services, actor, chatId } = context;
   requirePermission(actor, 'report.generate');
+  await assertWorkingChat(services, chatId, context.isDialog);
   if (chatId === undefined) return 'Отчёт доступен только в рабочем чате.';
 
   if (payload.action === 'custom') {

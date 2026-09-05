@@ -11,6 +11,7 @@ import { SESSION_PROMPTS } from '../handlers/session-guard';
 import { handleIncidentCallback } from './incident.callbacks';
 import { handleReportCallback } from './report.callbacks';
 import { handleUserCallback } from './user.callbacks';
+import { assertWorkingChat } from '../middleware/authorize';
 
 const log = moduleLogger('bot-callbacks');
 
@@ -48,6 +49,7 @@ export async function handleCallbackUpdate(services: AppServices, ctx: Context):
       messageId,
       callback.callback_id,
       payload,
+      update.message?.recipient?.chat_type !== 'chat',
     );
     const raced = await Promise.race([
       operation.then((notice) => ({ kind: 'done' as const, notice })),
@@ -92,16 +94,18 @@ async function dispatchCallback(
   messageId: string | undefined,
   callbackId: string,
   payload: NonNullable<ReturnType<typeof parseCallbackPayload>>,
+  isDialog: boolean,
 ): Promise<string | undefined> {
   switch (payload.kind) {
     case 'user':
       return handleUserCallback({ services, actor, chatId, messageId, callbackId }, payload);
     case 'incident':
+      await assertWorkingChat(services, chatId, isDialog);
       return handleIncidentCallback({ services, actor, chatId, messageId }, payload);
     case 'session':
       return handleSessionCallback(services, actor.maxUserId, chatId, payload.action);
     case 'report':
-      return handleReportCallback({ services, actor, chatId }, payload);
+      return handleReportCallback({ services, actor, chatId, isDialog }, payload);
     case 'noop':
       return undefined;
   }

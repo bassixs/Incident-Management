@@ -1,6 +1,7 @@
 import type { AppServices } from '../../app/container';
 import type { ReportRange } from '../../reports/report-range';
 import { moduleLogger } from '../../utils/logger';
+import { assertWorkingChat } from '../middleware/authorize';
 
 const log = moduleLogger('bot-report');
 
@@ -16,6 +17,7 @@ export async function sendReport(
   range: ReportRange,
   actorMaxUserId: bigint,
 ): Promise<void> {
+  await assertWorkingChat(services, chatId);
   await services.messages.send({ chatId }, { text: `Готовлю отчёт ${range.title}…` });
 
   const { buffer, fileName, rows } = await services.reports.build(range);

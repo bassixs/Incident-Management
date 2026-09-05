@@ -120,7 +120,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
 
   incident: async ({ services, actor, chatId, isDialog, args }) => {
     requirePermission(actor, 'incident.lookup');
-    assertWorkingChat(isDialog);
+    await assertWorkingChat(services, chatId, isDialog);
     const code = args[0];
     if (!code) throw new ValidationError('Использование: /incident INC-20260823-0001');
     const incident = await services.incidents.findByPublicCode(code);
@@ -130,7 +130,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
 
   history: async ({ services, actor, chatId, isDialog, args }) => {
     requirePermission(actor, 'incident.lookup');
-    assertWorkingChat(isDialog);
+    await assertWorkingChat(services, chatId, isDialog);
     const code = args[0];
     if (!code) throw new ValidationError('Использование: /history INC-20260823-0001');
     const incident = await services.incidents.findByPublicCode(code);
@@ -155,7 +155,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
    */
   report: async ({ services, actor, chatId, isDialog, args }) => {
     requirePermission(actor, 'report.generate');
-    assertWorkingChat(isDialog);
+    await assertWorkingChat(services, chatId, isDialog);
 
     if (args.length === 0) {
       await services.messages.send(
@@ -170,7 +170,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
 
   resend: async ({ services, actor, chatId, isDialog, args }) => {
     requirePermission(actor, 'incident.lookup');
-    assertWorkingChat(isDialog);
+    await assertWorkingChat(services, chatId, isDialog);
     const code = args[0];
     if (!code) throw new ValidationError('Использование: /resend INC-20260823-0001');
     const incident = await services.incidents.findByPublicCode(code);
@@ -547,7 +547,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
 
   retention_preview: async ({ services, actor, chatId, isDialog }) => {
     requirePermission(actor, 'admin.manage');
-    assertWorkingChat(isDialog);
+    await assertWorkingChat(services, chatId, isDialog);
     const preview = await services.retention.preview();
     await reply(
       services,
@@ -566,7 +566,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
 
   retention_run: async ({ services, actor, chatId, isDialog, args }) => {
     requirePermission(actor, 'admin.manage');
-    assertWorkingChat(isDialog);
+    await assertWorkingChat(services, chatId, isDialog);
     if (args.join(' ').trim().toUpperCase() !== 'УДАЛИТЬ') {
       throw new ValidationError('Сначала выполните /retention_preview, затем подтвердите: /retention_run УДАЛИТЬ');
     }
@@ -733,6 +733,17 @@ function parseMaxId(raw: string): bigint {
   } catch {
     throw new ValidationError(`Некорректный MAX ID: ${raw}`);
   }
+}
+
+// Setup and public commands may run before a group is registered. Staff actions
+// in group chats always require a current configured destination, including ADMIN.
+const PUBLIC_COMMANDS = new Set(['start', 'help', 'rules', 'my', 'whoami', 'chatid']);
+for (const [name, handler] of Object.entries(COMMANDS)) {
+  if (PUBLIC_COMMANDS.has(name)) continue;
+  COMMANDS[name] = async context => {
+    if (!context.isDialog) await assertWorkingChat(context.services, context.chatId);
+    await handler(context);
+  };
 }
 
 export function findCommand(name: string): CommandHandler | undefined {

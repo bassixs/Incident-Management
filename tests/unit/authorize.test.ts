@@ -1,7 +1,10 @@
 import { UserRole } from '@prisma/client';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { getConfig } from '../../src/config';
+import type { AppServices } from '../../src/app/container';
+import { COMMANDS } from '../../src/bot/commands';
+import { handleReportCallback } from '../../src/bot/callbacks/report.callbacks';
 import type { IncidentWithRelations } from '../../src/incidents/incident.repository';
 import {
   assertApprover,
@@ -25,7 +28,7 @@ function actor(maxUserId: bigint, roles: UserRole[]): ResolvedActor {
   };
 }
 
-const services = { config: getConfig() } as never;
+const services = { config: getConfig() } as AppServices;
 
 const requester = actor(TEST_USERS.requesterA, [UserRole.REQUESTER]);
 const dispatcher = actor(TEST_USERS.dispatcher, [UserRole.REQUESTER, UserRole.DISPATCHER]);
@@ -119,9 +122,19 @@ describe('responder actions', () => {
 });
 
 describe('working-chat commands', () => {
-  it('are refused in a private dialog', () => {
-    expect(() => assertWorkingChat(true)).toThrow(ForbiddenError);
-    expect(() => assertWorkingChat(false)).not.toThrow();
+  it('are refused in a private dialog and allow configured central chats', async () => {
+    await expect(assertWorkingChat(services, TEST_CHATS.distribution, true)).rejects.toThrow(ForbiddenError);
+    await expect(assertWorkingChat(services, TEST_CHATS.distribution)).resolves.toBeUndefined();
+    await expect(assertWorkingChat(services, undefined)).rejects.toThrow(ForbiddenError);
+  });
+
+  it('allows only active registered profile chats', async () => {
+    const checked = { ...services, prisma: { responsibleGroup: {
+      findFirst: async ({ where }: { where: { maxChatId: bigint; isActive: boolean } }) =>
+        where.maxChatId === TEST_CHATS.sector && where.isActive ? { id: 'configured' } : null,
+    } } } as unknown as AppServices;
+    await expect(assertWorkingChat(checked, TEST_CHATS.sector)).resolves.toBeUndefined();
+    await expect(assertWorkingChat(checked, -99999n)).rejects.toThrow(ForbiddenError);
   });
 
   it('do not leak the reason for a denial', () => {
@@ -130,5 +143,21 @@ describe('working-chat commands', () => {
     } catch (error) {
       expect((error as ForbiddenError).message).toBe('У вас нет прав для этого действия.');
     }
+  });
+
+  it('blocks admin lookups and report buttons before reading or exporting data in an unknown group', async () => {
+    const send = vi.fn();
+    const checked = { config: getConfig(), messages: { send }, prisma: {
+      responsibleGroup: { findFirst: vi.fn().mockResolvedValue(null) },
+    } } as unknown as AppServices;
+    for (const name of ['incident', 'history', 'report', 'resend', 'audit', 'delivery_errors']) {
+      await expect(COMMANDS[name]!({ services: checked, actor: admin, chatId: -99999n,
+        isDialog: false, args: ['INC-20260823-0001'] })).rejects.toThrow(ForbiddenError);
+    }
+    for (const action of ['custom', '7d'] as const) {
+      await expect(handleReportCallback({ services: checked, actor: admin, chatId: -99999n,
+        isDialog: false }, { kind: 'report', action })).rejects.toThrow(ForbiddenError);
+    }
+    expect(send).not.toHaveBeenCalled();
   });
 });

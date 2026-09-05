@@ -9,7 +9,7 @@ import { AppError, ValidationError } from '../../utils/errors';
 import { incidentLogFields, moduleLogger } from '../../utils/logger';
 import { isBlank } from '../../utils/text';
 import { parseReportRange } from '../../reports/report-range';
-import { assertApprover, assertDispatcher, assertResponder, requirePermission } from '../middleware/authorize';
+import { assertApprover, assertDispatcher, assertResponder, assertWorkingChat, requirePermission } from '../middleware/authorize';
 import { sendReport } from '../views/report';
 import { codeLabel } from '../views/cards';
 import type { ResolvedActor } from './helpers';
@@ -35,6 +35,7 @@ export async function handleOperatorMessage(
   const media = classifyAttachments(message.body.attachments);
 
   try {
+    await assertWorkingChat(services, chatId);
     switch (session.type) {
       case SessionType.WAITING_REJECTION_REASON:
         await applyRejection(services, actor, chatId, session, text);

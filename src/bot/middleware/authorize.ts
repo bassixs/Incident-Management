@@ -77,8 +77,10 @@ export function assertResponder(
  * a private dialog even for an admin: the output belongs in the chat whose
  * membership already defines who may read it.
  */
-export function assertWorkingChat(isDialog: boolean): void {
-  if (isDialog) {
-    throw new ForbiddenError('Эта команда доступна только в рабочем чате.');
-  }
+export async function assertWorkingChat(services: AppServices, chatId: bigint | undefined, isDialog = false): Promise<void> {
+  const deny = () => new ForbiddenError('Эта команда доступна только в настроенном рабочем чате.');
+  if (isDialog || chatId === undefined) throw deny();
+  if ([services.config.DISTRIBUTION_CHAT_ID, services.config.REVIEW_CHAT_ID, services.config.DELIVERY_ALERT_CHAT_ID].includes(chatId)) return;
+  const group = await services.prisma.responsibleGroup.findFirst({ where: { maxChatId: chatId, isActive: true }, select: { id: true } });
+  if (!group) throw deny();
 }
