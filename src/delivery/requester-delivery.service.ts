@@ -11,6 +11,7 @@ import { NotFoundError } from '../utils/errors';
 import { incidentLogFields, moduleLogger } from '../utils/logger';
 
 const log = moduleLogger('delivery');
+export type DeliveryOutcome = 'sent' | 'queued' | 'already-sent';
 
 /**
  * The single place allowed to send anything to a requester.
@@ -78,7 +79,7 @@ export class RequesterDeliveryService {
    * Deliver an approved answer and its attachments (§31).
    * Idempotent per answer version: a second call is a no-op.
    */
-  async deliverAnswer(incidentId: string, answerId: string, text: string): Promise<boolean> {
+  async deliverAnswer(incidentId: string, answerId: string, text: string): Promise<DeliveryOutcome> {
     const incident = await this.loadIncident(incidentId);
     const answer = incident.answers.find((item) => item.id === answerId);
     if (!answer) throw new NotFoundError(`Answer ${answerId} does not belong to incident ${incidentId}`);
@@ -87,7 +88,7 @@ export class RequesterDeliveryService {
         incidentLogFields({ incidentId, publicCode: incident.publicCode, action: HistoryAction.ANSWER_SENT }),
         'answer already delivered, skipping duplicate send',
       );
-      return false;
+      return 'already-sent';
     }
 
     const userId = this.recipientOf(incident);
@@ -133,6 +134,6 @@ export class RequesterDeliveryService {
       }),
       result.state === 'sent' ? 'answer delivered to requester' : 'answer queued for requester delivery',
     );
-    return true;
+    return result.state;
   }
 }

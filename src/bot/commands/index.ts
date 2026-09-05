@@ -179,8 +179,10 @@ export const COMMANDS: Record<string, CommandHandler> = {
     await services.messages.send(
       { chatId },
       {
-        text: sent
-          ? `✅ Ответ по ${incident.publicCode} отправлен пользователю повторно.`
+        text: sent === 'queued'
+          ? `⏳ Ответ по ${incident.publicCode} ожидает доставки. Бот повторит отправку автоматически.`
+          : sent === 'sent'
+          ? `✅ Ответ по ${incident.publicCode} доставлен пользователю.`
           : `ℹ️ Ответ по ${incident.publicCode} уже был доставлен ранее.`,
       },
     );

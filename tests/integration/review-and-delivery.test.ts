@@ -281,9 +281,9 @@ describeIntegration('review, revision and delivery (PostgreSQL)', () => {
     await harness.services.review.approve(incident.id, approver);
 
     // Already delivered: a resend must be a no-op rather than a duplicate.
-    expect(await harness.services.review.resend(incident.id)).toBe(false);
+    expect(await harness.services.review.resend(incident.id)).toBe('already-sent');
 
     await prisma.incidentAnswer.updateMany({ where: { incidentId: incident.id }, data: { deliveredAt: null } });
-    expect(await harness.services.review.resend(incident.id)).toBe(true);
+    expect(await harness.services.review.resend(incident.id)).toBe('sent');
   });
 });

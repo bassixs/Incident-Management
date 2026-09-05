@@ -1,3 +1,4 @@
+import { queueDeliveryStatus } from '../delivery/delivery-status';
 import { randomUUID } from 'node:crypto';
 import { queueAnswer } from '../delivery/workflow-outbox';
 import type { Tx } from '../database/prisma';
@@ -81,6 +82,7 @@ export class AnswerService {
     answer: IncidentAnswer;
     sentDirectly: boolean;
     deliveryFailed: boolean;
+    deliveryQueued: boolean;
   }> {
     const { text } = this.validate(rawText, media);
 
@@ -173,6 +175,7 @@ export class AnswerService {
 
       await this.attachMedia(tx, created.id, stored);
       await queueAnswer(tx, incidentId, created.id, direct);
+      if (direct) await queueDeliveryStatus(tx, incidentId, created.id, false);
       return created;
     }, TRANSACTION_OPTIONS);
 
@@ -189,9 +192,10 @@ export class AnswerService {
 
     const incident = (await this.repository.findById(incidentId))!;
     let deliveryFailed = false;
+    let deliveryQueued = false;
     if (direct) {
       try {
-        await this.review.deliverApprovedAnswer(incident, answer);
+        deliveryQueued = (await this.review.deliverApprovedAnswer(incident, answer)) === 'queued';
       } catch (error) {
         await this.history.record({
           incidentId,
@@ -201,14 +205,14 @@ export class AnswerService {
         });
         deliveryFailed = true;
       }
-      if (!deliveryFailed) {
-        await this.distribution.markWorked(incident);
+      if (!deliveryFailed && !deliveryQueued) {
+        await this.distribution.markWorked((await this.repository.findById(incidentId))!);
       }
     } else {
       await this.review.publishCard(incidentId, answer.id);
     }
 
-    return { incident, answer, sentDirectly: direct, deliveryFailed };
+    return { incident, answer, sentDirectly: direct, deliveryFailed, deliveryQueued };
   }
 
   private async attachMedia(tx: Tx, answerId: string, stored: StoredMedia[]): Promise<void> {

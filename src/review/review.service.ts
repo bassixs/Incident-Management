@@ -1,3 +1,5 @@
+import { queueDeliveryStatus, reviewDeliveryNotice, answerDeliveredNotice } from '../delivery/delivery-status';
+import type { DeliveryOutcome } from '../delivery/requester-delivery.service';
 import { TRANSACTION_OPTIONS } from '../database/prisma';
 import { queueAnswer, queueRevision } from '../delivery/workflow-outbox';
 import { AnswerStatus, type IncidentAnswer, IncidentStatus, type PrismaClient } from '@prisma/client';
@@ -49,7 +51,7 @@ export class ReviewService {
   async deliverApprovedAnswer(
     incident: IncidentWithRelations,
     answer: IncidentAnswer,
-  ): Promise<boolean> {
+  ): Promise<DeliveryOutcome> {
     return this.delivery.deliverAnswer(
       incident.id,
       answer.id,
@@ -141,10 +143,12 @@ export class ReviewService {
         metadata: { answerId: answer.id, version: answer.version, approver: actor.displayName },
       }, tx);
       await queueAnswer(tx, incidentId, answer.id, true);
+      await queueDeliveryStatus(tx, incidentId, answer.id, false);
     }, TRANSACTION_OPTIONS);
 
+    let outcome: DeliveryOutcome;
     try {
-      await this.deliverApprovedAnswer({ ...incident, answeredAt }, { ...answer, approvedAt: answeredAt });
+      outcome = await this.deliverApprovedAnswer({ ...incident, answeredAt }, { ...answer, approvedAt: answeredAt });
     } catch (error) {
       // The incident stays RESOLVED (it was approved), but the answer is not
       // marked delivered, so /resend can retry without touching the workflow.
@@ -163,22 +167,15 @@ export class ReviewService {
       throw error;
     }
 
-    if (incident.reviewMessageId) {
-      await this.messages.finalizeCard(
-        incident.reviewMessageId,
-        [
-          `✅ ${incident.publicCode} согласовано и отправлено пользователю.`,
-          '',
-          'Согласовал:',
-          actor.displayName,
-          '',
-          'Версия ответа:',
-          String(answer.version),
-        ].join('\n'),
-      );
+    const fresh = (await this.repository.findById(incidentId))!;
+    const deliveredAnswer = fresh.answers.find(a => a.id === answer.id)!;
+    if (outcome !== 'queued') {
+      if (fresh.reviewMessageId) await this.messages.finalizeCard(fresh.reviewMessageId, reviewDeliveryNotice(fresh, deliveredAnswer));
+      await this.distribution.markWorked(fresh);
+      await this.sector.notify(fresh, answerDeliveredNotice(fresh, deliveredAnswer), `answer-delivered:${answer.id}:sector`);
+    } else {
+      await this.sector.notify(fresh, `⏳ ${incident.publicCode}: ответ согласован, ожидает доставки пользователю.`, `answer-queued:${answer.id}:sector`);
     }
-    await this.distribution.markWorked(incident);
-    await this.sector.notify(incident, `✅ ${incident.publicCode} согласовано и отправлено пользователю.`);
 
     log.info(
       incidentLogFields({
@@ -187,7 +184,7 @@ export class ReviewService {
         maxUserId: actor.maxUserId,
         action: HistoryAction.ANSWER_APPROVED,
       }),
-      'answer approved and delivered',
+      outcome === 'queued' ? 'answer approved and queued' : 'answer approved and delivered',
     );
 
     return (await this.repository.findById(incidentId))!;
@@ -268,7 +265,7 @@ export class ReviewService {
   }
 
   /** Manual retry for an approved-but-undelivered answer. */
-  async resend(incidentId: string): Promise<boolean> {
+  async resend(incidentId: string): Promise<DeliveryOutcome> {
     const incident = await this.repository.findById(incidentId);
     if (!incident) throw new NotFoundError(`Incident ${incidentId} not found`);
     const answer = [...incident.answers].reverse().find((item) => item.status === AnswerStatus.APPROVED);
@@ -281,7 +278,7 @@ export class ReviewService {
       case IncidentStatus.RESOLVED:
         return `Ответ по ${incident.publicCode} уже согласован${
           incident.approvedBy ? ` пользователем ${incident.approvedBy.displayName}` : ''
-        } и отправлен.`;
+        }${incident.answers.some(a => a.deliveredAt) ? ' и доставлен.' : ', ожидает доставки.'}`;
       case IncidentStatus.REVISION_REQUIRED:
         return `${incident.publicCode} уже возвращено на доработку.`;
       default:

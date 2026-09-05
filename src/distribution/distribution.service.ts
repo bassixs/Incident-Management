@@ -188,7 +188,7 @@ export class DistributionService {
 
   /** Turn the original distribution card green after the answer reaches the requester. */
   async markWorked(incident: IncidentWithRelations): Promise<void> {
-    if (!incident.distributionMessageId || !incident.assignedGroup) return;
+    if (!incident.distributionMessageId || !incident.assignedGroup || !incident.answers.some(a => a.deliveredAt)) return;
     await this.messages.finalizeCard(
       incident.distributionMessageId,
       distributionWorkedNotice(incident, incident.assignedGroup),

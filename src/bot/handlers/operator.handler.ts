@@ -1,3 +1,4 @@
+import { answerDeliveredNotice } from '../../delivery/delivery-status';
 import { type OperatorSession, SessionType } from '@prisma/client';
 
 import type { AppServices } from '../../app/container';
@@ -107,7 +108,7 @@ async function applyRejection(
   await services.sessions.clear(actor.maxUserId, chatId);
   await services.messages.send(
     { chatId },
-    { text: `❌ ${incident.publicCode} отклонено. Пользователь уведомлён.`, label: codeLabel(incident) },
+    { text: `❌ ${incident.publicCode} отклонено. Уведомление для пользователя сохранено в очереди.`, label: codeLabel(incident) },
   );
 }
 
@@ -145,17 +146,20 @@ async function applyAnswer(
   const incident = await loadIncident(services, incidentId);
   assertResponder(actor, incident, chatId);
 
-  const { answer, sentDirectly, deliveryFailed } = await services.answers.submit(incidentId, actor, text, media);
+  const { answer, sentDirectly, deliveryFailed, deliveryQueued } = await services.answers.submit(incidentId, actor, text, media);
   await services.sessions.clear(actor.maxUserId, chatId);
   await services.messages.send(
     { chatId },
     {
       text: deliveryFailed
         ? `⚠️ ${incident.publicCode}: ответ сохранён, но не доставлен. Повторите командой /resend ${incident.publicCode}.`
+        : deliveryQueued
+        ? `⏳ ${incident.publicCode}: ответ (версия ${answer.version}) сохранён, ожидает доставки пользователю.`
         : sentDirectly
-        ? `✅ ${incident.publicCode}: ответ (версия ${answer.version}) отправлен пользователю без согласования.`
+        ? answerDeliveredNotice(incident, answer)
         : `📝 ${incident.publicCode}: ответ (версия ${answer.version}) отправлен на согласование.`,
       label: codeLabel(incident),
+      ...(sentDirectly && !deliveryFailed && !deliveryQueued ? { delivery: { dedupeKey: `answer-delivered:${answer.id}:sector` } } : {}),
     },
   );
 }

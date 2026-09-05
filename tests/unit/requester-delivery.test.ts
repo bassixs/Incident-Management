@@ -118,8 +118,8 @@ describe('RequesterDeliveryService', () => {
   });
 
   it('is idempotent: a repeated delivery does not send a second message', async () => {
-    expect(await service.deliverAnswer('incident-a', 'answer-a', 'текст')).toBe(true);
-    expect(await service.deliverAnswer('incident-a', 'answer-a', 'текст')).toBe(false);
+    expect(await service.deliverAnswer('incident-a', 'answer-a', 'текст')).toBe('sent');
+    expect(await service.deliverAnswer('incident-a', 'answer-a', 'текст')).toBe('already-sent');
     expect(messages.toUser(TEST_USERS.requesterA)).toHaveLength(1);
     expect(history.actions().filter((action) => action === 'ANSWER_SENT')).toHaveLength(1);
   });
@@ -128,6 +128,15 @@ describe('RequesterDeliveryService', () => {
     await service.notify('incident-b', 'Обращение отклонено.');
     expect(messages.toUser(TEST_USERS.requesterB)).toHaveLength(1);
     expect(messages.toUser(TEST_USERS.requesterA)).toHaveLength(0);
+  });
+
+  it('reports queued delivery without marking the answer delivered', async () => {
+    messages.send = async () => ({ state: 'queued', trackingApplied: false });
+    expect(await service.deliverAnswer('incident-a', 'answer-a', 'текст')).toBe('queued');
+    expect(history.actions()).not.toContain('ANSWER_SENT');
+    // A later attempt must still be allowed; it was not recorded as delivered.
+    messages.send = async () => ({ state: 'sent', trackingApplied: false, firstMessageId: 'later' });
+    expect(await service.deliverAnswer('incident-a', 'answer-a', 'текст')).toBe('sent');
   });
 
   it('fails loudly for an unknown incident instead of guessing a recipient', async () => {

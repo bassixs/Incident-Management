@@ -350,7 +350,9 @@ async function approve(
 ): Promise<string> {
   assertApprover(services, actor, chatId);
   const updated = await services.review.approve(incident.id, actor);
-  return `${updated.publicCode}: ответ согласован и отправлен`;
+  return updated.answers.some(a => a.deliveredAt)
+    ? `${updated.publicCode}: ответ согласован и доставлен`
+    : `${updated.publicCode}: ответ согласован, ожидает доставки`;
 }
 
 async function startRevision(

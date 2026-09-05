@@ -3,6 +3,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vite
 
 import * as outbox from '../../src/delivery/workflow-outbox';
 import { MaxMessageService } from '../../src/max/max-message.service';
+import { buildServices } from '../../src/app/container';
+import { FakeMediaService } from '../helpers/fakes';
 import { actorFor, createHarness, createTestPrisma, describeIntegration, GROUP_CODES, pushSchemaOnce, resetDatabase, seedCategories, type TestHarness } from '../helpers/integration';
 import { TEST_USERS, TEST_CHATS } from '../helpers/setup-env';
 
@@ -120,5 +122,44 @@ describeIntegration('transactional workflow and recovery', () => {
     await worker.flush();
     expect(remove).not.toHaveBeenCalledWith('answers/original.jpg');
     expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: `answer:${answer.id}` } })).status).toBe('SENT');
+  });
+
+  for (const regional of [false, true]) it(`shows delivery only after MAX accepts the ${regional ? 'regional' : 'approved'} answer and survives a worker restart`, async () => {
+    let fail = true;
+    let sequence = 0;
+    const edits: string[] = [];
+    const chatMessages: string[] = [];
+    const max = {
+      sendToUser: async (_id: bigint, text: string) => {
+        if (fail && text.includes('Получен ответ')) throw new Error('MAX unavailable');
+        return { body: { mid: `u-${++sequence}` } };
+      },
+      sendToChat: async (_id: bigint, text: string) => { chatMessages.push(text); return { body: { mid: `c-${++sequence}` } }; },
+      editMessage: async (_id: string, text: string) => { edits.push(text); },
+    };
+    const storage = {} as never;
+    const messages = new MaxMessageService(max as never, { prisma, storage });
+    const services = buildServices(prisma, { messages, storage, media: new FakeMediaService() as never });
+    const incident = await services.incidents.create({ requester: { maxUserId: TEST_USERS.requesterA, name: 'Иванов Иван', phone: '+79001234567' }, text: 'Фонарь' });
+    await services.distribution.publishCard(incident.id);
+    const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: regional ? GROUP_CODES.regional : GROUP_CODES.facility } });
+    await services.distribution.assign(incident.id, group.id, await actor());
+    const submission = await services.answers.submit(incident.id, await actor(), 'Готово');
+    if (regional) expect(submission.deliveryQueued).toBe(true);
+    else await services.review.approve(incident.id, await actor());
+    const answerId = submission.answer.id;
+    expect((await prisma.incidentAnswer.findUniqueOrThrow({ where: { id: answerId } })).deliveredAt).toBeNull();
+    expect(edits.some(t => t.includes('🟢 ОТРАБОТАНО'))).toBe(false);
+    expect(chatMessages.some(t => t.includes('доставлен пользователю'))).toBe(false);
+    expect(await services.review.resend(incident.id)).toBe('queued');
+    fail = false;
+    await prisma.outboundMessage.update({ where: { dedupeKey: `answer:${answerId}` }, data: { nextAttemptAt: new Date(0) } });
+    const restartedWorker = new MaxMessageService(max as never, { prisma, storage });
+    await restartedWorker.flush();
+    await restartedWorker.flush();
+    expect((await prisma.incidentAnswer.findUniqueOrThrow({ where: { id: answerId } })).deliveredAt).not.toBeNull();
+    expect(edits.some(t => t.includes('🟢 ОТРАБОТАНО'))).toBe(true);
+    expect(chatMessages.filter(t => t.includes('доставлен пользователю'))).toHaveLength(1);
+    expect(await services.review.resend(incident.id)).toBe('already-sent');
   });
 });

@@ -14,6 +14,9 @@ import type { MediaStorage } from '../media/media-storage.interface';
 import { isUniqueViolation } from '../database/prisma';
 import { moduleLogger } from '../utils/logger';
 import { MaxClient } from './max-client';
+import { queueDeliveryStatus, reviewDeliveryNotice } from '../delivery/delivery-status';
+import { INCIDENT_INCLUDE } from '../incidents/incident.repository';
+import { distributionWorkedNotice } from '../bot/views/cards';
 
 const log = moduleLogger('max-message');
 
@@ -32,6 +35,7 @@ export type SendTarget = { chatId: bigint } | { userId: bigint };
 
 export type CompositeMessage = {
   text: string;
+  operation?: { type: 'delivery-card'; incidentId: string; answerId: string; card: 'review' | 'distribution' };
   /** Prefix repeated on every follow-up part, e.g. `№ INC-20260823-0001`. */
   label?: string;
   keyboard?: Button[][];
@@ -56,6 +60,7 @@ type DurableMessageDependencies = { prisma: PrismaClient; storage: MediaStorage 
 
 type StoredPayload = {
   text: string;
+  operation?: CompositeMessage['operation'];
   label?: string | undefined;
   keyboard?: Button[][] | undefined;
   disableLinkPreview?: boolean | undefined;
@@ -200,6 +205,7 @@ export class MaxMessageService {
 
       const payload: StoredPayload = {
         text: message.text,
+        ...(message.operation ? { operation: message.operation } : {}),
         ...(message.label === undefined ? {} : { label: message.label }),
         ...(message.keyboard === undefined ? {} : { keyboard: message.keyboard }),
         ...(message.disableLinkPreview === undefined
@@ -277,7 +283,9 @@ export class MaxMessageService {
       }
       const target: SendTarget =
         row.targetType === 'chat' ? { chatId: row.targetId } : { userId: row.targetId };
-      const result = await this.deliverLogical(target, { ...payload, attachments }, true);
+      const result = payload.operation
+        ? await this.refreshDeliveryCard(payload.operation)
+        : await this.deliverLogical(target, { ...payload, attachments }, true);
       await this.complete(row, result.firstMessageId);
       await this.cleanupAttachments(staged);
       return { firstMessageId: result.firstMessageId, state: 'sent', trackingApplied: true };
@@ -336,6 +344,7 @@ export class MaxMessageService {
             },
           });
         }
+        await queueDeliveryStatus(tx, row.incidentId, row.answerId, true);
         return;
       }
 
@@ -376,6 +385,20 @@ export class MaxMessageService {
     await Promise.all(
       attachments.filter(item => item.owned !== false).map((item) => this.durable!.storage.remove(item.storageKey).catch(() => undefined)),
     );
+  }
+
+  private async refreshDeliveryCard(operation: NonNullable<CompositeMessage['operation']>): Promise<{ firstMessageId?: string }> {
+    const incident = await this.durable!.prisma.incident.findUnique({ where: { id: operation.incidentId }, include: INCIDENT_INCLUDE });
+    const answer = incident?.answers.find(a => a.id === operation.answerId);
+    if (!incident || !answer) return {};
+    if (operation.card === 'distribution') {
+      if (answer.deliveredAt && incident.distributionMessageId && incident.assignedGroup) {
+        await this.max.editMessage(incident.distributionMessageId, distributionWorkedNotice(incident, incident.assignedGroup), []);
+      }
+    } else if (incident.reviewMessageId) {
+      await this.max.editMessage(incident.reviewMessageId, reviewDeliveryNotice(incident, answer), []);
+    }
+    return {};
   }
 
   private async kick(): Promise<void> {
