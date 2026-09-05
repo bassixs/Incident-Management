@@ -31,7 +31,7 @@ export async function queueMessage(
       trackingType: tracking?.type ?? null,
       trackingApplied: !tracking,
       payload: payload as unknown as Prisma.InputJsonValue,
-      attachments: attachments.map(a => ({ ...a, owned: false })) as unknown as Prisma.InputJsonValue,
+      attachments: attachments.map(a => ({ type: a.type, storageKey: a.storageKey, originalName: a.originalName, owned: false })) as unknown as Prisma.InputJsonValue,
     }],
   });
 }

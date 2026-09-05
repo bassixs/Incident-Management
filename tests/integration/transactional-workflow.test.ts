@@ -1,4 +1,4 @@
-import { IncidentStatus, UserRole, type PrismaClient } from '@prisma/client';
+import { UserRole, type PrismaClient } from '@prisma/client';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 
 import * as outbox from '../../src/delivery/workflow-outbox';
@@ -58,6 +58,14 @@ describeIntegration('transactional workflow and recovery', () => {
     expect(await prisma.outboundMessage.count({ where: { dedupeKey: `sector-card:${incident.id}` } })).toBe(0);
   });
 
+  it('rolls back rejection when notifying the requester cannot be queued', async () => {
+    const incident = await create();
+    vi.spyOn(outbox, 'queueRejection').mockRejectedValueOnce(new Error('queue failed'));
+    await expect(h.services.distribution.reject(incident.id, 'Причина', await actor())).rejects.toThrow('queue failed');
+    expect((await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).status).toBe('DISTRIBUTION');
+    expect(await prisma.incidentHistory.count({ where: { action: 'INCIDENT_REJECTED' } })).toBe(0);
+  });
+
   it('a new worker delivers committed assignment after the immediate send is interrupted', async () => {
     const incident = await create();
     const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: GROUP_CODES.facility } });
@@ -104,6 +112,8 @@ describeIntegration('transactional workflow and recovery', () => {
     const incident = await assigned(true);
     vi.spyOn(h.services.media, 'ingestAll').mockResolvedValueOnce([{ type: 'IMAGE', storageKey: 'answers/original.jpg', size: 3 }]);
     const { answer } = await h.services.answers.submit(incident.id, await actor(), 'Готово', [{ kind: 'IMAGE', url: 'https://example.test/photo' }]);
+    const queued = await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: `answer:${answer.id}` } });
+    expect(queued.attachments).toEqual([{ type: 'IMAGE', storageKey: 'answers/original.jpg', originalName: null, owned: false }]);
     const remove = vi.fn();
     const max = { uploadImage: async () => ({ type: 'image', payload: { token: 't' } }), sendToChat: async () => ({ body: { mid: 'c' } }), sendToUser: async () => ({ body: { mid: 'u' } }) };
     const worker = new MaxMessageService(max as never, { prisma, storage: { load: async () => Buffer.from('abc'), remove } as never });
