@@ -20,12 +20,12 @@ export async function sendReport(
   await assertWorkingChat(services, chatId);
   await services.messages.send({ chatId }, { text: `Готовлю отчёт ${range.title}…` });
 
-  const { buffer, fileName, rows } = await services.reports.build(range);
+  const { buffer, fileName, rows, overdueRows } = await services.reports.build(range);
 
-  if (rows === 0) {
+  if (rows === 0 && overdueRows === 0) {
     await services.messages.send(
       { chatId },
-      { text: `За этот период обращений нет (${range.title}). Файл не формировался.` },
+      { text: `За этот период обращений нет (${range.title}), текущих просроченных тоже нет. Файл не формировался.` },
     );
     return;
   }
@@ -33,13 +33,13 @@ export async function sendReport(
   await services.messages.send(
     { chatId },
     {
-      text: `📊 Отчёт ${range.title}\nОбращений: ${rows}`,
+      text: `📊 Отчёт ${range.title}\nОбращений за период: ${rows}\nТекущих просроченных: ${overdueRows} — на втором листе`,
       attachments: [{ type: 'FILE', body: buffer, originalName: fileName }],
     },
   );
 
   log.info(
-    { fileName, rows, chatId: chatId.toString(), maxUserId: actorMaxUserId.toString() },
+    { fileName, rows, overdueRows, chatId: chatId.toString(), maxUserId: actorMaxUserId.toString() },
     'report delivered',
   );
 }

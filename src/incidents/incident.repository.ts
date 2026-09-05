@@ -81,6 +81,18 @@ export class IncidentRepository {
     });
   }
 
+  /** Current unresolved backlog, independent of the report's creation-date range. */
+  async listOverdueForReport(now: Date): Promise<IncidentWithRelations[]> {
+    return this.prisma.incident.findMany({
+      where: {
+        status: { notIn: [IncidentStatus.RESOLVED, IncidentStatus.REJECTED] },
+        deadlineAt: { lte: now },
+      },
+      orderBy: [{ deadlineAt: 'asc' }, { publicCode: 'asc' }],
+      include: INCIDENT_INCLUDE,
+    });
+  }
+
   /**
    * Guarded status change: the UPDATE only fires when the row still has the
    * status the caller observed. Returns false when someone else got there
