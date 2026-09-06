@@ -41,6 +41,25 @@ function requiredChat(chatId: bigint | null | undefined): bigint {
   return chatId;
 }
 
+/** Persist the invitation with the rating, and release any pre-upgrade queued invitation. */
+export async function queueSubscriptionInvite(tx: Tx, incidentId: string): Promise<void> {
+  const incident = await tx.incident.findUniqueOrThrow({ where: { id: incidentId }, include: { requester: true } });
+  if (incident.responseRating === null) throw new Error('A subscription invitation requires a saved rating');
+  const dedupeKey = `subscription-invite:${incidentId}`;
+  await queueMessage(tx, { userId: incident.requester.maxUserId }, {
+    text: 'Ответы на волнующие вас вопросы можно также узнать в этих каналах. Подпишитесь:',
+    keyboard: [
+      [{ type: 'link', text: 'Владислав Шапша', url: 'https://max.ru/Shapsha_VV' }],
+      [{ type: 'link', text: 'Правительство Калужской области', url: 'https://max.ru/pravitelstvo40' }],
+    ],
+    delivery: { dedupeKey },
+  }, incidentId);
+  await tx.outboundMessage.updateMany({
+    where: { dedupeKey, status: { in: ['PENDING', 'FAILED'] } },
+    data: { status: 'PENDING', nextAttemptAt: new Date(), attempts: 0, lastError: null, lockedAt: null },
+  });
+}
+
 export async function queueDistribution(tx: Tx, incidentId: string): Promise<void> {
   const incident = await tx.incident.findUniqueOrThrow({ where: { id: incidentId }, include: INCIDENT_INCLUDE });
   await queueMessage(tx, { chatId: requiredChat(getConfig().DISTRIBUTION_CHAT_ID) }, {

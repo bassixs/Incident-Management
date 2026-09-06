@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { queueDistribution } from '../delivery/workflow-outbox';
+import { queueDistribution, queueSubscriptionInvite } from '../delivery/workflow-outbox';
 import type { Tx } from '../database/prisma';
 import { AttachmentType, type Incident, IncidentStatus, type PrismaClient } from '@prisma/client';
 
@@ -317,6 +317,7 @@ export class IncidentService {
         },
         tx,
       );
+      await queueSubscriptionInvite(tx, incidentId);
       return true;
     });
 

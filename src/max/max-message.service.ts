@@ -294,6 +294,19 @@ export class MaxMessageService {
     const staged = row.attachments as unknown as StagedAttachment[];
 
     try {
+      // Includes invitations queued by older releases: never deliver before a rating.
+      if (row.dedupeKey?.startsWith('subscription-invite:') && row.incidentId) {
+        const incident = await durable.prisma.incident.findUnique({
+          where: { id: row.incidentId }, select: { responseRating: true },
+        });
+        if (incident?.responseRating == null) {
+          await durable.prisma.outboundMessage.update({ where: { id: row.id }, data: {
+            status: OutboxStatus.PENDING, lockedAt: null, attempts: { decrement: 1 },
+            nextAttemptAt: new Date(Date.now() + OUTBOX_INTERVAL_MS),
+          } });
+          return { state: 'queued', trackingApplied: false };
+        }
+      }
       const attachments: OutboundAttachment[] = [];
       for (const attachment of staged) {
         attachments.push({

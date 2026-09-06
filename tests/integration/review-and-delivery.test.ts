@@ -158,6 +158,7 @@ describeIntegration('review, revision and delivery (PostgreSQL)', () => {
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
     expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
     expect([1, 5]).toContain((await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).responseRating);
+    expect(await prisma.outboundMessage.count({ where: { dedupeKey: `subscription-invite:${incident.id}` } })).toBe(1);
   });
 
   it('refuses a second approval', async () => {

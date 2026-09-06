@@ -20,16 +20,6 @@ export async function queueDeliveryStatus(tx: Tx, incidentId: string, answerId: 
   const incident = await tx.incident.findUniqueOrThrow({ where: { id: incidentId }, include: INCIDENT_INCLUDE });
   const answer = incident.answers.find(a => a.id === answerId);
   if (!answer || (delivered && !answer.deliveredAt)) return;
-  if (delivered && incident.status === 'RESOLVED' && answer.status === 'APPROVED') {
-    await queueMessage(tx, { userId: incident.requester.maxUserId }, {
-      text: 'Ответы на волнующие вас вопросы можно также узнать в этих каналах. Подпишитесь:',
-      keyboard: [
-        [{ type: 'link', text: 'Владислав Шапша', url: 'https://max.ru/Shapsha_VV' }],
-        [{ type: 'link', text: 'Правительство Калужской области', url: 'https://max.ru/pravitelstvo40' }],
-      ],
-      delivery: { dedupeKey: `subscription-invite:${incidentId}` },
-    }, incidentId);
-  }
   const stage = delivered ? 'delivered' : 'pending';
   for (const card of ['review', 'distribution'] as const) {
     const messageId = card === 'review' ? incident.reviewMessageId : incident.distributionMessageId;

@@ -268,6 +268,9 @@ describeIntegration('transactional workflow and recovery', () => {
     expect(edits.some(t => t.includes('🟢 ОТРАБОТАНО'))).toBe(true);
     expect(chatMessages.filter(t => t.includes('доставлен пользователю'))).toHaveLength(1);
     expect(await services.review.resend(incident.id)).toBe('already-sent');
+    expect(await prisma.outboundMessage.count({ where: { dedupeKey: inviteKey } })).toBe(0);
+    await services.incidents.rateAnswer(incident.id, TEST_USERS.requesterA, 4);
+    await restartedWorker.flush();
     const queuedInvite = await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: inviteKey } });
     expect(queuedInvite.status).toBe('PENDING');
     expect(queuedInvite.targetId).toBe(TEST_USERS.requesterA);
@@ -290,6 +293,40 @@ describeIntegration('transactional workflow and recovery', () => {
     expect(userMessages.findIndex(message => message.text.includes('Подпишитесь:')))
       .toBeGreaterThan(userMessages.findIndex(message => message.text.includes('Получен ответ')));
     expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: inviteKey } })).status).toBe('SENT');
+  });
+
+  it('rolls back the rating when queueing its invitation fails', async () => {
+    const incident = await assigned(true);
+    await h.services.answers.submit(incident.id, await actor(), 'Готово');
+    vi.spyOn(outbox, 'queueSubscriptionInvite').mockRejectedValueOnce(new Error('queue unavailable'));
+    await expect(h.services.incidents.rateAnswer(incident.id, TEST_USERS.requesterA, 5)).rejects.toThrow('queue unavailable');
+    expect((await h.services.repository.findById(incident.id))!.responseRating).toBeNull();
+    expect(await prisma.incidentHistory.count({ where: { incidentId: incident.id, action: 'ANSWER_RATED' } })).toBe(0);
+    await h.services.incidents.rateAnswer(incident.id, TEST_USERS.requesterA, 5);
+    expect(await prisma.outboundMessage.count({ where: { dedupeKey: `subscription-invite:${incident.id}` } })).toBe(1);
+  });
+
+  it('holds a legacy queued invitation until the requester rates and then releases it', async () => {
+    const incident = await assigned(true);
+    await h.services.answers.submit(incident.id, await actor(), 'Готово');
+    const dedupeKey = `subscription-invite:${incident.id}`;
+    await prisma.$transaction(tx => outbox.queueMessage(tx, { userId: TEST_USERS.requesterA }, {
+      text: 'Подпишитесь:', delivery: { dedupeKey },
+    }, incident.id));
+    // Other deliveries have already been simulated by the harness.
+    await prisma.outboundMessage.updateMany({ where: { dedupeKey: { not: dedupeKey } }, data: { status: 'SENT' } });
+    const sendToUser = vi.fn().mockResolvedValue({ body: { mid: 'invite' } });
+    const worker = new MaxMessageService({ sendToUser } as never, { prisma, storage: {} as never });
+    await worker.flush();
+    expect(sendToUser).not.toHaveBeenCalled();
+    const held = await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey } });
+    expect(held.status).toBe('PENDING');
+    expect(held.attempts).toBe(0);
+    await h.services.incidents.rateAnswer(incident.id, TEST_USERS.requesterA, 3);
+    await worker.flush();
+    await worker.flush();
+    expect(sendToUser).toHaveBeenCalledTimes(1);
+    expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey } })).status).toBe('SENT');
   });
 
   it('does not offer channel subscriptions after a rejection', async () => {
