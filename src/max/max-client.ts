@@ -12,6 +12,8 @@ import type {
 } from './max-types';
 
 import { getConfig } from '../config';
+import { assertMediaSize } from '../media/media-limits';
+import { ValidationError } from '../utils/errors';
 import { moduleLogger } from '../utils/logger';
 import { retry } from '../utils/retry';
 
@@ -40,6 +42,7 @@ export type WebhookSubscription = {
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 function isRetryable(error: unknown): boolean {
+  if (error instanceof ValidationError) return false;
   if (error instanceof MaxError) return RETRYABLE_STATUS.has(error.status);
   // Network-level failures (fetch TypeError, aborted sockets) are retryable.
   return error instanceof Error;
@@ -117,8 +120,10 @@ export class MaxClient {
   }
 
   async answerCallback(callbackId: string, notification?: string): Promise<void> {
+    // MAX rejects an empty acknowledgement. This only acknowledges the click;
+    // it must not imply successful delivery of a queued message.
     await this.call('answerOnCallback', () =>
-      this.api.answerOnCallback(callbackId, notification ? { notification } : {}),
+      this.api.answerOnCallback(callbackId, { notification: notification?.trim() || 'Принято.' }),
     );
   }
 
@@ -158,17 +163,41 @@ export class MaxClient {
 
   /** Fetch an attachment MAX hosts behind a temporary URL. */
   async downloadFromUrl(url: string): Promise<{ body: Buffer; mimeType?: string }> {
-    const signal = AbortSignal.timeout(30_000);
     return this.call('downloadFromUrl', async () => {
-      const response = await fetch(url, { signal });
-      if (!response.ok) {
-        throw new Error(`Failed to download MAX attachment: HTTP ${response.status}`);
+      // Every retry gets a fresh timeout. Abort also closes a rejected response
+      // before its body can consume unbounded memory or bandwidth.
+      const controller = new AbortController();
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]);
+      let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+      try {
+        const response = await fetch(url, { signal });
+        if (!response.ok) {
+          throw new Error(`Failed to download MAX attachment: HTTP ${response.status}`);
+        }
+        reader = response.body?.getReader();
+        assertMediaSize(Number(response.headers.get('content-length')));
+        const chunks: Uint8Array[] = [];
+        let size = 0;
+        if (reader) {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            size += value.byteLength;
+            // Never trust Content-Length: it may be absent, wrong, or refer
+            // to a compressed body. Check before retaining every chunk.
+            assertMediaSize(size);
+            chunks.push(value);
+          }
+        }
+        return {
+          body: Buffer.concat(chunks, size),
+          mimeType: response.headers.get('content-type') ?? undefined,
+        };
+      } finally {
+        controller.abort();
+        await reader?.cancel().catch(() => undefined);
+        reader?.releaseLock();
       }
-      const arrayBuffer = await response.arrayBuffer();
-      return {
-        body: Buffer.from(arrayBuffer),
-        mimeType: response.headers.get('content-type') ?? undefined,
-      };
     });
   }
 

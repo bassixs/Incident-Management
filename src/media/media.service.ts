@@ -10,6 +10,7 @@ import { moduleLogger } from '../utils/logger';
 import { LocalMediaStorage } from './local-media-storage';
 import type { MediaStorage } from './media-storage.interface';
 import { S3MediaStorage } from './s3-media-storage';
+import { assertMediaSize } from './media-limits';
 
 const log = moduleLogger('media');
 
@@ -103,6 +104,7 @@ export class MediaService {
   /** Every accepted attachment must be persisted, otherwise fail the submission. */
   async ingest(prefix: string, media: IncomingMedia): Promise<StoredMedia> {
     if (media.kind !== 'IMAGE' && media.kind !== 'FILE') throw new ValidationError('Этот тип вложения не поддерживается.');
+    if (media.size !== undefined) assertMediaSize(media.size);
     if (!media.url) {
       throw new AppError('Не удалось получить вложение из MAX. Прикрепите его заново и повторите отправку.', 'MEDIA_UNAVAILABLE');
     }
@@ -122,11 +124,12 @@ export class MediaService {
         maxToken: media.token,
       };
     } catch (error) {
+      if (key) await this.storage.remove(key).catch(() => undefined);
+      if (error instanceof ValidationError) throw error;
       log.error(
         { prefix, err: error instanceof Error ? error.message : String(error) },
         'failed to ingest MAX attachment',
       );
-      if (key) await this.storage.remove(key).catch(() => undefined);
       throw new AppError('Не удалось сохранить вложение. Повторите отправку с фотографией или файлом.', 'MEDIA_UNAVAILABLE');
     }
   }

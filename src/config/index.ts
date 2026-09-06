@@ -102,6 +102,7 @@ const envSchema = z
 
     MEDIA_STORAGE: z.enum(['local', 's3']).default('local'),
     MEDIA_LOCAL_PATH: z.string().default('./data/uploads'),
+    MEDIA_MAX_FILE_MB: int(20).pipe(z.number().min(1).max(100)),
     S3_ENDPOINT: z.string().optional(),
     S3_REGION: z.string().default('us-east-1'),
     S3_BUCKET: z.string().optional(),
