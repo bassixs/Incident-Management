@@ -2,6 +2,7 @@ import { reportActionError } from '../../utils/errors';
 import type { Context } from '@maxhub/max-bot-api';
 
 import type { AppServices } from '../../app/container';
+import { REJECTION_MESSAGES } from '../../incidents/incident.service';
 import type { BotAddedUpdateLike, MessageCreatedUpdate } from './update-shapes';
 import { moduleLogger } from '../../utils/logger';
 import { findCommand } from '../commands';
@@ -36,6 +37,13 @@ export async function handleMessageUpdate(services: AppServices, ctx: Context): 
   if (chatId === undefined) return;
 
   const actor = await resolveActor(services, sender);
+
+  // Reject documents at every requester step, including command captions and
+  // photos sent as files. Do not download them or change the current session.
+  if (dialog && message.body.attachments?.some(attachment => attachment.type === 'file')) {
+    await services.messages.send({ userId: actor.maxUserId }, { text: REJECTION_MESSAGES.file });
+    return;
+  }
 
   const command = parseCommand(message.body.text);
   if (command) {

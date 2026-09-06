@@ -61,6 +61,13 @@ describe('incident submission validation', () => {
     expect(service.validateSubmission('Освещение не работает', [image]).text).toBe('Освещение не работает');
   });
 
+  it('rejects documents and photos sent as files even alongside a valid photo', () => {
+    for (const filename of ['document.pdf', 'photo.jpg']) {
+      expect(() => service.validateSubmission('Описание', [image, { kind: 'FILE', filename }]))
+        .toThrow(REJECTION_MESSAGES.file);
+    }
+  });
+
   it('rejects video with the documented wording', () => {
     try {
       service.validateSubmission('Освещение не работает', [video]);

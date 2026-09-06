@@ -165,6 +165,14 @@ describeIntegration('clarifications, requester routing and paused SLA', () => {
     await expect(services.answers.submit(incident.id, actor, 'Готово')).rejects.toThrow('уточнения');
     await expect(services.clarifications.reply(draft.id, TEST_USERS.requesterA, 'Видео', [{ kind: 'VIDEO' }], 'video')).rejects.toThrow('не принимаются');
     expect(media.ingestAll).not.toHaveBeenCalledWith(expect.anything(), [{ kind: 'VIDEO' }]);
+    const paused = await services.repository.findById(incident.id);
+    const uploadsBefore = media.ingestAll.mock.calls.length;
+    await expect(services.clarifications.reply(draft.id, TEST_USERS.requesterA, 'Уточнение',
+      [{ kind: 'IMAGE' }, { kind: 'FILE', filename: 'photo.jpg' }], 'file')).rejects.toThrow('не принимаются');
+    expect(media.ingestAll).toHaveBeenCalledTimes(uploadsBefore);
+    expect(await services.repository.findById(incident.id)).toMatchObject({
+      activeClarificationId: draft.id, slaPausedAt: paused!.slaPausedAt, deadlineAt: paused!.deadlineAt,
+    });
   });
 
   it('allows one concurrent request and one reply without extending SLA twice', async () => {

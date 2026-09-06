@@ -69,6 +69,7 @@ export function normaliseRequesterPhone(raw: string): string {
 
 export const REJECTION_MESSAGES = {
   banned: 'Отправка обращений для вашей учётной записи временно недоступна.',
+  file: 'Можно прикреплять только фотографии. Файлы не принимаются. Отправьте изображение как фото из галереи, а не как файл.',
   video:
     'Видео к обращениям прикреплять нельзя.\n\n' +
     'Отправьте описание проблемы текстом и, при необходимости, приложите фотографию.',
@@ -117,6 +118,9 @@ export class IncidentService {
     }
     if (media.some((item) => item.kind === 'AUDIO')) {
       throw new ValidationError(REJECTION_MESSAGES.audio, { reason: 'audio' });
+    }
+    if (media.some((item) => item.kind === 'FILE')) {
+      throw new ValidationError(REJECTION_MESSAGES.file, { reason: 'file' });
     }
     if (media.some(item => item.kind !== 'IMAGE')) {
       throw new ValidationError('К обращению можно приложить только фотографии. Удалите другие вложения и повторите отправку.');
