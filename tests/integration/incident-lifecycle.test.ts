@@ -1,5 +1,5 @@
 import { AnswerStatus, IncidentStatus, UserRole, type PrismaClient } from '@prisma/client';
-import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 
 import { HistoryAction } from '../../src/incidents/incident-history.service';
 import { handleIncidentCallback } from '../../src/bot/callbacks/incident.callbacks';
@@ -33,6 +33,7 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
   afterAll(async () => {
     await prisma.$disconnect();
   });
+  afterEach(() => vi.restoreAllMocks());
 
   beforeEach(async () => {
     await resetDatabase(prisma);
@@ -227,6 +228,7 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
   });
 
   it('changes only the selected draft fields and creates nothing before confirmation', async () => {
+    vi.spyOn(harness.services.max, 'downloadFromUrl').mockResolvedValue({ body: Buffer.from('existing photo') });
     const actor = await actorFor(prisma, TEST_USERS.requesterA, 'Профиль MAX', []);
     if ((await harness.services.legal.status(actor.userId)).required) {
       const evidence = { userId: actor.userId, maxUserId: actor.maxUserId };
@@ -248,7 +250,7 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
         problemMunicipalityName: 'Боровский округ',
         problemLocality: 'Боровск',
         draftText: 'Старый текст',
-        draftMedia: [{ kind: 'IMAGE', token: 'old-photo-token' }],
+        draftMedia: [{ kind: 'IMAGE', token: 'old-photo-token', url: 'https://example.test/old-photo' }],
       },
     });
 

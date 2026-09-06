@@ -215,6 +215,10 @@ export function incidentDraftPhotoKeyboard(hasPhoto: boolean): Button[][] {
   ];
 }
 
+export function incidentDraftPhotoRetryKeyboard(): Button[][] {
+  return [[button.callback('Продолжить без фотографий', userCallback('draft-photo', 'remove'))]];
+}
+
 /** One immutable requester score for a delivered final answer. */
 export function answerRatingKeyboard(incidentId: string): Button[][] {
   return [[1, 2, 3, 4, 5].map((rating) =>

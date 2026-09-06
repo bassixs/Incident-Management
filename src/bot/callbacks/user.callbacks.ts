@@ -435,12 +435,13 @@ export async function handleUserCallback(
 
     case 'draft-photo': {
       const chatId = context.chatId ?? actor.maxUserId;
-      const data = await requireDraftForSession(
-        services,
-        actor.maxUserId,
-        chatId,
-        SessionType.WAITING_INCIDENT_EDIT_SELECTION,
-      );
+      const session = await services.sessions.find(actor.maxUserId, chatId);
+      const data = session ? services.sessions.readData(session) : {};
+      const retryingPhotos = session?.type === SessionType.WAITING_INCIDENT_EDIT_VALUE &&
+        data.draftEditField === 'photo' && data.draftPhotoRetry === true;
+      if (!session || (session.type !== SessionType.WAITING_INCIDENT_EDIT_SELECTION && !retryingPhotos)) {
+        throw new ValidationError('Кнопка устарела. Вернитесь к проверке обращения.');
+      }
       const draft = requireCompleteIncidentDraft(data);
       if (payload.argument !== 'remove' && payload.argument !== 'replace') {
         throw new ValidationError('Кнопка устарела. Вернитесь к проверке обращения.');

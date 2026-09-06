@@ -21,6 +21,8 @@ export type SessionData = {
   /** Completed requester draft, kept outside Incident until explicit confirmation. */
   draftText?: string;
   draftMedia?: IncomingMedia[];
+  /** Failed preview: accepts replacement photos or explicit continuation without them. */
+  draftPhotoRetry?: boolean;
   draftEditField?: 'name' | 'phone' | 'category' | 'location' | 'text' | 'photo';
   /** WAITING_BAN_REASON: whom to ban (the incident author). */
   targetMaxUserId?: string;
