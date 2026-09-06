@@ -12,6 +12,7 @@ import { DeliveryAlertService } from '../delivery/delivery-alert.service';
 import { DeliveryProblemService } from '../delivery/delivery-problem.service';
 import { RequesterDeliveryService } from '../delivery/requester-delivery.service';
 import { DistributionService } from '../distribution/distribution.service';
+import { DistributionQueueService } from '../distribution/distribution-queue.service';
 import { IncidentHistoryService } from '../incidents/incident-history.service';
 import { IncidentStateService } from '../incidents/incident-state.service';
 import { IncidentRepository } from '../incidents/incident.repository';
@@ -62,6 +63,7 @@ export type AppServices = {
   incidents: IncidentService;
 
   distribution: DistributionService;
+  distributionQueue: DistributionQueueService;
   sector: SectorService;
   review: ReviewService;
   answers: AnswerService;
@@ -151,6 +153,7 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
   const answers = new AnswerService(prisma, repository, history, state, media, review, distribution);
 
   const clarifications = new ClarificationService(prisma, repository, messages, media);
+  const distributionQueue = new DistributionQueueService(prisma, messages);
   const sla = new SlaService(prisma, repository, history, messages, sessions);
   const reports = new ExcelReportService(repository);
 
@@ -177,6 +180,7 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
     incidents,
     distribution,
     sector,
+    distributionQueue,
     review,
     answers,
     clarifications,

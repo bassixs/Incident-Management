@@ -6,6 +6,7 @@ export type RecordedEdit = { messageId: string; text: string; mode: 'text' | 'fi
 
 /** Captures everything the code tried to send instead of calling MAX. */
 export class FakeMessageService {
+  async flush(): Promise<void> {}
   readonly sent: RecordedSend[] = [];
   readonly edits: RecordedEdit[] = [];
   readonly deleted: string[] = [];

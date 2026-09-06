@@ -1,4 +1,5 @@
-import { TRANSACTION_OPTIONS } from '../database/prisma';
+import { acquireAdvisoryLock, TRANSACTION_OPTIONS } from '../database/prisma';
+import { assertClaimOwner, CLAIM_LOCK } from './queue-state';
 import { queueSector, queueRejection } from '../delivery/workflow-outbox';
 import {
   IncidentStatus,
@@ -141,11 +142,14 @@ export class DistributionService {
 
     const now = new Date();
     await this.prisma.$transaction(async (tx) => {
+      await acquireAdvisoryLock(tx, ...CLAIM_LOCK);
+      assertClaimOwner(await tx.incident.findUniqueOrThrow({ where: { id: incidentId } }), actor.maxUserId);
       const claimed = await this.repository.transition(tx, incidentId, IncidentStatus.DISTRIBUTION, {
         status: IncidentStatus.ASSIGNED,
         assignedGroupId: group.id,
         assignedByUserId: actor.userId,
         assignedAt: now,
+        distributionClaimedBy: null, distributionClaimedName: null, distributionClaimUntil: null,
       });
       if (!claimed) {
         const fresh = await this.repository.findById(incidentId, tx);
@@ -206,9 +210,12 @@ export class DistributionService {
     this.state.assertTransition(incident.status, IncidentStatus.REJECTED, { incidentId });
 
     await this.prisma.$transaction(async (tx) => {
+      await acquireAdvisoryLock(tx, ...CLAIM_LOCK);
+      assertClaimOwner(await tx.incident.findUniqueOrThrow({ where: { id: incidentId } }), actor.maxUserId);
       const claimed = await this.repository.transition(tx, incidentId, IncidentStatus.DISTRIBUTION, {
         status: IncidentStatus.REJECTED,
         rejectionReason: reason,
+        distributionClaimedBy: null, distributionClaimedName: null, distributionClaimUntil: null,
         answeredAt: new Date(),
       });
       if (!claimed) {

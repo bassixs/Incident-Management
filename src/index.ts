@@ -50,6 +50,7 @@ async function main(): Promise<void> {
   }
 
   services.sla.start();
+  services.distributionQueue.start();
 
   let shutdownPromise: Promise<void> | undefined;
   const shutdown = (signal: string): Promise<void> => {
@@ -59,6 +60,7 @@ async function main(): Promise<void> {
       dispatcher.stop();
       polling?.stop();
       services.sla.stop();
+      services.distributionQueue.stop();
       services.deliveryAlerts.stop();
       services.messages.stop();
       await completeShutdown({
@@ -66,6 +68,7 @@ async function main(): Promise<void> {
         waitForHandlers: async () => Promise.all([
           dispatcher.waitForIdle(), polling?.waitForIdle(),
           services.sla.waitForIdle(), services.deliveryAlerts.waitForIdle(),
+          services.distributionQueue.waitForIdle(),
         ]),
         waitForMessages: () => services.messages.waitForIdle(),
         disconnect: disconnectDatabase,

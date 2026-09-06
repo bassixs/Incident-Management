@@ -39,6 +39,10 @@ export async function handleIncidentCallback(
   if (!incident) throw new NotFoundError('Обращение не найдено.');
   if (chatId === undefined) throw new ForbiddenError('Действие недоступно в этом чате.');
 
+  if (incident.status === 'DISTRIBUTION' && ['assign', 'assign-branch', 'assign-page', 'assign-group', 'reject'].includes(payload.action)) {
+    await services.distributionQueue.claim(actor, chatId, incident.id);
+  }
+
   log.debug(
     incidentLogFields({
       incidentId: incident.id,

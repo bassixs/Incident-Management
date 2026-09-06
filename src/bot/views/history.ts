@@ -6,6 +6,8 @@ import { formatDateTime } from '../../utils/datetime';
 const ACTION_LABELS: Record<string, string> = {
   INCIDENT_CREATED: 'Обращение создано',
   DISTRIBUTION_CARD_SENT: 'Карточка отправлена диспетчеру',
+  DISTRIBUTION_CLAIMED: 'Оператор взял обращение на распределение',
+  DISTRIBUTION_RELEASED: 'Оператор освободил обращение для распределения',
   ASSIGNED: 'Обращение распределено',
   SECTOR_CARD_SENT: 'Карточка отправлена в профильный чат',
   TAKEN_IN_WORK: 'Обращение взято в работу',

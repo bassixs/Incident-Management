@@ -1,5 +1,8 @@
 import { AsyncActivity } from '../utils/async-activity';
+import { getConfig } from '../config';
+import { distributionAlertsAllowed, panelSettingKey, queueKeyboard, queuePanelText, queueSnapshot } from '../distribution/queue-state';
 import { randomUUID } from 'node:crypto';
+import { MaxError } from '@maxhub/max-bot-api';
 
 import {
   DeliveryTrackingType,
@@ -42,7 +45,9 @@ export type CompositeMessage = {
   operation?: { type: 'delivery-card'; incidentId: string; answerId: string; card: 'review' | 'distribution' }
     | { type: 'sla-reminder'; incidentId: string; stage: SlaStage }
     | { type: 'clarification-question' | 'clarification-reply'; incidentId: string; clarificationId: string }
-    | { type: 'sector-refresh'; incidentId: string };
+    | { type: 'sector-refresh'; incidentId: string }
+    | { type: 'distribution-panel' }
+    | { type: 'distribution-alert'; level: 'normal' | 'escalation'; hour: number };
   replyToMessageId?: string;
   /** Prefix repeated on every follow-up part, e.g. `№ INC-20260823-0001`. */
   label?: string;
@@ -336,7 +341,11 @@ export class MaxMessageService {
         payload.replyToMessageId = incident.sectorMessageId;
         target = { chatId: incident.assignedGroup.maxChatId };
       }
-      const result = payload.operation?.type === 'sla-reminder'
+      const result = payload.operation?.type === 'distribution-panel'
+        ? await this.refreshDistributionPanel(row.targetId)
+        : payload.operation?.type === 'distribution-alert'
+        ? await this.deliverDistributionAlert(row.targetId, payload.operation)
+        : payload.operation?.type === 'sla-reminder'
         ? await this.deliverSlaReminder(payload.operation)
         : payload.operation?.type === 'sector-refresh'
         ? await this.refreshSectorCard(payload.operation.incidentId)
@@ -382,6 +391,10 @@ export class MaxMessageService {
       });
       if (marked.count !== 1) return;
       const operation = (row.payload as unknown as StoredPayload).operation;
+      if (operation?.type === 'distribution-panel' && firstMessageId) {
+        const key = panelSettingKey(row.targetId);
+        await tx.systemSetting.upsert({ where: { key }, create: { key, value: firstMessageId }, update: { value: firstMessageId } });
+      }
       if (operation?.type === 'clarification-question') {
         await activateClarification(tx, operation.incidentId, operation.clarificationId);
       }
@@ -467,6 +480,55 @@ export class MaxMessageService {
     // The card itself may still be retrying. Keep the reminder queued until it exists.
     if (!message.replyToMessageId) throw new Error('SLA reminder is waiting for the incident card');
     return this.deliverLogical(target, message);
+  }
+
+  private async refreshDistributionPanel(chatId: bigint): Promise<{ firstMessageId?: string }> {
+    const db = this.durable!.prisma;
+    const config = getConfig();
+    if (chatId !== config.DISTRIBUTION_CHAT_ID) return {};
+    const text = queuePanelText(await queueSnapshot(db, new Date()));
+    const keyboard = queueKeyboard();
+    const setting = await db.systemSetting.findUnique({ where: { key: panelSettingKey(chatId) } });
+    let firstMessageId = setting?.value;
+    if (firstMessageId) {
+      try {
+        await this.max.editMessage(firstMessageId, text, [{ type: 'inline_keyboard', payload: { buttons: keyboard } }]);
+      } catch (error) {
+        // Recreate only a confirmed missing message, never on transient MAX failures.
+        if (!(error instanceof MaxError) || error.status !== 404) throw error;
+        firstMessageId = undefined;
+      }
+    }
+    if (!firstMessageId) {
+      const result = await this.deliverLogical({ chatId }, { text, keyboard });
+      firstMessageId = result.firstMessageId;
+      if (!firstMessageId) throw new Error('MAX did not return a queue panel message id');
+    }
+    try {
+      const pinned = await this.max.api.getPinnedMessage(Number(chatId));
+      if (!pinned.message) await this.max.api.pinMessage(Number(chatId), firstMessageId, { notify: false });
+    } catch (error) {
+      log.warn({ err: String(error) }, 'queue panel is available but automatic pin failed');
+    }
+    return { firstMessageId };
+  }
+
+  private async deliverDistributionAlert(chatId: bigint, operation: Extract<CompositeMessage['operation'], { type: 'distribution-alert' }>): Promise<{ firstMessageId?: string }> {
+    const config = getConfig();
+    const now = new Date();
+    if (!distributionAlertsAllowed(now, config) || operation.hour !== Math.floor(now.getTime() / 3_600_000)) return {};
+    if (chatId !== (operation.level === 'normal' ? config.DISTRIBUTION_CHAT_ID : config.DELIVERY_ALERT_CHAT_ID)) return {};
+    const snapshot = await queueSnapshot(this.durable!.prisma, now);
+    const overloaded = snapshot.total >= config.DISTRIBUTION_OVERLOAD_COUNT;
+    if (!overloaded && !(operation.level === 'normal' ? snapshot.delayed60 : snapshot.delayed120)) return {};
+    return this.deliverLogical({ chatId }, {
+      text: [operation.level === 'normal' ? '⚠️ Очередь распределения требует внимания' : '🚨 Нужна помощь с распределением обращений', '',
+        `Ожидают: ${snapshot.total}. Более часа: ${snapshot.delayed60}. Более двух часов: ${snapshot.delayed120}.`,
+        ...(overloaded ? [`Очередь достигла порога ${config.DISTRIBUTION_OVERLOAD_COUNT} обращений — проверьте, нужен ли резервный оператор.`] : []),
+        'Откройте панель очереди в чате распределения и разберите старейшие обращения.',
+      ].join('\n'),
+      ...(operation.level === 'normal' ? { keyboard: queueKeyboard() } : {}),
+    });
   }
 
   private async refreshSectorCard(incidentId: string): Promise<{ firstMessageId?: string }> {

@@ -77,6 +77,10 @@ const envSchema = z
     HTTP_PORT: int(3000),
 
     DISTRIBUTION_CHAT_ID: optionalBigInt,
+    DISTRIBUTION_QUEUE_ENABLED: boolean(true),
+    DISTRIBUTION_WORK_START: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default('08:00'),
+    DISTRIBUTION_WORK_END: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default('22:00'),
+    DISTRIBUTION_OVERLOAD_COUNT: int(30),
     REVIEW_CHAT_ID: optionalBigInt,
     DELIVERY_ALERT_CHAT_ID: optionalBigInt,
 

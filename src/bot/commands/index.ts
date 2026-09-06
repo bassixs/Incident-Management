@@ -31,6 +31,7 @@ const STAFF_HELP = [
   'Команды для сотрудников:',
   '',
   '/incident <НОМЕР> — карточка обращения',
+  '/queue — панель очереди распределения',
   '/history <НОМЕР> — история обращения',
   '/report — выбрать период кнопками; можно и сразу: /report 7d, /report 01.08.2026 - 10.08.2026',
   '/resend <НОМЕР> — повторить доставку согласованного ответа',
@@ -69,6 +70,13 @@ const USER_HELP = [
 ].join('\n');
 
 export const COMMANDS: Record<string, CommandHandler> = {
+  queue: async ({ services, actor, chatId, isDialog }) => {
+    if (isDialog) throw new ForbiddenError('Очередь доступна в чате распределения.');
+    services.distributionQueue.authorize(actor, chatId);
+    await services.distributionQueue.refresh();
+    await services.messages.flush();
+    await services.distributionQueue.list(actor, chatId, 0);
+  },
   start: async ({ services, actor, isDialog }) => {
     if (!isDialog) return;
     await sendMainMenu(services, actor);

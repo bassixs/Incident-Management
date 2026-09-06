@@ -191,6 +191,12 @@ model ResponsibleGroup {
 model Incident {
   id         String @id @default(uuid())
   publicCode String @unique
+  distributionClaimedBy BigInt?
+  distributionClaimedName String?
+  distributionClaimUntil DateTime?
+
+  @@index([status, createdAt, id])
+  @@index([distributionClaimedBy, distributionClaimUntil])
 
   requesterId        String
   requester          User   @relation("IncidentRequester", fields: [requesterId], references: [id])

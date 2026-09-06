@@ -12,6 +12,7 @@ import { SESSION_PROMPTS } from '../handlers/session-guard';
 import { handleIncidentCallback } from './incident.callbacks';
 import { handleReportCallback } from './report.callbacks';
 import { handleUserCallback } from './user.callbacks';
+import { handleQueueCallback } from './queue.callbacks';
 import { assertWorkingChat } from '../middleware/authorize';
 
 const log = moduleLogger('bot-callbacks');
@@ -100,6 +101,9 @@ async function dispatchCallback(
   isDialog: boolean,
 ): Promise<string | undefined> {
   switch (payload.kind) {
+    case 'queue':
+      await assertWorkingChat(services, chatId, isDialog);
+      return handleQueueCallback(services, actor, chatId, payload);
     case 'user':
       return handleUserCallback({ services, actor, chatId, messageId, callbackId }, payload);
     case 'incident':
