@@ -54,11 +54,11 @@ const COLUMNS: Column[] = [
   {
     header: 'Статус',
     width: 22,
-    value: (incident) => describeStatus(incident.status, false),
+    value: (incident) => incident.slaPausedAt ? 'Ожидаем уточнение от жителя' : describeStatus(incident.status, false),
   },
   { header: 'Количество доработок', width: 20, value: (incident) => incident.revisionCount },
-  { header: 'Дедлайн', width: 20, value: (incident) => formatDateTime(incident.deadlineAt) },
-  { header: 'Просрочено', width: 12, value: (incident) => (incident.isOverdue ? 'да' : 'нет') },
+  { header: 'Дедлайн', width: 20, value: (incident) => incident.slaPausedAt ? 'Срок приостановлен' : formatDateTime(incident.deadlineAt) },
+  { header: 'Просрочено', width: 12, value: (incident) => (incident.slaPausedAt ? 'пауза' : incident.isOverdue ? 'да' : 'нет') },
   { header: 'Пользователь', width: 28, value: (incident) => incident.requesterName },
   { header: 'Телефон', width: 20, value: (incident) => incident.requesterPhone ?? '' },
   {

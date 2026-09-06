@@ -17,6 +17,9 @@ export const INCIDENT_ACTIONS = [
   'ban',
   'take',
   'answer',
+  'clarify',
+  'clarify-send',
+  'clarify-cancel',
   'template',
   'approve',
   'revision',
@@ -44,6 +47,7 @@ export const USER_ACTIONS = [
   'draft-field',
   'draft-photo',
   'rate-answer',
+  'clarify-reply',
   'menu',
 ] as const;
 export type UserAction = (typeof USER_ACTIONS)[number];

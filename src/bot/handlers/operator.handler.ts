@@ -37,6 +37,13 @@ export async function handleOperatorMessage(
   try {
     await assertWorkingChat(services, chatId);
     switch (session.type) {
+      case SessionType.WAITING_CLARIFICATION_QUESTION:
+        if (media.length) throw new ValidationError('Вопрос жителю отправляется текстом, без вложений.');
+        await services.clarifications.prepare(requireIncidentId(session), actor, chatId, text, message.body.mid);
+        await services.prisma.operatorSession.deleteMany({ where: { id: session.id } });
+        break;
+      case SessionType.WAITING_CLARIFICATION_REPLY:
+        throw new ValidationError('Ответ на уточнение нужно отправить в личном чате с ботом.');
       case SessionType.WAITING_REJECTION_REASON:
         await applyRejection(services, actor, chatId, session, text);
         break;

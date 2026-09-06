@@ -13,9 +13,10 @@ type SlaIncident = Incident & {
 };
 
 export function slaStage(incident: Incident, now: Date): SlaStage | undefined {
+  if (incident.slaPausedAt) return undefined;
   if (incident.status === 'RESOLVED' || incident.status === 'REJECTED') return undefined;
   if (incident.deadlineAt <= now) return 'overdue';
-  const elapsed = (now.getTime() - incident.createdAt.getTime()) / 3_600_000;
+  const elapsed = (now.getTime() - incident.createdAt.getTime() - Number(incident.slaPausedMs ?? 0)) / 3_600_000;
   if (elapsed >= 48) return 48;
   if (elapsed >= 24) return 24;
   return undefined;

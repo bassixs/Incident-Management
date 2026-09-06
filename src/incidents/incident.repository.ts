@@ -86,6 +86,7 @@ export class IncidentRepository {
     return this.prisma.incident.findMany({
       where: {
         status: { notIn: [IncidentStatus.RESOLVED, IncidentStatus.REJECTED] },
+        slaPausedAt: null,
         deadlineAt: { lte: now },
       },
       orderBy: [{ deadlineAt: 'asc' }, { publicCode: 'asc' }],
@@ -122,6 +123,7 @@ export class IncidentRepository {
     return this.prisma.incident.findMany({
       where: {
         status: { notIn: [IncidentStatus.RESOLVED, IncidentStatus.REJECTED] },
+        slaPausedAt: null,
         OR: [{ createdAt: { lte: firstReminder } }, { deadlineAt: { lte: now } }],
       },
       orderBy: { deadlineAt: 'asc' },

@@ -105,7 +105,7 @@ export function distributionResolvedNotice(
 export function sectorCard(incident: IncidentWithRelations, group: ResponsibleGroup): string {
   const photoCount = incident.attachments.filter((item) => item.type === 'IMAGE').length;
   return [
-    '📥 НОВОЕ ОБРАЩЕНИЕ',
+    incident.slaPausedAt ? '⏸️ ОЖИДАЕМ УТОЧНЕНИЕ ОТ ЖИТЕЛЯ' : incident.activeClarificationId ? '💬 ВОПРОС ЖИТЕЛЮ ОЖИДАЕТ ДОСТАВКИ' : '📥 НОВОЕ ОБРАЩЕНИЕ',
     '',
     codeLabel(incident),
     '',
@@ -128,7 +128,7 @@ export function sectorCard(incident: IncidentWithRelations, group: ResponsibleGr
     formatDateTime(incident.createdAt),
     '',
     'Срок:',
-    formatDateTime(incident.deadlineAt),
+    incident.slaPausedAt ? 'Приостановлен до получения уточнения' : formatDateTime(incident.deadlineAt),
     ...(photoCount > 0 ? ['', ...attachmentLine(photoCount)] : []),
     ...(incident.currentResponder ? ['', '👤 В работе:', incident.currentResponder.displayName] : []),
   ].join('\n');
@@ -250,7 +250,7 @@ export function incidentLookupCard(incident: IncidentWithRelations): string {
     codeLabel(incident),
     '',
     'Статус:',
-    `${incident.status} — ${describeStatus(incident.status, incident.isOverdue)}`,
+    incident.slaPausedAt ? 'Ожидаем уточнение от жителя — срок приостановлен' : `${incident.status} — ${describeStatus(incident.status, incident.isOverdue)}`,
     '',
     'Создано:',
     formatDateTime(incident.createdAt),
@@ -530,7 +530,7 @@ export function myIncidentsText(incidents: Incident[]): string {
     ...incidents.flatMap((incident) => [
       incident.publicCode,
       // Overdue is an internal SLA signal for staff, not a requester-facing status.
-      describeStatus(incident.status, false),
+      incident.activeClarificationId ? 'Требуется ваше уточнение — откройте вопрос специалиста выше' : describeStatus(incident.status, false),
       '',
     ]),
   ]

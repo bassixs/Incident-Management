@@ -105,7 +105,7 @@ export class SlaService {
     const notification = await this.prisma.$transaction(async tx => {
       const field = stage === 24 ? 'slaReminder24SentAt' : stage === 48 ? 'slaWarn24SentAt' : 'overdueNotifiedAt';
       const claimed = await tx.incident.updateMany({
-        where: { id: incident.id, [field]: null, status: { notIn: ['RESOLVED', 'REJECTED'] } },
+        where: { id: incident.id, [field]: null, slaPausedAt: null, status: { notIn: ['RESOLVED', 'REJECTED'] } },
         data: { [field]: now, ...(stage === 'overdue' ? { isOverdue: true } : {}) },
       });
       if (claimed.count !== 1) return null;

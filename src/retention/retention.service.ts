@@ -20,6 +20,7 @@ const RETENTION_SELECT = {
   requesterId: true,
   answeredAt: true,
   attachments: { select: { storageKey: true, size: true } },
+  clarifications: { select: { attachments: { select: { storageKey: true, size: true } } } },
   answers: {
     select: {
       id: true,
@@ -275,6 +276,7 @@ export class RetentionService {
 function uniqueFiles(incident: RetentionCandidate): Array<{ storageKey: string; size: number }> {
   const files = [
     ...incident.attachments,
+    ...(incident.clarifications ?? []).flatMap(item => item.attachments),
     ...incident.answers.flatMap((answer) => answer.attachments),
   ];
   return [...new Map(files.map((file) => [file.storageKey, { storageKey: file.storageKey, size: file.size ?? 0 }])).values()];

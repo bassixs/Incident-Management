@@ -324,6 +324,7 @@ export function sectorKeyboard(incidentId: string, options: { hasTemplate: boole
   const rows: Button[][] = [
     [button.callback('Взять в работу', incidentCallback('take', incidentId), { intent: 'positive' })],
     [button.callback('Подготовить ответ', incidentCallback('answer', incidentId))],
+    [button.callback('💬 Уточнить у жителя', incidentCallback('clarify', incidentId))],
   ];
   if (options.hasTemplate) {
     rows.push([button.callback('Использовать шаблон', incidentCallback('template', incidentId))]);
@@ -341,7 +342,8 @@ export function reviewKeyboard(incidentId: string, answerId: string): Button[][]
 
 /** Button under the "returned for revision" card in the sector chat (§32). */
 export function revisionKeyboard(incidentId: string): Button[][] {
-  return [[button.callback('Исправить ответ', incidentCallback('fix', incidentId), { intent: 'positive' })]];
+  return [[button.callback('Исправить ответ', incidentCallback('fix', incidentId), { intent: 'positive' })],
+    [button.callback('💬 Уточнить у жителя', incidentCallback('clarify', incidentId))]];
 }
 
 /** Period picker shown by a bare `/report` (§40). */

@@ -17,7 +17,9 @@ import { moduleLogger } from '../utils/logger';
 import { MaxClient } from './max-client';
 import { queueDeliveryStatus, reviewDeliveryNotice } from '../delivery/delivery-status';
 import { INCIDENT_INCLUDE } from '../incidents/incident.repository';
-import { distributionWorkedNotice } from '../bot/views/cards';
+import { distributionWorkedNotice, sectorCard } from '../bot/views/cards';
+import { sectorKeyboard } from '../bot/keyboards';
+import { activateClarification } from '../clarifications/clarification-delivery';
 import { slaNotification, slaStage, type SlaStage } from '../sla/sla-notification';
 
 const log = moduleLogger('max-message');
@@ -38,7 +40,9 @@ export type SendTarget = { chatId: bigint } | { userId: bigint };
 export type CompositeMessage = {
   text: string;
   operation?: { type: 'delivery-card'; incidentId: string; answerId: string; card: 'review' | 'distribution' }
-    | { type: 'sla-reminder'; incidentId: string; stage: SlaStage };
+    | { type: 'sla-reminder'; incidentId: string; stage: SlaStage }
+    | { type: 'clarification-question' | 'clarification-reply'; incidentId: string; clarificationId: string }
+    | { type: 'sector-refresh'; incidentId: string };
   replyToMessageId?: string;
   /** Prefix repeated on every follow-up part, e.g. `№ INC-20260823-0001`. */
   label?: string;
@@ -294,6 +298,15 @@ export class MaxMessageService {
     const staged = row.attachments as unknown as StagedAttachment[];
 
     try {
+      if (payload.operation?.type === 'sla-reminder') {
+        const incident = await durable.prisma.incident.findUnique({ where: { id: payload.operation.incidentId }, select: { slaPausedAt: true } });
+        if (incident?.slaPausedAt) {
+          await durable.prisma.outboundMessage.update({ where: { id: row.id }, data: {
+            status: OutboxStatus.PENDING, lockedAt: null, attempts: { decrement: 1 }, nextAttemptAt: new Date(Date.now() + 60_000),
+          } });
+          return { state: 'queued', trackingApplied: false };
+        }
+      }
       // Includes invitations queued by older releases: never deliver before a rating.
       if (row.dedupeKey?.startsWith('subscription-invite:') && row.incidentId) {
         const incident = await durable.prisma.incident.findUnique({
@@ -315,11 +328,19 @@ export class MaxMessageService {
           originalName: attachment.originalName,
         });
       }
-      const target: SendTarget =
+      let target: SendTarget =
         row.targetType === 'chat' ? { chatId: row.targetId } : { userId: row.targetId };
+      if (payload.operation?.type === 'clarification-reply') {
+        const incident = await durable.prisma.incident.findUniqueOrThrow({ where: { id: payload.operation.incidentId }, include: { assignedGroup: true } });
+        if (!incident.sectorMessageId || !incident.assignedGroup?.maxChatId) throw new Error('Clarification reply is waiting for the sector card');
+        payload.replyToMessageId = incident.sectorMessageId;
+        target = { chatId: incident.assignedGroup.maxChatId };
+      }
       const result = payload.operation?.type === 'sla-reminder'
         ? await this.deliverSlaReminder(payload.operation)
-        : payload.operation
+        : payload.operation?.type === 'sector-refresh'
+        ? await this.refreshSectorCard(payload.operation.incidentId)
+        : payload.operation?.type === 'delivery-card'
         ? await this.refreshDeliveryCard(payload.operation)
         : await this.deliverLogical(target, { ...payload, attachments }, true);
       await this.complete(row, result.firstMessageId);
@@ -359,7 +380,12 @@ export class MaxMessageService {
           trackingApplied: true,
         },
       });
-      if (marked.count !== 1 || !row.trackingType) return;
+      if (marked.count !== 1) return;
+      const operation = (row.payload as unknown as StoredPayload).operation;
+      if (operation?.type === 'clarification-question') {
+        await activateClarification(tx, operation.incidentId, operation.clarificationId);
+      }
+      if (!row.trackingType) return;
 
       if (row.trackingType === DeliveryTrackingType.ANSWER_TO_REQUESTER && row.answerId && row.incidentId) {
         const deliveredAt = new Date();
@@ -441,6 +467,21 @@ export class MaxMessageService {
     // The card itself may still be retrying. Keep the reminder queued until it exists.
     if (!message.replyToMessageId) throw new Error('SLA reminder is waiting for the incident card');
     return this.deliverLogical(target, message);
+  }
+
+  private async refreshSectorCard(incidentId: string): Promise<{ firstMessageId?: string }> {
+    const incident = await this.durable!.prisma.incident.findUnique({ where: { id: incidentId }, include: INCIDENT_INCLUDE });
+    if (!incident?.sectorMessageId || !incident.assignedGroup) return {};
+    if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)) return {};
+    const attachments: OutboundAttachment[] = [];
+    for (const item of incident.attachments.slice(0, ATTACHMENTS_PER_MESSAGE)) {
+      attachments.push({ type: item.type, originalName: item.originalName, body: await this.durable!.storage.load(item.storageKey) });
+    }
+    await this.max.editMessage(incident.sectorMessageId, sectorCard(incident, incident.assignedGroup), [
+      ...await this.upload(attachments, true),
+      { type: 'inline_keyboard', payload: { buttons: sectorKeyboard(incident.id, { hasTemplate: Boolean(incident.assignedGroup.answerTemplate) }) } },
+    ]);
+    return {};
   }
 
   private async refreshDeliveryCard(operation: Extract<CompositeMessage['operation'], { type: 'delivery-card' }>): Promise<{ firstMessageId?: string }> {

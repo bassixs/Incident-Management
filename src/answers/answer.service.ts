@@ -91,6 +91,7 @@ export class AnswerService {
 
     const before = await this.repository.findById(incidentId);
     if (!before) throw new NotFoundError(`Incident ${incidentId} not found`);
+    if (before.activeClarificationId) throw new ConflictError('Сначала дождитесь уточнения от жителя.');
     if (!SUBMITTABLE.includes(before.status)) {
       throw new ConflictError(
         `Для ${before.publicCode} сейчас нельзя подготовить ответ (статус: ${before.status}).`,
@@ -109,6 +110,7 @@ export class AnswerService {
 
       const current = await tx.incident.findUnique({ where: { id: incidentId } });
       if (!current) throw new NotFoundError(`Incident ${incidentId} not found`);
+      if (current.activeClarificationId) throw new ConflictError('Сначала дождитесь уточнения от жителя.');
       if (!SUBMITTABLE.includes(current.status)) {
         throw new ConflictError(
           `Для ${current.publicCode} сейчас нельзя подготовить ответ (статус: ${current.status}).`,

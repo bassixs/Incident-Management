@@ -5,6 +5,8 @@ import { sessionConflictKeyboard } from '../keyboards';
 import type { ResolvedActor } from './helpers';
 
 export const SESSION_PROMPTS: Record<SessionType, string> = {
+  WAITING_CLARIFICATION_QUESTION: 'Ожидается вопрос жителю.',
+  WAITING_CLARIFICATION_REPLY: 'Ожидается уточнение по обращению.',
   [SessionType.WAITING_REQUESTER_NAME]: 'Ожидается ФИО заявителя.',
   [SessionType.WAITING_REQUESTER_PHONE]: 'Ожидается номер телефона заявителя.',
   [SessionType.WAITING_INCIDENT_SELECTION]: 'Ожидается выбор темы или территории кнопками.',

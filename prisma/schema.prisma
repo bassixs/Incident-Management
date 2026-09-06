@@ -38,7 +38,17 @@ enum AttachmentType {
   FILE
 }
 
+enum ClarificationStatus {
+  DRAFT
+  PENDING_DELIVERY
+  WAITING_REPLY
+  ANSWERED
+  CANCELLED
+}
+
 enum SessionType {
+  WAITING_CLARIFICATION_QUESTION
+  WAITING_CLARIFICATION_REPLY
   WAITING_REQUESTER_NAME
   WAITING_REQUESTER_PHONE
   WAITING_INCIDENT_SELECTION
@@ -229,6 +239,11 @@ model Incident {
   revisionCount   Int     @default(0)
   rejectionReason String?
   revisionReason  String?
+
+  activeClarificationId String? @unique
+  slaPausedAt DateTime?
+  slaPausedMs BigInt @default(0)
+  clarifications Clarification[]
 
   isOverdue         Boolean   @default(false)
   slaReminder24SentAt DateTime?
@@ -474,4 +489,34 @@ model ActionLock {
   @@index([lockedUntil])
   @@index([maxUserId])
   @@index([incidentId])
+}
+
+model Clarification {
+  id String @id @default(uuid())
+  incidentId String
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  status ClarificationStatus @default(DRAFT)
+  question String
+  askedByUserId String
+  askedByMaxUserId BigInt
+  chatId BigInt
+  questionSourceId String @unique
+  replySourceId String?
+  replyText String?
+  createdAt DateTime @default(now())
+  deliveredAt DateTime?
+  answeredAt DateTime?
+  attachments ClarificationAttachment[]
+  @@index([incidentId, createdAt])
+}
+
+model ClarificationAttachment {
+  id String @id @default(uuid())
+  clarificationId String
+  clarification Clarification @relation(fields: [clarificationId], references: [id], onDelete: Cascade)
+  type AttachmentType
+  storageKey String
+  originalName String?
+  size Int?
+  @@index([clarificationId])
 }

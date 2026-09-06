@@ -9,7 +9,7 @@ import {
 } from '../../incidents/incident.service';
 import type { Message } from '../../max/max-types';
 import { classifyAttachments } from '../../media/media.service';
-import { ValidationError } from '../../utils/errors';
+import { AppError, ValidationError } from '../../utils/errors';
 import { normaliseIncidentText, unicodeLength } from '../../utils/text';
 import {
   legalDocumentsKeyboard,
@@ -64,7 +64,8 @@ export async function handleRequesterMessage(
   }
 
   if (
-    (session.type === SessionType.WAITING_REQUESTER_NAME ||
+    (session.type === SessionType.WAITING_CLARIFICATION_REPLY ||
+      session.type === SessionType.WAITING_REQUESTER_NAME ||
       session.type === SessionType.WAITING_REQUESTER_PHONE ||
       session.type === SessionType.WAITING_INCIDENT_SELECTION ||
       session.type === SessionType.WAITING_CUSTOM_LOCALITY ||
@@ -88,6 +89,18 @@ export async function handleRequesterMessage(
   const data = services.sessions.readData(session);
   const media = classifyAttachments(message.body.attachments);
   const text = message.body.text ?? '';
+
+  if (session.type === SessionType.WAITING_CLARIFICATION_REPLY) {
+    try {
+      if (typeof data.clarificationId !== 'string') throw new ValidationError('Нажмите «Ответить на уточнение» в сообщении с вопросом.');
+      await services.clarifications.reply(data.clarificationId, actor.maxUserId, text, media, message.body.mid, session.id);
+    } catch (error) {
+      await reportActionError(error, () => services.messages.send(target, {
+        text: error instanceof AppError ? error.message : 'Не удалось сохранить уточнение. Попробуйте снова.',
+      }));
+    }
+    return;
+  }
 
   if (
     session.type === SessionType.WAITING_INCIDENT_CONFIRMATION ||

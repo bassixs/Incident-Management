@@ -61,6 +61,11 @@ describeIntegration('90-day incident retention', () => {
     await prisma.answerAttachment.create({
       data: { answerId: answer.id, type: 'FILE', storageKey: 'answers/old.pdf', size: 200 },
     });
+    await prisma.clarification.create({ data: {
+      incidentId: expired.id, status: 'ANSWERED', question: 'Уточните адрес', replyText: 'Дом 5',
+      askedByUserId: responder.id, askedByMaxUserId: responder.maxUserId, chatId: 999n, questionSourceId: 'old-question',
+      attachments: { create: { type: 'IMAGE', storageKey: 'clarifications/old.jpg', size: 50 } },
+    } });
     await prisma.outboundMessage.create({
       data: {
         targetType: 'user',
@@ -115,11 +120,13 @@ describeIntegration('90-day incident retention', () => {
 
     expect(result).toMatchObject({
       deletedIncidents: 1,
-      deletedFiles: 2,
-      deletedBytes: 300,
+      deletedFiles: 3,
+      deletedBytes: 350,
       failures: [],
     });
-    expect(removed).toEqual(['incidents/old.jpg', 'answers/old.pdf']);
+    expect(removed).toEqual(expect.arrayContaining(['incidents/old.jpg', 'answers/old.pdf', 'clarifications/old.jpg']));
+    expect(await prisma.clarification.count({ where: { incidentId: expired.id } })).toBe(0);
+    expect(await prisma.clarificationAttachment.count()).toBe(0);
     expect(await prisma.incident.findUnique({ where: { id: expired.id } })).toBeNull();
     expect(await prisma.incident.findUnique({ where: { id: recent.id } })).not.toBeNull();
     expect(await prisma.incident.findUnique({ where: { id: active.id } })).not.toBeNull();

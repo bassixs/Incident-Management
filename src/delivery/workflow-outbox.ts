@@ -83,6 +83,15 @@ export async function queueSector(tx: Tx, incidentId: string): Promise<void> {
   }, incidentId, incident.attachments);
 }
 
+export async function queueSectorRefresh(tx: Tx, incidentId: string, key: string): Promise<void> {
+  const incident = await tx.incident.findUniqueOrThrow({ where: { id: incidentId }, include: { assignedGroup: true } });
+  if (!incident.assignedGroup?.maxChatId || !incident.sectorMessageId) return;
+  await queueMessage(tx, { chatId: incident.assignedGroup.maxChatId }, {
+    text: `Обновление карточки ${incident.publicCode}`, operation: { type: 'sector-refresh', incidentId },
+    delivery: { dedupeKey: key },
+  }, incidentId);
+}
+
 export async function queueAnswer(tx: Tx, incidentId: string, answerId: string, direct: boolean): Promise<void> {
   const incident = await tx.incident.findUniqueOrThrow({ where: { id: incidentId }, include: INCIDENT_INCLUDE });
   const answer = incident.answers.find(a => a.id === answerId);

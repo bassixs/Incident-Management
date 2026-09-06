@@ -15,6 +15,9 @@ const ACTION_LABELS: Record<string, string> = {
   ANSWER_APPROVED: 'Ответ согласован',
   ANSWER_SENT_DIRECT: 'Ответ подготовлен без согласования',
   ANSWER_SENT: 'Ответ доставлен заявителю',
+  CLARIFICATION_REQUESTED: 'Запрошены сведения у жителя',
+  CLARIFICATION_DELIVERED: 'Вопрос доставлен, срок приостановлен',
+  CLARIFICATION_RECEIVED: 'Получено уточнение, срок возобновлён',
   ANSWER_RATED: 'Заявитель оценил ответ',
   INCIDENT_REJECTED: 'Обращение отклонено',
   USER_BANNED: 'Автор обращения заблокирован',
@@ -85,6 +88,9 @@ function actorOf(
 
 function historyDetails(action: string, metadata: Record<string, unknown>): string[] {
   const details: string[] = [];
+  if (metadata.question) details.push(`Вопрос: ${String(metadata.question)}`);
+  if (metadata.replyText) details.push(`Уточнение жителя: ${String(metadata.replyText)}`);
+  if (metadata.photos) details.push(`Фотографий: ${String(metadata.photos)}`);
   if (metadata.categoryCode) details.push(`Сфера: ${String(metadata.categoryCode)}`);
   if (metadata.version) details.push(`Версия ответа: ${String(metadata.version)}`);
   if (metadata.reason) details.push(`Причина: ${String(metadata.reason)}`);
