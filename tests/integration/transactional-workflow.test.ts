@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vite
 import { handleIncidentCallback } from '../../src/bot/callbacks/incident.callbacks';
 import * as outbox from '../../src/delivery/workflow-outbox';
 import { MaxMessageService } from '../../src/max/max-message.service';
+import type { SendMessageExtra } from '../../src/max/max-types';
 import { buildServices } from '../../src/app/container';
 import { FakeMediaService } from '../helpers/fakes';
 import { actorFor, createHarness, createTestPrisma, describeIntegration, GROUP_CODES, pushSchemaOnce, resetDatabase, seedCategories, type TestHarness } from '../helpers/integration';
@@ -226,12 +227,16 @@ describeIntegration('transactional workflow and recovery', () => {
 
   for (const regional of [false, true]) it(`shows delivery only after MAX accepts the ${regional ? 'regional' : 'approved'} answer and survives a worker restart`, async () => {
     let fail = true;
+    let failInvite = true;
     let sequence = 0;
     const edits: string[] = [];
     const chatMessages: string[] = [];
+    const userMessages: Array<{ userId: bigint; text: string; extra?: SendMessageExtra }> = [];
     const max = {
-      sendToUser: async (_id: bigint, text: string) => {
+      sendToUser: async (userId: bigint, text: string, extra?: SendMessageExtra) => {
         if (fail && text.includes('Получен ответ')) throw new Error('MAX unavailable');
+        if (failInvite && text.includes('Подпишитесь:')) throw new Error('Invite unavailable');
+        userMessages.push({ userId, text, extra });
         return { body: { mid: `u-${++sequence}` } };
       },
       sendToChat: async (_id: bigint, text: string) => { chatMessages.push(text); return { body: { mid: `c-${++sequence}` } }; },
@@ -248,6 +253,8 @@ describeIntegration('transactional workflow and recovery', () => {
     if (regional) expect(submission.deliveryQueued).toBe(true);
     else await services.review.approve(incident.id, await actor());
     const answerId = submission.answer.id;
+    const inviteKey = `subscription-invite:${incident.id}`;
+    expect(await prisma.outboundMessage.count({ where: { dedupeKey: inviteKey } })).toBe(0);
     expect((await prisma.incidentAnswer.findUniqueOrThrow({ where: { id: answerId } })).deliveredAt).toBeNull();
     expect(edits.some(t => t.includes('🟢 ОТРАБОТАНО'))).toBe(false);
     expect(chatMessages.some(t => t.includes('доставлен пользователю'))).toBe(false);
@@ -261,5 +268,40 @@ describeIntegration('transactional workflow and recovery', () => {
     expect(edits.some(t => t.includes('🟢 ОТРАБОТАНО'))).toBe(true);
     expect(chatMessages.filter(t => t.includes('доставлен пользователю'))).toHaveLength(1);
     expect(await services.review.resend(incident.id)).toBe('already-sent');
+    const queuedInvite = await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: inviteKey } });
+    expect(queuedInvite.status).toBe('PENDING');
+    expect(queuedInvite.targetId).toBe(TEST_USERS.requesterA);
+    expect(userMessages.some(message => message.text.includes('Подпишитесь:'))).toBe(false);
+    failInvite = false;
+    await prisma.outboundMessage.update({ where: { dedupeKey: inviteKey }, data: { nextAttemptAt: new Date(0) } });
+    const inviteWorker = new MaxMessageService(max as never, { prisma, storage });
+    await inviteWorker.flush();
+    await inviteWorker.flush();
+    const invitations = userMessages.filter(message => message.text.includes('Подпишитесь:'));
+    expect(invitations).toHaveLength(1);
+    expect(invitations[0]!.userId).toBe(TEST_USERS.requesterA);
+    expect(invitations[0]!.extra?.attachments).toEqual([{
+      type: 'inline_keyboard', payload: { buttons: [
+        [{ type: 'link', text: 'Владислав Шапша', url: 'https://max.ru/Shapsha_VV' }],
+        [{ type: 'link', text: 'Правительство Калужской области', url: 'https://max.ru/pravitelstvo40' }],
+      ] },
+    }]);
+    expect(userMessages.filter(message => message.text.includes('Получен ответ'))).toHaveLength(1);
+    expect(userMessages.findIndex(message => message.text.includes('Подпишитесь:')))
+      .toBeGreaterThan(userMessages.findIndex(message => message.text.includes('Получен ответ')));
+    expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: inviteKey } })).status).toBe('SENT');
+  });
+
+  it('does not offer channel subscriptions after a rejection', async () => {
+    const incident = await create();
+    await h.services.distribution.reject(incident.id, 'Обращение не относится к компетенции', await actor());
+    const texts: string[] = [];
+    const max = {
+      sendToUser: async (_id: bigint, text: string) => { texts.push(text); return { body: { mid: 'user' } }; },
+      sendToChat: async () => ({ body: { mid: 'chat' } }),
+    };
+    await new MaxMessageService(max as never, { prisma, storage: {} as never }).flush();
+    expect(await prisma.outboundMessage.count({ where: { dedupeKey: `subscription-invite:${incident.id}` } })).toBe(0);
+    expect(texts.some(text => text.includes('Подпишитесь:'))).toBe(false);
   });
 });
