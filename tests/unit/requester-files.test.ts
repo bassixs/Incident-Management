@@ -5,6 +5,7 @@ import { handleRequesterMessage } from '../../src/bot/handlers/requester.handler
 import { handleOperatorMessage } from '../../src/bot/handlers/operator.handler';
 import { findCommand } from '../../src/bot/commands';
 import { REJECTION_MESSAGES } from '../../src/incidents/incident.service';
+import { getConfig } from '../../src/config';
 
 vi.mock('../../src/bot/handlers/requester.handler', () => ({ handleRequesterMessage: vi.fn(), sendMainMenu: vi.fn() }));
 vi.mock('../../src/bot/handlers/operator.handler', () => ({ handleOperatorMessage: vi.fn() }));
@@ -15,6 +16,8 @@ beforeEach(() => vi.clearAllMocks());
 function setup(attachments: unknown[], text = 'Описание', dialog = true) {
   const session = { id: 'unchanged-session' };
   const services = {
+    config: getConfig(),
+    prisma: { responsibleGroup: { findMany: vi.fn().mockResolvedValue([{ name: 'Профильная группа', bypassReview: false }]) } },
     users: { identity: vi.fn().mockResolvedValue({ user: { id: 'user', maxUserId: 5001n, displayName: 'Житель' }, roles: [] }) },
     messages: { send: vi.fn().mockResolvedValue({}) },
     sessions: { find: vi.fn().mockResolvedValue(session) },
@@ -55,6 +58,6 @@ it.each(['image', 'contact'])('keeps normal %s messages available to the request
 it('routes staff files in working chats to the operator handler', async () => {
   const { services, ctx, message, session } = setup([{ type: 'file', payload: {} }], 'Ответ', false);
   await handleMessageUpdate(services as never, ctx as never);
-  expect(handleOperatorMessage).toHaveBeenCalledWith(services, expect.anything(), -1010n, message, session);
+  expect(handleOperatorMessage).toHaveBeenCalledWith(services, expect.objectContaining({ roles: ['RESPONDER'] }), -1010n, message, session);
   expect(services.messages.send).not.toHaveBeenCalled();
 });

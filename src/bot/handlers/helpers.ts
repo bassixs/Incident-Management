@@ -4,22 +4,26 @@ import type { AppServices } from '../../app/container';
 import type { Actor } from '../../distribution/distribution.service';
 import type { MaxUser, Message } from '../../max/max-types';
 import type { UserRole } from '../../users/roles';
+import { workingChatFor, type WorkingChat } from '../../users/working-chat';
 import { AppError } from '../../utils/errors';
 import { moduleLogger } from '../../utils/logger';
 
 const log = moduleLogger('bot');
 
-export type ResolvedActor = Actor & { roles: UserRole[] };
+export type ResolvedActor = Actor & { roles: UserRole[]; workingChat?: WorkingChat };
 
 /** Upsert the MAX profile and resolve effective roles for this update. */
-export async function resolveActor(services: AppServices, maxUser: MaxUser): Promise<ResolvedActor> {
-  const { user, roles } = await services.users.identity(maxUser);
+export async function resolveActor(services: AppServices, maxUser: MaxUser, workingChatId?: bigint): Promise<ResolvedActor> {
+  const { user, roles: storedRoles } = await services.users.identity(maxUser);
+  const workingChat = workingChatId === undefined || maxUser.is_bot ? undefined : await workingChatFor(services, workingChatId);
+  const roles = [...new Set([...storedRoles, ...(workingChat?.roles ?? [])])];
   return {
     userId: user.id,
     maxUserId: user.maxUserId,
     displayName: user.displayName,
     role: roles.join('|'),
     roles,
+    ...(workingChat ? { workingChat } : {}),
   };
 }
 

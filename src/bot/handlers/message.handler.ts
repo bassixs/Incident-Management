@@ -36,7 +36,7 @@ export async function handleMessageUpdate(services: AppServices, ctx: Context): 
   const chatId = chatIdOf(message) ?? (dialog ? BigInt(sender.user_id) : undefined);
   if (chatId === undefined) return;
 
-  const actor = await resolveActor(services, sender);
+  const actor = await resolveActor(services, sender, message.recipient.chat_type === 'chat' ? chatId : undefined);
 
   // Reject documents at every requester step, including command captions and
   // photos sent as files. Do not download them or change the current session.

@@ -21,7 +21,7 @@ const log = moduleLogger('bot-callbacks');
 export async function handleCallbackUpdate(services: AppServices, ctx: Context): Promise<void> {
   const update = ctx.update as MessageCallbackUpdate;
   const callback = update.callback;
-  if (!callback) return;
+  if (!callback || callback.user.is_bot) return;
 
   const payload = parseCallbackPayload(callback.payload);
   if (!payload) {
@@ -29,12 +29,13 @@ export async function handleCallbackUpdate(services: AppServices, ctx: Context):
     return;
   }
 
-  const actor = await resolveActor(services, callback.user);
   // Mirrors the fallback in the message router so session keys line up.
   const messageId = update.message?.body?.mid;
   const chatId =
     chatIdOf(update.message ?? undefined) ??
     (update.message?.recipient?.chat_type === 'dialog' ? BigInt(callback.user.user_id) : undefined);
+
+  const actor = await resolveActor(services, callback.user, update.message?.recipient?.chat_type === 'chat' ? chatId : undefined);
 
   const lease = actionLease(payload, actor.maxUserId, chatId, messageId);
   let acknowledged = false;

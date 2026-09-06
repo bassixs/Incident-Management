@@ -89,9 +89,10 @@ async function checkChat(max: MaxClient, label: string, chatId: bigint | undefin
     const canWrite = membership.permissions === null || membership.permissions.includes('write');
     record(
       label,
-      canWrite ? 'ok' : 'warn',
+      canWrite && membership.is_admin ? 'ok' : 'warn',
       `${chat.title ?? 'без названия'} (${chatId.toString()}), тип: ${chat.type}` +
-        (canWrite ? '' : ' — у бота нет права писать в чат'),
+        (canWrite ? '' : ' — у бота нет права писать в чат') +
+        (membership.is_admin ? '' : ' — для приветствия при вступлении бот должен быть администратором; права участников работают при обращении к боту'),
     );
     return true;
   } catch (error) {
@@ -220,7 +221,7 @@ async function checkRoles(prisma: PrismaClient): Promise<void> {
     'Роли',
     'ok',
     `БД — ADMIN: ${stored.ADMIN}, DISPATCHER: ${stored.DISPATCHER}, ` +
-      `APPROVER: ${stored.APPROVER}, RESPONDER: ${stored.RESPONDER}; ` +
+      `APPROVER: ${stored.APPROVER}, RESPONDER: ${stored.RESPONDER}; автоматические права определяются рабочим чатом; ` +
       `bootstrap .env — ADMIN: ${config.ADMINS.length}, DISPATCHER: ${config.DISPATCHERS.length}, ` +
       `APPROVER: ${config.APPROVERS.length}, RESPONDER: ${config.RESPONDERS.length}`,
   );

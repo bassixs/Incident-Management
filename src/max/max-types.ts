@@ -40,5 +40,7 @@ export const SUBSCRIBED_UPDATE_TYPES = [
   'bot_started',
   'bot_added',
   'bot_removed',
+  'user_added',
+  'user_removed',
   'message_edited',
 ] as const;

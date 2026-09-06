@@ -6,8 +6,8 @@ import { parseReportRange, REPORT_USAGE } from '../../reports/report-range';
 import { formatRetentionPreview, formatRetentionRun } from '../../retention/retention.service';
 import { AppError, ForbiddenError, ValidationError } from '../../utils/errors';
 import { moduleLogger } from '../../utils/logger';
-import { hasPermission } from '../../users/roles';
-import { assertWorkingChat, requirePermission } from '../middleware/authorize';
+import { chatInfoText } from '../views/chat-info';
+import { assertIncidentVisible, assertWorkingChat, requirePermission } from '../middleware/authorize';
 import { reportPeriodKeyboard } from '../keyboards';
 import { sendReport } from '../views/report';
 import { incidentLookupCard, myIncidentsText, rulesText } from '../views/cards';
@@ -27,48 +27,6 @@ export type CommandContext = {
 
 type CommandHandler = (context: CommandContext) => Promise<void>;
 
-const STAFF_HELP = [
-  'Команды для сотрудников:',
-  '',
-  '/incident <НОМЕР> — карточка обращения',
-  '/queue — панель очереди распределения',
-  '/history <НОМЕР> — история обращения',
-  '/report — выбрать период кнопками; можно и сразу: /report 7d, /report 01.08.2026 - 10.08.2026',
-  '/resend <НОМЕР> — повторить доставку согласованного ответа',
-  '/chatid — показать ID текущего чата',
-  '',
-  'Только для администратора:',
-  '/ban <MAX_USER_ID> <причина>',
-  '/unban <MAX_USER_ID>',
-  '/categories — список тем обращения',
-  '/category_add <КОД> <Название>',
-  '/category_on <КОД> | /category_off <КОД>',
-  '/category_name <КОД> <Новое название>',
-  '/groups — список ответственных групп',
-  '/group_chat <КОД> <CHAT_ID>',
-  '/group_on <КОД> | /group_off <КОД>',
-  '/group_name <КОД> <Новое название>',
-  '/group_authority <КОД> <Подпись ответа | ->',
-  '/group_template <КОД> <шаблон|-> ',
-  '/role <MAX_USER_ID> <ADMIN,DISPATCHER,...|-> ',
-  '/sla_check — принудительная проверка сроков',
-  '/delivery_status — состояние очередей сообщений',
-  '/delivery_errors — последние проблемы доставки',
-  '/delivery_retry [КОД] — повторить одну или все неудачные исходящие доставки',
-  '/retention_preview — показать, что удалится по правилу 90 дней',
-  '/retention_run УДАЛИТЬ — запустить очистку после предварительной проверки',
-  '/audit — последние административные изменения',
-].join('\n');
-
-const USER_HELP = [
-  'Доступные команды:',
-  '',
-  '/start — главное меню',
-  '/rules — правила подачи обращения',
-  '/my — мои обращения',
-  '/whoami — ваш MAX ID и ID чата',
-].join('\n');
-
 export const COMMANDS: Record<string, CommandHandler> = {
   queue: async ({ services, actor, chatId, isDialog }) => {
     if (isDialog) throw new ForbiddenError('Очередь доступна в чате распределения.');
@@ -82,12 +40,11 @@ export const COMMANDS: Record<string, CommandHandler> = {
     await sendMainMenu(services, actor);
   },
 
-  help: async (context) => {
-    const { services, actor, chatId, isDialog } = context;
-    const staff = hasPermission(actor.roles, 'incident.lookup');
-    const text = staff && !isDialog ? `${USER_HELP}\n\n${STAFF_HELP}` : USER_HELP;
-    await reply(services, chatId, isDialog, actor, text);
+  info: async ({ services, actor, chatId, isDialog }) => {
+    await reply(services, chatId, isDialog, actor, await chatInfoText(services, actor, chatId, isDialog));
   },
+
+  help: async context => { await COMMANDS.info!(context); },
 
   rules: async ({ services, actor, chatId, isDialog }) => {
     await reply(services, chatId, isDialog, actor, rulesText());
@@ -119,6 +76,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
         `Ваш MAX ID: ${actor.maxUserId.toString()}`,
         `Имя: ${actor.displayName}`,
         `Роли: ${actor.roles.join(', ')}`,
+        ...(actor.workingChat ? [`Права в этом чате: ${actor.workingChat.labels.join(', ')} (автоматически)`] : []),
         '',
         `ID этого чата: ${chatId.toString()}`,
         `Тип чата: ${isDialog ? 'личный диалог' : 'групповой чат'}`,
@@ -133,6 +91,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
     if (!code) throw new ValidationError('Использование: /incident INC-20260823-0001');
     const incident = await services.incidents.findByPublicCode(code);
     if (!incident) throw new AppError(`Обращение ${code.toUpperCase()} не найдено.`, 'NOT_FOUND');
+    assertIncidentVisible(actor, incident, chatId);
     await services.messages.send({ chatId }, { text: incidentLookupCard(incident) });
   },
 
@@ -143,6 +102,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
     if (!code) throw new ValidationError('Использование: /history INC-20260823-0001');
     const incident = await services.incidents.findByPublicCode(code);
     if (!incident) throw new AppError(`Обращение ${code.toUpperCase()} не найдено.`, 'NOT_FOUND');
+    assertIncidentVisible(actor, incident, chatId);
     const entries = await services.history.listForIncident(incident.id);
     const actorIds = [...new Set(entries.flatMap((entry) => (entry.actorMaxUserId ? [entry.actorMaxUserId] : [])))];
     const users = actorIds.length
@@ -183,6 +143,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
     if (!code) throw new ValidationError('Использование: /resend INC-20260823-0001');
     const incident = await services.incidents.findByPublicCode(code);
     if (!incident) throw new AppError(`Обращение ${code.toUpperCase()} не найдено.`, 'NOT_FOUND');
+    assertIncidentVisible(actor, incident, chatId);
     const sent = await services.review.resend(incident.id);
     await services.messages.send(
       { chatId },
@@ -475,7 +436,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
   },
 
   delivery_status: async ({ services, actor, chatId, isDialog }) => {
-    requirePermission(actor, 'admin.manage');
+    requirePermission(actor, 'delivery.manage');
     const [outPending, outSending, outFailed, inPending, inProcessing, inFailed] = await Promise.all([
       services.prisma.outboundMessage.count({ where: { status: OutboxStatus.PENDING } }),
       services.prisma.outboundMessage.count({ where: { status: OutboxStatus.SENDING } }),
@@ -498,7 +459,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
   },
 
   delivery_errors: async ({ services, actor, chatId, isDialog }) => {
-    requirePermission(actor, 'admin.manage');
+    requirePermission(actor, 'delivery.manage');
     const problems = await services.deliveryProblems.recent(10);
     await reply(
       services,
@@ -512,7 +473,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
   },
 
   delivery_retry: async ({ services, actor, chatId, isDialog, args }) => {
-    requirePermission(actor, 'admin.manage');
+    requirePermission(actor, 'delivery.manage');
     const reference = args[0]?.trim().toLowerCase();
     if (reference && !/^[a-f0-9-]{6,36}$/.test(reference)) {
       throw new ValidationError('Код ошибки некорректен. Скопируйте его из /delivery_errors.');
@@ -745,7 +706,7 @@ function parseMaxId(raw: string): bigint {
 
 // Setup and public commands may run before a group is registered. Staff actions
 // in group chats always require a current configured destination, including ADMIN.
-const PUBLIC_COMMANDS = new Set(['start', 'help', 'rules', 'my', 'whoami', 'chatid']);
+const PUBLIC_COMMANDS = new Set(['start', 'help', 'info', 'rules', 'my', 'whoami', 'chatid']);
 for (const [name, handler] of Object.entries(COMMANDS)) {
   if (PUBLIC_COMMANDS.has(name)) continue;
   COMMANDS[name] = async context => {

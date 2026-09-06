@@ -30,6 +30,7 @@ export type Permission =
   | 'user.ban'
   | 'report.generate'
   | 'incident.lookup'
+  | 'delivery.manage'
   | 'admin.manage';
 
 const PERMISSIONS: Record<Permission, UserRole[]> = {
@@ -41,6 +42,7 @@ const PERMISSIONS: Record<Permission, UserRole[]> = {
   'report.generate': [UserRole.DISPATCHER, UserRole.ADMIN],
   'incident.lookup': [UserRole.DISPATCHER, UserRole.RESPONDER, UserRole.APPROVER, UserRole.ADMIN],
   'admin.manage': [UserRole.ADMIN],
+  'delivery.manage': [UserRole.ADMIN],
 };
 
 export function hasPermission(roles: UserRole[], permission: Permission): boolean {

@@ -18,7 +18,7 @@ const GENERIC_DENIAL = 'У вас нет прав для этого действ
  * the database and the chat id comes from the update, not from the button.
  */
 export function requirePermission(actor: ResolvedActor, permission: Permission): void {
-  if (!hasPermission(actor.roles, permission)) {
+  if (!hasPermission(actor.roles, permission) && !actor.workingChat?.permissions.includes(permission)) {
     throw new ForbiddenError(GENERIC_DENIAL, { permission });
   }
 }
@@ -40,6 +40,15 @@ export function assertDispatcher(services: AppServices, actor: ResolvedActor, ch
 export function assertApprover(services: AppServices, actor: ResolvedActor, chatId: bigint | undefined): void {
   requirePermission(actor, 'incident.approve');
   requireChat(chatId, services.config.REVIEW_CHAT_ID, 'согласование');
+}
+
+/** An automatically admitted sector member may look up only that sector's cards. */
+export function assertIncidentVisible(actor: ResolvedActor, incident: IncidentWithRelations, chatId: bigint): void {
+  const chat = actor.workingChat;
+  if (!chat || actor.roles.includes(UserRole.ADMIN) || chat.distribution || chat.review || chat.delivery) return;
+  if (incident.assignedGroup?.maxChatId !== chatId) {
+    throw new ForbiddenError('В этом профильном чате доступны только обращения, назначенные его группе.');
+  }
 }
 
 /**

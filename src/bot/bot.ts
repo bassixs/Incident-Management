@@ -4,6 +4,7 @@ import type { AppServices } from '../app/container';
 import { moduleLogger } from '../utils/logger';
 import { handleCallbackUpdate } from './callbacks';
 import { handleBotAdded, handleBotStarted, handleMessageUpdate } from './handlers/message.handler';
+import { handleMembershipUpdate } from './handlers/membership.handler';
 
 const log = moduleLogger('bot');
 
@@ -14,6 +15,7 @@ const BOT_COMMANDS = [
   { name: 'rules', description: 'Правила подачи обращения' },
   { name: 'whoami', description: 'Ваш MAX ID и ID чата' },
   { name: 'help', description: 'Список команд' },
+  { name: 'info', description: 'О чате, правах и порядке работы' },
 ];
 
 /**
@@ -43,6 +45,8 @@ export function registerHandlers(services: AppServices): Bot {
   bot.on('message_callback', (ctx) => handleCallbackUpdate(services, ctx));
   bot.on('bot_started', (ctx) => handleBotStarted(services, ctx));
   bot.on('bot_added', (ctx) => handleBotAdded(services, ctx));
+  bot.on('user_added', (ctx) => handleMembershipUpdate(services, ctx));
+  bot.on('user_removed', (ctx) => handleMembershipUpdate(services, ctx));
 
   return bot;
 }
