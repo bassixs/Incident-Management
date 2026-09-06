@@ -97,13 +97,13 @@ describeIntegration('transactional workflow and recovery', () => {
     expect(await prisma.incidentAnswer.count()).toBe(0);
   });
 
-  it('removes newly ingested photos only after verifying the transaction did not commit', async () => {
+  it('keeps no local photo files when a token-only registration transaction rolls back', async () => {
     const files = new Map<string, Buffer>();
     const storage = { save: async ({ key, body }: { key: string; body: Buffer }) => { files.set(key, body); return { storageKey: key, size: body.length }; }, remove: async (key: string) => { files.delete(key); } };
     const media = new MediaService(storage as never, { downloadFromUrl: async () => ({ body: Buffer.from('photo') }) } as never);
     const services = buildServices(prisma, { media, messages: h.messages as never });
     vi.spyOn(outbox, 'queueDistribution').mockRejectedValueOnce(new Error('queue failed'));
-    await expect(services.incidents.create({ requester: { maxUserId: TEST_USERS.requesterA, name: 'Иванов Иван', phone: '+79001234567' }, text: 'Фонарь', media: [{ kind: 'IMAGE', url: 'https://example.test/photo' }] })).rejects.toThrow('queue failed');
+    await expect(services.incidents.create({ requester: { maxUserId: TEST_USERS.requesterA, name: 'Иванов Иван', phone: '+79001234567' }, text: 'Фонарь', media: [{ kind: 'IMAGE', token: 'max-photo', url: 'https://example.test/photo' }] })).rejects.toThrow('queue failed');
     expect(files.size).toBe(0);
     expect(await prisma.incident.count()).toBe(0);
   });

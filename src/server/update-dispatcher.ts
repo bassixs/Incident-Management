@@ -1,4 +1,5 @@
 import { AsyncActivity } from '../utils/async-activity';
+import { getConfig } from '../config';
 import { InboxStatus, Prisma, type PrismaClient } from '@prisma/client';
 
 import { isUniqueViolation } from '../database/prisma';
@@ -25,13 +26,26 @@ export class UpdateDispatcher {
   private readonly activity = new AsyncActivity();
   private timer?: NodeJS.Timeout;
   private drainPromise?: Promise<void>;
+  private readonly reservations = new Map<string, Promise<Reservation>>();
 
   constructor(
     private readonly prisma: PrismaClient,
     private readonly max: MaxClient,
-  ) {}
+    private readonly concurrency = getConfig().INBOX_CONCURRENCY,
+  ) {
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 32) throw new Error('Inbox concurrency must be between 1 and 32');
+  }
 
   async reserve(update: Update): Promise<Reservation> {
+    const key = updatePartition(update);
+    const previous = this.reservations.get(key) ?? Promise.resolve();
+    const operation = previous.catch(() => undefined).then(() => this.reserveNow(update));
+    this.reservations.set(key, operation);
+    try { return await operation; }
+    finally { if (this.reservations.get(key) === operation) this.reservations.delete(key); }
+  }
+
+  private async reserveNow(update: Update): Promise<Reservation> {
     if (this.stopping) throw new Error('Dispatcher is shutting down; retry update later');
     const key = buildUpdateKey(update);
     const legacy = await this.prisma.processedUpdate.findUnique({
@@ -45,6 +59,7 @@ export class UpdateDispatcher {
         data: {
           externalUpdateKey: key,
           updateType: update.update_type,
+          partitionKey: updatePartition(update),
           payload: JSON.parse(JSON.stringify(update)) as Prisma.InputJsonValue,
         },
       });
@@ -73,7 +88,7 @@ export class UpdateDispatcher {
       log.error({ count: interrupted.count }, 'interrupted inbox updates require manual attention');
     }
     await this.purgeOlderThan(30);
-    this.timer = setInterval(() => void this.kick(), INBOX_INTERVAL_MS);
+    this.timer = setInterval(() => void this.kick().catch(error => log.error({ err: String(error) }, 'inbox sweep failed')), INBOX_INTERVAL_MS);
     this.timer.unref?.();
     await this.kick();
   }
@@ -99,15 +114,32 @@ export class UpdateDispatcher {
   }
 
   private async drain(): Promise<void> {
-    for (let processed = 0; processed < 100 && !this.stopping; processed += 1) {
-      const row = await this.prisma.inboundUpdate.findFirst({
-        where: { status: InboxStatus.PENDING, nextAttemptAt: { lte: new Date() } },
-        orderBy: { receivedAt: 'asc' },
-        select: { id: true },
-      });
-      if (!row || this.stopping) break;
-      await this.processById(row.id);
+    const active = new Map<string, Promise<void>>();
+    let failure: unknown;
+    try {
+      while (!this.stopping && !failure) {
+        while (active.size < this.concurrency && !this.stopping && !failure) {
+          const blocked = [...active.keys()];
+          const row = await this.prisma.inboundUpdate.findFirst({
+            where: { status: InboxStatus.PENDING, nextAttemptAt: { lte: new Date() },
+              partitionKey: { notIn: blocked } },
+            orderBy: { sequence: 'asc' },
+            select: { id: true, partitionKey: true },
+          });
+          if (!row && blocked.length && !active.size) continue;
+          if (!row || this.stopping) break;
+          const task = this.processById(row.id)
+            .catch(error => { failure = error; })
+            .finally(() => { active.delete(row.partitionKey); });
+          active.set(row.partitionKey, task);
+        }
+        if (!active.size) break;
+        await Promise.race(active.values());
+      }
+    } finally {
+      await Promise.all(active.values());
     }
+    if (failure) throw failure;
   }
 
   private async processById(id: string): Promise<void> {
@@ -167,4 +199,18 @@ export class UpdateDispatcher {
     ]);
     return legacy.count + inbox.count;
   }
+}
+
+/** One user's messages and callbacks share a lane, even across chats.
+ * Unknown updates remain serial. Business transactions still arbitrate
+ * different employees changing the same incident. One app process only.
+ */
+export function updatePartition(update: Update): string {
+  const value = update as unknown as {
+    callback?: { user?: { user_id?: number } };
+    message?: { sender?: { user_id?: number } };
+    user?: { user_id?: number };
+  };
+  const id = value.callback?.user?.user_id ?? value.message?.sender?.user_id ?? value.user?.user_id;
+  return typeof id === 'number' && Number.isSafeInteger(id) ? `user:${id}` : 'legacy';
 }

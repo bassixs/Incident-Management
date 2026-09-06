@@ -6,6 +6,7 @@ import { SessionType } from '@prisma/client';
 
 import { ValidationError } from '../utils/errors';
 import { assertMediaSize } from '../media/media-limits';
+import { isUnavailablePhoto } from '../media/max-photo-reference';
 import { moduleLogger } from '../utils/logger';
 import { incidentDraftConfirmationKeyboard, incidentDraftPhotoRetryKeyboard } from './keyboards';
 import { incidentDraftPreview } from './views/cards';
@@ -73,7 +74,15 @@ export async function showIncidentDraftPreview(
   let attachments: OutboundAttachment[];
   try {
     attachments = await loadPreviewPhotos(services, draft.draftMedia);
+    await services.messages.send({ userId: maxUserId }, {
+      text: incidentDraftPreview({ requesterName: draft.requesterName, requesterPhone: draft.requesterPhone,
+        problemMunicipalityName: draft.problemMunicipalityName, problemLocality: draft.problemLocality,
+        draftText: draft.draftText, photoCount: attachments.length }, category?.name),
+      keyboard: incidentDraftConfirmationKeyboard(), immediatePreview: true,
+      ...(attachments.length ? { attachments } : {}),
+    });
   } catch (error) {
+    if (!draft.draftMedia.length) throw error;
     // The failed set must never become confirmable or be silently omitted.
     // Preserve the entered fields and let the requester replace all photos.
     log.warn({ err: error instanceof Error ? error.message : String(error) }, 'draft photos require replacement');
@@ -82,9 +91,9 @@ export async function showIncidentDraftPreview(
       type: SessionType.WAITING_INCIDENT_EDIT_VALUE,
       data: { ...cleanDraft, draftMedia: [], draftEditField: 'photo', draftPhotoRetry: true },
     });
-    const reason = error instanceof ValidationError
+    const reason = isUnavailablePhoto(error) ? 'Фотография больше недоступна в MAX.' : error instanceof ValidationError
       ? error.message
-      : 'Не удалось загрузить фотографии из MAX.';
+      : 'Не удалось показать фотографии через MAX.';
     await services.messages.send({ userId: maxUserId }, {
       text: `${reason}\n\nТекст обращения и остальные данные сохранены. Отправьте все нужные фотографии заново, при необходимости уменьшив их размер, или нажмите «Продолжить без фотографий».`,
       keyboard: incidentDraftPhotoRetryKeyboard(),
@@ -97,24 +106,6 @@ export async function showIncidentDraftPreview(
     type: SessionType.WAITING_INCIDENT_CONFIRMATION,
     data: cleanDraft,
   });
-  await services.messages.send(
-    { userId: maxUserId },
-    {
-      text: incidentDraftPreview(
-        {
-          requesterName: draft.requesterName,
-          requesterPhone: draft.requesterPhone,
-          problemMunicipalityName: draft.problemMunicipalityName,
-          problemLocality: draft.problemLocality,
-          draftText: draft.draftText,
-          photoCount: attachments.length,
-        },
-        category?.name,
-      ),
-      keyboard: incidentDraftConfirmationKeyboard(),
-      ...(attachments.length > 0 ? { attachments } : {}),
-    },
-  );
 }
 
 async function loadPreviewPhotos(
@@ -123,10 +114,9 @@ async function loadPreviewPhotos(
 ): Promise<OutboundAttachment[]> {
   const attachments: OutboundAttachment[] = [];
   for (const photo of media) {
-    if (!photo.url) throw new ValidationError('Не удалось получить фотографию из MAX.');
+    if (!photo.token) throw new ValidationError('Не удалось получить фотографию из MAX.');
     if (photo.size !== undefined) assertMediaSize(photo.size);
-    const { body } = await services.max.downloadFromUrl(photo.url);
-    attachments.push({ type: 'IMAGE', body, originalName: photo.filename });
+    attachments.push({ type: 'IMAGE', maxToken: photo.token, originalName: photo.filename });
   }
   return attachments;
 }

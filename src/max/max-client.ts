@@ -14,6 +14,7 @@ import type {
 import { getConfig } from '../config';
 import { assertMediaSize } from '../media/media-limits';
 import { ValidationError } from '../utils/errors';
+import { ApiRateGate } from './api-rate-gate';
 import { moduleLogger } from '../utils/logger';
 import { retry } from '../utils/retry';
 
@@ -56,6 +57,7 @@ function isRetryable(error: unknown): boolean {
  * against the documented official API - no invented methods.
  */
 export class MaxClient {
+  private readonly rateGate = new ApiRateGate();
   private readonly baseUrl: string;
   private readonly token: string;
 
@@ -69,8 +71,12 @@ export class MaxClient {
     return this.bot.api;
   }
 
-  private call<T>(name: string, operation: () => Promise<T>): Promise<T> {
-    return retry(operation, {
+  private call<T>(name: string, operation: () => Promise<T>, target?: string): Promise<T> {
+    return retry(async () => {
+      if (target) await this.rateGate.wait(target, 550, () => this.rateGate.wait('global', 45));
+      else await this.rateGate.wait('global', 45);
+      return operation();
+    }, {
       attempts: 4,
       shouldRetry: isRetryable,
       onRetry: (error, attempt, waitMs) =>
@@ -86,11 +92,11 @@ export class MaxClient {
   }
 
   async sendToChat(chatId: bigint | number, text: string, extra?: SendMessageExtra): Promise<Message> {
-    return this.call('sendMessageToChat', () => this.api.sendMessageToChat(toApiId(chatId), text, extra));
+    return this.call('sendMessageToChat', () => this.api.sendMessageToChat(toApiId(chatId), text, extra), `chat:${chatId}`);
   }
 
   async sendToUser(userId: bigint | number, text: string, extra?: SendMessageExtra): Promise<Message> {
-    return this.call('sendMessageToUser', () => this.api.sendMessageToUser(toApiId(userId), text, extra));
+    return this.call('sendMessageToUser', () => this.api.sendMessageToUser(toApiId(userId), text, extra), `user:${userId}`);
   }
 
   /**

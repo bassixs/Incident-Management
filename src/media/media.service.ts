@@ -11,6 +11,7 @@ import { LocalMediaStorage } from './local-media-storage';
 import type { MediaStorage } from './media-storage.interface';
 import { S3MediaStorage } from './s3-media-storage';
 import { assertMediaSize } from './media-limits';
+import { isPhotoReference, photoReference } from './max-photo-reference';
 
 const log = moduleLogger('media');
 
@@ -89,11 +90,9 @@ export function createMediaStorage(): MediaStorage {
 }
 
 /**
- * Copies attachments out of MAX into our own storage and back again.
- *
- * MAX attachment URLs are temporary, so the DB never points at them as the
- * canonical location - it stores a storageKey and we re-upload the bytes when
- * the file has to travel to another chat or to the requester.
+ * New photos stay in MAX: persist an opaque token reference, not their bytes
+ * or a download URL. Files supplied by staff still use local/S3 storage.
+ * Existing local photo paths remain readable during the transition.
  */
 export class MediaService {
   constructor(
@@ -105,6 +104,12 @@ export class MediaService {
   async ingest(prefix: string, media: IncomingMedia): Promise<StoredMedia> {
     if (media.kind !== 'IMAGE' && media.kind !== 'FILE') throw new ValidationError('Этот тип вложения не поддерживается.');
     if (media.size !== undefined) assertMediaSize(media.size);
+    if (media.kind === 'IMAGE') {
+      if (!media.token) throw new ValidationError('Не удалось получить фотографию из MAX. Прикрепите её заново и повторите отправку.');
+      // size describes bytes retained in our storage, hence zero for references.
+      return { type: 'IMAGE', storageKey: photoReference(media.token), maxToken: media.token,
+        originalName: media.filename, size: 0 };
+    }
     if (!media.url) {
       throw new AppError('Не удалось получить вложение из MAX. Прикрепите его заново и повторите отправку.', 'MEDIA_UNAVAILABLE');
     }
@@ -151,7 +156,7 @@ export class MediaService {
 
   /** Only for newly ingested files verified to have no committed DB owner. */
   async discard(stored: StoredMedia[]): Promise<void> {
-    await Promise.all(stored.map(item => this.storage.remove(item.storageKey).catch(error => {
+    await Promise.all(stored.filter(item => !isPhotoReference(item.storageKey)).map(item => this.storage.remove(item.storageKey).catch(error => {
       log.warn({ storageKey: item.storageKey, err: String(error) }, 'uncommitted attachment cleanup failed');
     })));
   }

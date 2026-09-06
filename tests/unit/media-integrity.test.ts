@@ -6,9 +6,9 @@ import { IncidentService } from '../../src/incidents/incident.service';
 import { AnswerService } from '../../src/answers/answer.service';
 import { ValidationError, isExpectedUserError } from '../../src/utils/errors';
 
-it('refuses an image without a usable download URL', async () => {
+it('refuses an image without a usable MAX token', async () => {
   const media = new MediaService({} as never, {} as never);
-  await expect(media.ingestAll('draft', [{ kind: 'IMAGE' }])).rejects.toThrow('Прикрепите его заново');
+  await expect(media.ingestAll('draft', [{ kind: 'IMAGE' }])).rejects.toThrow('Прикрепите её заново');
 });
 
 it('cleans the first attachment if downloading the second fails', async () => {
@@ -16,7 +16,7 @@ it('cleans the first attachment if downloading the second fails', async () => {
   const storage = { save: async () => ({ storageKey: 'first', size: 3 }), remove };
   const max = { downloadFromUrl: vi.fn().mockResolvedValueOnce({ body: Buffer.from('one') }).mockRejectedValueOnce(new Error('download failed')) };
   const media = new MediaService(storage as never, max as never);
-  await expect(media.ingestAll('draft', [{ kind: 'IMAGE', url: 'first' }, { kind: 'IMAGE', url: 'second' }])).rejects.toThrow('Не удалось сохранить');
+  await expect(media.ingestAll('draft', [{ kind: 'FILE', url: 'first' }, { kind: 'FILE', url: 'second' }])).rejects.toThrow('Не удалось сохранить');
   expect(remove).toHaveBeenCalledWith('first');
 });
 
@@ -35,7 +35,7 @@ it('keeps the size refusal user-visible, cleans prior files, and avoids inbox re
   const save = vi.fn().mockResolvedValue({ storageKey: 'first', size: 3 });
   const downloadFromUrl = vi.fn().mockResolvedValueOnce({ body: Buffer.from('one') }).mockRejectedValueOnce(refusal);
   const media = new MediaService({ save, remove } as never, { downloadFromUrl } as never);
-  await expect(media.ingestAll('draft', [{ kind: 'IMAGE', url: 'first' }, { kind: 'IMAGE', url: 'large' }])).rejects.toBe(refusal);
+  await expect(media.ingestAll('draft', [{ kind: 'FILE', url: 'first' }, { kind: 'FILE', url: 'large' }])).rejects.toBe(refusal);
   expect(remove).toHaveBeenCalledWith('first');
   expect(save).toHaveBeenCalledTimes(1);
   expect(isExpectedUserError(refusal)).toBe(true);

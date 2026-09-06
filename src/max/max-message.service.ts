@@ -1,4 +1,6 @@
 import { AsyncActivity } from '../utils/async-activity';
+import { isPhotoReference, photoReference, photoToken, isUnavailablePhoto } from '../media/max-photo-reference';
+import { ValidationError } from '../utils/errors';
 import { getConfig } from '../config';
 import { distributionAlertsAllowed, panelSettingKey, queueKeyboard, queuePanelText, queueSnapshot } from '../distribution/queue-state';
 import { randomUUID } from 'node:crypto';
@@ -24,6 +26,7 @@ import { distributionWorkedNotice, sectorCard } from '../bot/views/cards';
 import { sectorKeyboard } from '../bot/keyboards';
 import { activateClarification } from '../clarifications/clarification-delivery';
 import { slaNotification, slaStage, type SlaStage } from '../sla/sla-notification';
+import { incidentCallback } from './callback-payload';
 
 const log = moduleLogger('max-message');
 
@@ -34,15 +37,17 @@ const ATTACHMENTS_PER_MESSAGE = 4;
 
 export type OutboundAttachment = {
   type: 'IMAGE' | 'FILE';
-  body: Buffer;
   originalName?: string | null;
-};
+} & ({ body: Buffer; maxToken?: never } | { type: 'IMAGE'; maxToken: string; body?: never });
 
 export type SendTarget = { chatId: bigint } | { userId: bigint };
 
 export type CompositeMessage = {
   text: string;
+  /** Draft previews must either reach MAX or let the user replace the photos. */
+  immediatePreview?: boolean;
   operation?: { type: 'delivery-card'; incidentId: string; answerId: string; card: 'review' | 'distribution' }
+    | { type: 'superseded-answer' }
     | { type: 'sla-reminder'; incidentId: string; stage: SlaStage }
     | { type: 'clarification-question' | 'clarification-reply'; incidentId: string; clarificationId: string }
     | { type: 'sector-refresh'; incidentId: string }
@@ -125,7 +130,7 @@ export class MaxMessageService {
   }
 
   private async sendNow(target: SendTarget, message: CompositeMessage): Promise<MessageSendResult> {
-    if (!this.durable) {
+    if (!this.durable || message.immediatePreview) {
       const { firstMessageId } = await this.deliverLogical(target, message);
       return { firstMessageId, state: 'sent', trackingApplied: false };
     }
@@ -227,6 +232,20 @@ export class MaxMessageService {
 
     try {
       for (const [index, attachment] of (message.attachments ?? []).entries()) {
+        if (attachment.maxToken !== undefined) {
+          staged.push({ type: 'IMAGE', storageKey: photoReference(attachment.maxToken), originalName: attachment.originalName, owned: false });
+          continue;
+        }
+        // Newly generated photo buffers also go to MAX, never to the disk outbox.
+        if (attachment.type === 'IMAGE') {
+          const uploaded = await this.max.uploadImage(attachment.body);
+          if (uploaded.type !== 'image') throw new Error('MAX returned a non-image upload');
+          const payload = uploaded.payload as { token?: string; photos?: Record<string, { token: string }> };
+          const token = payload.token ?? Object.values(payload.photos ?? {})[0]?.token;
+          if (!token) throw new ValidationError('MAX не вернул идентификатор фотографии. Отправьте её заново.');
+          staged.push({ type: 'IMAGE', storageKey: photoReference(token), originalName: attachment.originalName, owned: false });
+          continue;
+        }
         const storageKey = `outbox/${id}/${index}`;
         await durable.storage.save({ key: storageKey, body: attachment.body });
         staged.push({ type: attachment.type, storageKey, originalName: attachment.originalName });
@@ -302,6 +321,12 @@ export class MaxMessageService {
     const payload = row.payload as unknown as StoredPayload;
     const staged = row.attachments as unknown as StagedAttachment[];
 
+    if (payload.operation?.type === 'superseded-answer') {
+      await durable.prisma.outboundMessage.update({ where: { id }, data: { status: OutboxStatus.FAILED, lockedAt: null,
+        lastError: 'Ответ возвращён на доработку. Отправка старой версии запрещена.' } });
+      return { state: 'queued', trackingApplied: false };
+    }
+
     try {
       if (payload.operation?.type === 'sla-reminder') {
         const incident = await durable.prisma.incident.findUnique({ where: { id: payload.operation.incidentId }, select: { slaPausedAt: true } });
@@ -327,6 +352,11 @@ export class MaxMessageService {
       }
       const attachments: OutboundAttachment[] = [];
       for (const attachment of staged) {
+        const token = photoToken(attachment.storageKey);
+        if (token) {
+          attachments.push({ type: 'IMAGE', maxToken: token, originalName: attachment.originalName });
+          continue;
+        }
         attachments.push({
           type: attachment.type,
           body: await durable.storage.load(attachment.storageKey),
@@ -356,8 +386,12 @@ export class MaxMessageService {
       await this.cleanupAttachments(staged);
       return { firstMessageId: result.firstMessageId, state: 'sent', trackingApplied: true };
     } catch (error) {
-      const terminal = row.attempts >= OUTBOX_MAX_ATTEMPTS;
-      const detail = error instanceof Error ? error.message : String(error);
+      const unavailablePhoto = staged.some(item => isPhotoReference(item.storageKey)) && isUnavailablePhoto(error);
+      const terminal = unavailablePhoto || row.attempts >= OUTBOX_MAX_ATTEMPTS;
+      const detail = unavailablePhoto
+        ? 'Фотография недоступна в MAX. Запросите её повторно у автора через уточнение. Полное сообщение не доставлено.'
+        : error instanceof Error ? error.message : String(error);
+      if (unavailablePhoto) await this.queuePhotoRecovery(row, payload);
       await durable.prisma.outboundMessage.update({
         where: { id: row.id },
         data: {
@@ -466,7 +500,7 @@ export class MaxMessageService {
   private async cleanupAttachments(attachments: StagedAttachment[]): Promise<void> {
     if (!this.durable) return;
     await Promise.all(
-      attachments.filter(item => item.owned !== false).map((item) => this.durable!.storage.remove(item.storageKey).catch(() => undefined)),
+      attachments.filter(item => item.owned !== false && !isPhotoReference(item.storageKey)).map((item) => this.durable!.storage.remove(item.storageKey).catch(() => undefined)),
     );
   }
 
@@ -537,6 +571,11 @@ export class MaxMessageService {
     if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)) return {};
     const attachments: OutboundAttachment[] = [];
     for (const item of incident.attachments.slice(0, ATTACHMENTS_PER_MESSAGE)) {
+      const token = photoToken(item.storageKey);
+      if (token) {
+        attachments.push({ type: 'IMAGE', maxToken: token, originalName: item.originalName });
+        continue;
+      }
       attachments.push({ type: item.type, originalName: item.originalName, body: await this.durable!.storage.load(item.storageKey) });
     }
     await this.max.editMessage(incident.sectorMessageId, sectorCard(incident, incident.assignedGroup), [
@@ -679,6 +718,10 @@ export class MaxMessageService {
     const uploaded: AttachmentRequest[] = [];
     for (const item of group) {
       try {
+        if (item.maxToken !== undefined) {
+          uploaded.push({ type: 'image', payload: { token: item.maxToken } });
+          continue;
+        }
         uploaded.push(
           item.type === 'IMAGE'
             ? await this.max.uploadImage(item.body)
@@ -695,6 +738,33 @@ export class MaxMessageService {
       }
     }
     return uploaded;
+  }
+
+  /** Publish an explicitly incomplete card so staff can request replacement.
+   * The failed original stays FAILED; an incomplete answer never sets deliveredAt.
+   */
+  private async queuePhotoRecovery(row: OutboundMessage, payload: StoredPayload): Promise<void> {
+    const card = row.trackingType === 'DISTRIBUTION_CARD' || row.trackingType === 'SECTOR_CARD';
+    const notice = row.targetType === 'chat'
+      ? '⚠️ Фотография недоступна в MAX. Запросите её повторно у автора. Для фотографии жителя используйте «Уточнить у жителя» в профильном чате.'
+      : '⚠️ Фотография к этому сообщению недоступна в MAX. Специалисты уведомлены: требуется повторная отправка фотографии. Полный ответ пока не доставлен.';
+    const text = row.targetType === 'user' ? `${payload.label ?? 'Сообщение по вашему обращению'}\n\n${notice}` : `${payload.text}\n\n${notice}`;
+    await this.durable!.prisma.outboundMessage.createMany({ skipDuplicates: true, data: [{
+      dedupeKey: `photo-recovery:${row.id}`, targetType: row.targetType, targetId: row.targetId,
+      incidentId: row.incidentId, attachments: [],
+      payload: { text, ...(card && payload.keyboard ? { keyboard: payload.keyboard } : {}) } as unknown as Prisma.InputJsonValue,
+      trackingType: card ? row.trackingType : null, trackingApplied: !card,
+    }] });
+    if (row.incidentId && row.answerId && ['ANSWER_TO_REQUESTER', 'REVIEW_CARD'].includes(row.trackingType ?? '')) {
+      const incident = await this.durable!.prisma.incident.findUnique({ where: { id: row.incidentId }, include: { assignedGroup: true } });
+      if (incident?.assignedGroup?.maxChatId) await this.durable!.prisma.outboundMessage.createMany({ skipDuplicates: true, data: [{
+        dedupeKey: `photo-repair-prompt:${row.id}`, targetType: 'chat', targetId: incident.assignedGroup.maxChatId,
+        incidentId: incident.id, attachments: [], trackingApplied: true,
+        payload: { text: `⚠️ ${incident.publicCode}: фотография ответа недоступна в MAX. Полный ответ не доставлен.\n\nНажмите кнопку, чтобы вернуть ответ на доработку, затем отправьте текст ответа и фотографии заново. Новый ответ пройдёт обычный порядок согласования.`,
+          keyboard: [[{ type: 'callback', text: 'Заменить недоступное фото', payload: incidentCallback('repair-photo', incident.id, row.id) }]],
+        } as unknown as Prisma.InputJsonValue,
+      }] });
+    }
   }
 }
 

@@ -432,6 +432,8 @@ model InboundUpdate {
   id                String      @id @default(uuid())
   externalUpdateKey String      @unique
   updateType        String
+  partitionKey      String      @default("legacy")
+  sequence          BigInt      @unique @default(autoincrement())
   payload           Json
   status            InboxStatus @default(PENDING)
   attempts          Int         @default(0)
@@ -447,6 +449,7 @@ model InboundUpdate {
   @@index([status, deliveryAlertedAt])
   @@index([lockedAt])
   @@index([receivedAt])
+  @@index([status, partitionKey, sequence])
 }
 
 /// Persistent outgoing MAX message. The logical message and staged attachment

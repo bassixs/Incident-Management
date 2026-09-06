@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isPhotoReference } from '../media/max-photo-reference';
 
 import { IncidentStatus, Prisma, type PrismaClient, UserRole } from '@prisma/client';
 
@@ -279,7 +280,7 @@ function uniqueFiles(incident: RetentionCandidate): Array<{ storageKey: string; 
     ...(incident.clarifications ?? []).flatMap(item => item.attachments),
     ...incident.answers.flatMap((answer) => answer.attachments),
   ];
-  return [...new Map(files.map((file) => [file.storageKey, { storageKey: file.storageKey, size: file.size ?? 0 }])).values()];
+  return [...new Map(files.filter(file => !isPhotoReference(file.storageKey)).map((file) => [file.storageKey, { storageKey: file.storageKey, size: file.size ?? 0 }])).values()];
 }
 
 function emptyRun(preview: RetentionPreview, skippedBecauseLocked: boolean): RetentionRunResult {

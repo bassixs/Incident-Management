@@ -34,14 +34,13 @@ describeIntegration('requester recovery from preview photo errors', () => {
     messageId: 'preview', callbackId: 'callback' });
   const incoming = (text: string, photoUrl?: string) => ({
     body: { mid: `incoming-${photoUrl ?? text}`, text,
-      attachments: photoUrl ? [{ type: 'image', payload: { url: photoUrl } }] : [] },
+      attachments: photoUrl ? [{ type: 'image', payload: { url: photoUrl, token: photoUrl } }] : [] },
   });
   const session = () => h.services.sessions.find(actor.maxUserId, actor.maxUserId);
 
   it.each(['oversized', 'network'])('preserves the draft after %s failure and registers only after replacement and confirmation', async failure => {
-    const download = vi.spyOn(h.services.max, 'downloadFromUrl')
-      .mockRejectedValueOnce(failure === 'oversized' ? new ValidationError('Максимальный размер — 20 МБ.') : new Error('offline'))
-      .mockResolvedValue({ body: Buffer.from('photo') });
+    const download = vi.spyOn(h.services.max, 'downloadFromUrl');
+    vi.spyOn(h.messages, 'send').mockRejectedValueOnce(failure === 'oversized' ? new ValidationError('MAX отклонил фотографию.') : new Error('offline'));
     vi.spyOn(h.services.media, 'ingestAll').mockImplementation(async (prefix, photos) => photos.map((photo, i) => ({
       type: 'IMAGE', storageKey: `${prefix}/${i}.jpg`, size: 5, sourceUrl: photo.url,
     })));
@@ -54,12 +53,12 @@ describeIntegration('requester recovery from preview photo errors', () => {
     expect(h.messages.toUser(actor.maxUserId).at(-1)!.message.text).toContain('данные сохранены');
     expect(await prisma.incident.count()).toBe(0);
     await expect(handleUserCallback(context(), { kind: 'user', action: 'draft-confirm' })).rejects.toThrow('Кнопка устарела');
-    expect(download).toHaveBeenCalledTimes(1);
+    expect(download).not.toHaveBeenCalled();
 
     await handleRequesterMessage(h.services, actor, actor.maxUserId, incoming('', 'replacement') as never);
     const ready = (await session())!;
     expect(ready.type).toBe('WAITING_INCIDENT_CONFIRMATION');
-    expect(h.services.sessions.readData(ready).draftMedia).toEqual([{ kind: 'IMAGE', url: 'replacement' }]);
+    expect(h.services.sessions.readData(ready).draftMedia).toEqual([{ kind: 'IMAGE', url: 'replacement', token: 'replacement' }]);
     expect(h.services.sessions.readData(ready).draftPhotoRetry).toBeUndefined();
     expect(h.messages.toUser(actor.maxUserId).at(-1)!.message.attachments).toHaveLength(1);
     expect(await prisma.incident.count()).toBe(0);
@@ -73,15 +72,16 @@ describeIntegration('requester recovery from preview photo errors', () => {
 
   it('preserves an edited field when an old photo expires and permits explicit continuation without photos', async () => {
     const download = vi.spyOn(h.services.max, 'downloadFromUrl').mockRejectedValue(new Error('expired URL'));
+    vi.spyOn(h.messages, 'send').mockRejectedValueOnce(new Error('expired token'));
     await h.services.sessions.start({ maxUserId: actor.maxUserId, chatId: actor.maxUserId,
       type: 'WAITING_INCIDENT_EDIT_VALUE', data: { ...draft, draftEditField: 'name',
-        draftMedia: [{ kind: 'IMAGE', url: 'expired' }] } });
+        draftMedia: [{ kind: 'IMAGE', url: 'expired', token: 'expired' }] } });
     await handleRequesterMessage(h.services, actor, actor.maxUserId, incoming('Петров Пётр') as never);
     expect(h.services.sessions.readData((await session())!)).toMatchObject({
       ...draft, requesterName: 'Петров Пётр', draftPhotoRetry: true, draftMedia: [],
     });
     await handleUserCallback(context(), { kind: 'user', action: 'draft-photo', argument: 'remove' });
-    expect(download).toHaveBeenCalledTimes(1);
+    expect(download).not.toHaveBeenCalled();
     expect((await session())!.type).toBe('WAITING_INCIDENT_CONFIRMATION');
     expect(h.messages.toUser(actor.maxUserId).at(-1)!.message.attachments).toBeUndefined();
     expect(await prisma.incident.count()).toBe(0);

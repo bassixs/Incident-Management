@@ -55,6 +55,12 @@ export async function handleIncidentCallback(
   );
 
   switch (payload.action) {
+    case 'repair-photo': {
+      if (!payload.argument || !isUuid(payload.argument)) throw new ConflictError('Кнопка устарела.');
+      await services.answers.reopenForPhotoReplacement(incident.id, payload.argument, actor, chatId);
+      if (context.messageId) await services.messages.finalizeCard(context.messageId, `${incident.publicCode}: ответ возвращён на доработку. Прикрепите фотографии заново.`);
+      return 'Ответ возвращён на доработку';
+    }
     case 'clarify': {
       await services.clarifications.assertCanAsk(incident.id, actor, chatId);
       if (!(await ensureFreeSession(services, actor, chatId, incident.id))) return undefined;

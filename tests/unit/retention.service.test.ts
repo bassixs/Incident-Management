@@ -103,6 +103,17 @@ describe('RetentionService', () => {
     expect(result).toMatchObject({ deletedIncidents: 1, deletedFiles: 2, deletedBytes: 500, failures: [] });
   });
 
+  it('drops MAX references with the database record without deleting or counting them as local files', async () => {
+    const { prisma } = fakePrisma();
+    const item = candidate();
+    item.attachments = [{ storageKey: 'max-photo:opaque-token', size: 0 }];
+    vi.mocked(prisma.incident.findMany).mockResolvedValue([item] as never);
+    const removed: string[] = [];
+    const result = await new RetentionService(prisma, fakeStorage(async key => { removed.push(key); })).run(NOW);
+    expect(removed).toEqual(['answer/result.pdf']);
+    expect(result).toMatchObject({ deletedIncidents: 1, deletedFiles: 1, deletedBytes: 350, failures: [] });
+  });
+
   it('keeps the database row when a physical file cannot be removed', async () => {
     const { prisma, calls } = fakePrisma();
     const service = new RetentionService(

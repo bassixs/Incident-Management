@@ -91,7 +91,7 @@ export async function createWebhookServer(
 
     await reply.code(200).send({ ok: true });
 
-    setImmediate(() => void dispatcher.kick());
+    setImmediate(() => void dispatcher.kick().catch(error => log.error({ err: String(error) }, 'inbox sweep failed')));
     return reply;
   });
 

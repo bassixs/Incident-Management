@@ -24,6 +24,7 @@ export const INCIDENT_ACTIONS = [
   'approve',
   'revision',
   'fix',
+  'repair-photo',
   'cancel',
 ] as const;
 

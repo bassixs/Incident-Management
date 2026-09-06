@@ -1,6 +1,6 @@
 import { queueDeliveryStatus } from '../delivery/delivery-status';
 import { randomUUID } from 'node:crypto';
-import { queueAnswer } from '../delivery/workflow-outbox';
+import { queueAnswer, queueRevision } from '../delivery/workflow-outbox';
 import type { Tx } from '../database/prisma';
 import {
   AnswerStatus,
@@ -8,6 +8,7 @@ import {
   type IncidentAnswer,
   IncidentStatus,
   type PrismaClient,
+  Prisma,
 } from '@prisma/client';
 
 import { acquireAdvisoryLock, TRANSACTION_OPTIONS } from '../database/prisma';
@@ -20,6 +21,8 @@ import { ConflictError, NotFoundError, ValidationError } from '../utils/errors';
 import { incidentLogFields, moduleLogger } from '../utils/logger';
 import { isBlank, renderTemplate } from '../utils/text';
 import type { Actor, DistributionService } from '../distribution/distribution.service';
+import type { ResolvedActor } from '../bot/handlers/helpers';
+import { assertResponder } from '../bot/middleware/authorize';
 
 const log = moduleLogger('answers');
 
@@ -36,6 +39,39 @@ export const ANSWER_REJECTIONS = {
 } as const;
 
 export class AnswerService {
+  /** Explicit staff recovery; do not silently change an approved attachment.
+   * The replacement becomes a new answer version through the ordinary workflow.
+   */
+  async reopenForPhotoReplacement(incidentId: string, outboxId: string, actor: ResolvedActor, chatId: bigint): Promise<void> {
+    await this.prisma.$transaction(async tx => {
+      await acquireAdvisoryLock(tx, 'incident-answer', incidentId);
+      const incident = await this.repository.findById(incidentId, tx);
+      if (!incident || !incident.assignedGroup?.isActive || incident.assignedGroup.maxChatId !== chatId) throw new ConflictError('Откройте действие в профильном чате обращения.');
+      assertResponder(actor, incident, chatId);
+      const failed = await tx.outboundMessage.findUnique({ where: { id: outboxId } });
+      const answer = incident.answers.at(-1);
+      if (!failed || failed.incidentId !== incidentId || !answer || failed.answerId !== answer.id
+        || failed.status !== 'FAILED' || !failed.lastError?.startsWith('Фотография недоступна в MAX.')
+        || !['ANSWER_TO_REQUESTER', 'REVIEW_CARD'].includes(failed.trackingType ?? '') || answer.deliveredAt
+        || !['RESOLVED', 'WAITING_REVIEW'].includes(incident.status)) {
+        throw new ConflictError('Кнопка устарела: ответ уже доставлен, изменён или возвращён на доработку.');
+      }
+      const stopped = await tx.outboundMessage.updateMany({ where: { id: outboxId, status: 'FAILED' }, data: {
+        payload: { ...(failed.payload as Prisma.JsonObject), operation: { type: 'superseded-answer' } },
+        lastError: 'Ответ возвращён на доработку. Отправка старой версии запрещена.',
+      } });
+      if (stopped.count !== 1) throw new ConflictError('Доставка уже повторяется. Дождитесь её результата.');
+      const reason = 'Фотография ответа недоступна в MAX. Отправьте текст ответа и фотографии заново.';
+      await tx.incident.update({ where: { id: incidentId }, data: { status: 'REVISION_REQUIRED', answeredAt: null,
+        revisionReason: reason, revisionCount: { increment: 1 }, isOverdue: incident.deadlineAt <= new Date() } });
+      await tx.incidentAnswer.update({ where: { id: answer.id }, data: { status: 'REVISION_REQUIRED', revisionReason: reason } });
+      await tx.incidentHistory.create({ data: { incidentId, action: 'ANSWER_PHOTO_REPLACEMENT_REQUESTED',
+        fromStatus: incident.status, toStatus: 'REVISION_REQUIRED', actorMaxUserId: actor.maxUserId,
+        metadata: { answerId: answer.id, outboxId, reason } } });
+      await queueRevision(tx, incidentId, incident.revisionCount + 1, reason);
+    }, TRANSACTION_OPTIONS);
+  }
+
   constructor(
     private readonly prisma: PrismaClient,
     private readonly repository: IncidentRepository,
