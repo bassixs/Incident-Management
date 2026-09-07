@@ -22,7 +22,8 @@ import { moduleLogger } from '../utils/logger';
 import { MaxClient } from './max-client';
 import { queueDeliveryStatus, reviewDeliveryNotice } from '../delivery/delivery-status';
 import { INCIDENT_INCLUDE } from '../incidents/incident.repository';
-import { distributionWorkedNotice, sectorCard } from '../bot/views/cards';
+import { distributionResolvedNotice, distributionWorkedNotice, sectorCard } from '../bot/views/cards';
+import { queueDistributionRefresh } from '../delivery/workflow-outbox';
 import { sectorKeyboard } from '../bot/keyboards';
 import { activateClarification } from '../clarifications/clarification-delivery';
 import { slaNotification, slaStage, type SlaStage } from '../sla/sla-notification';
@@ -52,6 +53,7 @@ export type CompositeMessage = {
     | { type: 'clarification-question' | 'clarification-reply'; incidentId: string; clarificationId: string }
     | { type: 'sector-refresh'; incidentId: string }
     | { type: 'distribution-panel' }
+    | { type: 'distribution-refresh'; incidentId: string }
     | { type: 'distribution-alert'; level: 'normal' | 'escalation'; hour: number };
   replyToMessageId?: string;
   /** Prefix repeated on every follow-up part, e.g. `№ INC-20260823-0001`. */
@@ -373,6 +375,8 @@ export class MaxMessageService {
       }
       const result = payload.operation?.type === 'distribution-panel'
         ? await this.refreshDistributionPanel(row.targetId)
+        : payload.operation?.type === 'distribution-refresh'
+        ? await this.refreshDistributionCards(payload.operation.incidentId)
         : payload.operation?.type === 'distribution-alert'
         ? await this.deliverDistributionAlert(row.targetId, payload.operation)
         : payload.operation?.type === 'sla-reminder'
@@ -432,6 +436,10 @@ export class MaxMessageService {
       if (operation?.type === 'clarification-question') {
         await activateClarification(tx, operation.incidentId, operation.clarificationId);
       }
+      if (row.incidentId && firstMessageId && row.dedupeKey?.startsWith('distribution-claim:')) {
+        // The assignment may have happened while MAX was delivering this copy.
+        await queueDistributionRefresh(tx, row.incidentId, `copy-sent:${row.id}`);
+      }
       if (!row.trackingType) return;
 
       if (row.trackingType === DeliveryTrackingType.ANSWER_TO_REQUESTER && row.answerId && row.incidentId) {
@@ -478,6 +486,7 @@ export class MaxMessageService {
       });
       if (updated.count !== 1) return;
       if (row.trackingType === DeliveryTrackingType.DISTRIBUTION_CARD) {
+        await queueDistributionRefresh(tx, row.incidentId, `original-sent:${row.id}`);
         await tx.incidentHistory.create({
           data: {
             incidentId: row.incidentId,
@@ -585,14 +594,50 @@ export class MaxMessageService {
     return {};
   }
 
+  private async refreshDistributionCards(incidentId: string): Promise<{ firstMessageId?: string }> {
+    const prisma = this.durable!.prisma;
+    const incident = await prisma.incident.findUnique({ where: { id: incidentId }, include: INCIDENT_INCLUDE });
+    if (!incident) return {};
+    const copies = await prisma.outboundMessage.findMany({ where: {
+      incidentId, targetType: 'chat', targetId: getConfig().DISTRIBUTION_CHAT_ID,
+      dedupeKey: { startsWith: `distribution-claim:${incidentId}:` }, firstMessageId: { not: null },
+    }, select: { firstMessageId: true, dedupeKey: true } });
+    const cards = [...copies];
+    if (incident.distributionMessageId) cards.push({ firstMessageId: incident.distributionMessageId, dedupeKey: null });
+    const activeKey = incident.distributionClaimUntil && incident.distributionClaimUntil > new Date()
+      ? `distribution-claim:${incidentId}:${incident.distributionClaimedBy}:${incident.distributionClaimUntil.getTime()}` : null;
+    for (const card of cards) {
+      let text: string;
+      if (incident.status === 'DISTRIBUTION') {
+        // The original stays actionable; only obsolete queue copies are retired.
+        if (!card.dedupeKey || card.dedupeKey === activeKey) continue;
+        text = `ℹ️ ${incident.publicCode}: закрепление по этой карточке завершено.\n\nОбращение остаётся в очереди. Откройте /queue, чтобы увидеть его текущее состояние и взять в работу.`;
+      } else if (incident.status === 'REJECTED') {
+        text = `❌ ${incident.publicCode} отклонено\n\nПричина:\n${incident.rejectionReason ?? '—'}`;
+      } else if (incident.assignedGroup) {
+        text = incident.answers.some(answer => answer.deliveredAt)
+          ? distributionWorkedNotice(incident, incident.assignedGroup)
+          : distributionResolvedNotice(incident, incident.assignedGroup, incident.assignedBy?.displayName ?? '—');
+      } else {
+        text = `ℹ️ ${incident.publicCode}: обращение уже обработано.\nТекущее состояние: /incident ${incident.publicCode}`;
+      }
+      // Unlike best-effort edits, a MAX failure here remains in the durable retry queue.
+      try {
+        await this.max.editMessage(card.firstMessageId!, text, []);
+      } catch (error) {
+        // A deleted copy cannot leave the remaining live cards stale.
+        if (!(error instanceof MaxError) || error.status !== 404) throw error;
+      }
+    }
+    return {};
+  }
+
   private async refreshDeliveryCard(operation: Extract<CompositeMessage['operation'], { type: 'delivery-card' }>): Promise<{ firstMessageId?: string }> {
     const incident = await this.durable!.prisma.incident.findUnique({ where: { id: operation.incidentId }, include: INCIDENT_INCLUDE });
     const answer = incident?.answers.find(a => a.id === operation.answerId);
     if (!incident || !answer || incident.answers.at(-1)?.id !== answer.id) return {};
     if (operation.card === 'distribution') {
-      if (answer.deliveredAt && incident.distributionMessageId && incident.assignedGroup) {
-        await this.max.editMessage(incident.distributionMessageId, distributionWorkedNotice(incident, incident.assignedGroup), []);
-      }
+      if (answer.deliveredAt) await this.refreshDistributionCards(incident.id);
     } else if (incident.reviewMessageId) {
       await this.max.editMessage(incident.reviewMessageId, reviewDeliveryNotice(incident, answer), []);
     }

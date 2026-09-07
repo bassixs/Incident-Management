@@ -1,6 +1,6 @@
 import { type PrismaClient } from '@prisma/client';
 import { acquireAdvisoryLock, TRANSACTION_OPTIONS } from '../database/prisma';
-import { queueDistribution, queueMessage } from '../delivery/workflow-outbox';
+import { queueDistribution, queueMessage, queueDistributionRefresh } from '../delivery/workflow-outbox';
 import { getConfig } from '../config';
 import { INCIDENT_INCLUDE } from '../incidents/incident.repository';
 import { distributionCard } from '../bot/views/cards';
@@ -54,6 +54,7 @@ export class DistributionQueueService {
         keyboard: [...distributionKeyboard(updated.id), [{ type: 'callback', text: 'Освободить обращение', payload: `queue:release:${updated.id}` }]],
         delivery: { dedupeKey: `distribution-claim:${updated.id}:${actor.maxUserId}:${until.getTime()}` },
       }, updated.id, updated.attachments);
+      if (!own || own.id !== updated.id) await queueDistributionRefresh(tx, updated.id);
       return updated;
     }, TRANSACTION_OPTIONS);
     if (showCard) await this.messages.flush();
@@ -68,7 +69,9 @@ export class DistributionQueueService {
         data: { distributionClaimedBy: null, distributionClaimedName: null, distributionClaimUntil: null } });
       if (!released.count) throw new ConflictError('Обращение уже обработано, свободно или закреплено за другим оператором.');
       await tx.incidentHistory.create({ data: { incidentId: id, action: 'DISTRIBUTION_RELEASED', actorMaxUserId: actor.maxUserId } });
+      await queueDistributionRefresh(tx, id);
     }, TRANSACTION_OPTIONS);
+    await this.messages.flush();
   }
 
   async list(actor: ResolvedActor, chatId: bigint, page: number) {
@@ -120,6 +123,17 @@ export class DistributionQueueService {
   private async sweepNow() {
     const config = getConfig();
     if (config.DISTRIBUTION_CHAT_ID === undefined) return;
+    // Retire expired copies even when no other operator takes the incident.
+    await this.prisma.$transaction(async tx => {
+      await acquireAdvisoryLock(tx, ...CLAIM_LOCK);
+      const expired = await tx.incident.findMany({ where: { status: 'DISTRIBUTION', distributionClaimUntil: { lte: new Date() } }, take: 100 });
+      for (const incident of expired) {
+        await tx.incident.update({ where: { id: incident.id }, data: {
+          distributionClaimedBy: null, distributionClaimedName: null, distributionClaimUntil: null,
+        } });
+        await queueDistributionRefresh(tx, incident.id, `expired:${incident.distributionClaimUntil!.getTime()}`);
+      }
+    }, TRANSACTION_OPTIONS);
     await this.refresh();
     // Repair missing delivery jobs only; normal retries/FAILED alerts remain owned by the outbox.
     const missing = await this.prisma.$queryRaw<Array<{ id: string }>>`

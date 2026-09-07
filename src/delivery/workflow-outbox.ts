@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 
 import { distributionKeyboard, mainMenuKeyboard, reviewKeyboard, sectorKeyboard, revisionKeyboard, answerRatingKeyboard } from '../bot/keyboards';
 import { codeLabel, distributionCard, sectorCard, reviewCard, revisionCard, finalAnswerToRequester, registrationConfirmation, rejectionToRequester } from '../bot/views/cards';
@@ -81,6 +82,15 @@ export async function queueSector(tx: Tx, incidentId: string): Promise<void> {
     keyboard: sectorKeyboard(incidentId, { hasTemplate: Boolean(group.answerTemplate) }),
     delivery: { dedupeKey: `sector-card:${incidentId}`, tracking: { type: 'SECTOR_CARD', incidentId } },
   }, incidentId, incident.attachments);
+}
+
+/** Refresh every distribution card, including copies issued by the queue. */
+export async function queueDistributionRefresh(tx: Tx, incidentId: string, event: string = randomUUID()): Promise<void> {
+  await queueMessage(tx, { chatId: requiredChat(getConfig().DISTRIBUTION_CHAT_ID) }, {
+    text: 'Обновление карточек распределения',
+    operation: { type: 'distribution-refresh', incidentId },
+    delivery: { dedupeKey: `distribution-refresh:${incidentId}:${event}` },
+  }, incidentId);
 }
 
 export async function queueSectorRefresh(tx: Tx, incidentId: string, key: string): Promise<void> {

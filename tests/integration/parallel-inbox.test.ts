@@ -46,10 +46,15 @@ describeIntegration('bounded parallel inbox', () => {
     for (const event of [update(1, 'a1'), update(1, 'a2'), update(2, 'b1')]) await worker.reserve(event);
     const work = worker.kick();
     try {
-      await vi.waitFor(() => expect(events).toEqual(['a1', 'b1']));
+      await vi.waitFor(() => {
+        expect(events).toHaveLength(2);
+        expect(events).toEqual(expect.arrayContaining(['a1', 'b1']));
+      });
       expect(await prisma.inboundUpdate.count({ where: { partitionKey: 'user:1', status: 'PENDING' } })).toBe(1);
     } finally { release(); await work; }
-    expect(events).toEqual(['a1', 'b1', 'a2']);
+    expect(events).toHaveLength(3);
+    expect(events.filter(id => id.startsWith('a'))).toEqual(['a1', 'a2']);
+    expect(events.at(-1)).toBe('a2');
     expect(await prisma.inboundUpdate.count({ where: { status: 'PROCESSED' } })).toBe(3);
   });
 

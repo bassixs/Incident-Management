@@ -1,4 +1,5 @@
 import { type PrismaClient, UserRole } from '@prisma/client';
+import { MaxError } from '@maxhub/max-bot-api';
 import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { buildServices, type AppServices } from '../../src/app/container';
@@ -47,6 +48,101 @@ describeIntegration('persistent distribution queue', () => {
     return prisma.incident.update({ where: { id: incident.id }, data: { createdAt: new Date(Date.now() - age * 60_000), distributionMessageId: `original-${incident.id}` } });
   }
   const claim = (who = actor) => services.distributionQueue.claim(who, TEST_CHATS.distribution, undefined, true);
+  const copies = (id: string) => prisma.outboundMessage.findMany({ where: { incidentId: id, dedupeKey: { startsWith: `distribution-claim:${id}:` } } });
+
+  it('finalizes both the original and the issued copy after assignment, then shows delivery on both', async () => {
+    const incident = await create();
+    await claim();
+    const copy = (await copies(incident.id))[0]!;
+    const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: GROUP_CODES.facility } });
+    await services.distribution.assign(incident.id, group.id, actor);
+    for (const mid of [incident.distributionMessageId, copy.firstMessageId]) {
+      expect(max.editMessage).toHaveBeenCalledWith(mid, expect.stringContaining('🟡 РАСПРЕДЕЛЕНО'), []);
+      expect(max.editMessage).toHaveBeenCalledWith(mid, expect.stringContaining(group.name), []);
+    }
+    await services.answers.submit(incident.id, actor, 'Фонарь отремонтирован', []);
+    await services.review.approve(incident.id, actor);
+    await services.messages.flush();
+    for (const mid of [incident.distributionMessageId, copy.firstMessageId]) {
+      const last = max.editMessage.mock.calls.filter((call: any[]) => call[0] === mid).at(-1);
+      expect(last[1]).toContain('ОТРАБОТАНО'); expect(last[2]).toEqual([]);
+    }
+    expect(await prisma.incidentHistory.count({ where: { incidentId: incident.id, action: 'ASSIGNED' } })).toBe(1);
+  });
+
+  it('retires released and expired copies without disabling the original or the new operator copy', async () => {
+    const incident = await create();
+    await claim();
+    const old = (await copies(incident.id))[0]!;
+    await services.distributionQueue.release(actor, TEST_CHATS.distribution, incident.id);
+    expect(max.editMessage).toHaveBeenCalledWith(old.firstMessageId, expect.stringContaining('закрепление по этой карточке завершено'), []);
+    advance(1);
+    await claim(colleague);
+    const current = (await copies(incident.id)).find(c => c.id !== old.id)!;
+    expect(max.editMessage.mock.calls.some((call: any[]) => call[0] === current.firstMessageId)).toBe(false);
+    advance(15);
+    await services.distributionQueue.sweep(); await services.messages.flush();
+    expect(max.editMessage).toHaveBeenCalledWith(current.firstMessageId, expect.stringContaining('/queue'), []);
+    expect(max.editMessage.mock.calls.some((call: any[]) => call[0] === incident.distributionMessageId)).toBe(false);
+    expect((await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).distributionClaimedBy).toBeNull();
+  });
+
+  it('retries failed edits after worker restart and renders the latest state without reassigning', async () => {
+    const incident = await create(); await claim();
+    const copy = (await copies(incident.id))[0]!;
+    max.editMessage.mockImplementation(async (mid: string) => { if (mid === copy.firstMessageId) throw new Error('MAX unavailable'); });
+    const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: GROUP_CODES.facility } });
+    await services.distribution.assign(incident.id, group.id, actor);
+    expect(await prisma.outboundMessage.count({ where: { incidentId: incident.id, status: 'PENDING', dedupeKey: { startsWith: 'distribution-refresh:' } } })).toBeGreaterThan(0);
+    max.editMessage.mockResolvedValue(undefined);
+    advance(10);
+    const worker = new MaxMessageService(max, { prisma, storage: { remove: async () => undefined } as never });
+    await worker.flush();
+    expect(max.editMessage).toHaveBeenCalledWith(copy.firstMessageId, expect.stringContaining('🟡 РАСПРЕДЕЛЕНО'), []);
+    expect(sends.filter(s => s.target === group.maxChatId)).toHaveLength(1);
+    expect(await prisma.outboundMessage.count({ where: { incidentId: incident.id, status: 'PENDING' } })).toBe(0);
+  });
+
+  it('repairs a copy whose delayed send completes only after assignment', async () => {
+    const incident = await create();
+    const send = max.sendToChat.getMockImplementation();
+    let delayed = true;
+    max.sendToChat.mockImplementation(async (...args: any[]) => {
+      if (args[1].includes('Закреплено на 15 минут') && delayed) { delayed = false; throw new Error('MAX unavailable'); }
+      return send(...args);
+    });
+    await claim();
+    expect((await copies(incident.id))[0]!.firstMessageId).toBeNull();
+    const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: GROUP_CODES.facility } });
+    await services.distribution.assign(incident.id, group.id, actor);
+    advance(10); await services.messages.flush();
+    const copy = (await copies(incident.id))[0]!;
+    expect(copy.firstMessageId).not.toBeNull();
+    expect(max.editMessage).toHaveBeenCalledWith(copy.firstMessageId, expect.stringContaining('🟡 РАСПРЕДЕЛЕНО'), []);
+  });
+
+  it('rejects every copy and ignores a deleted copy while refreshing the others', async () => {
+    const incident = await create(); await claim();
+    const old = (await copies(incident.id))[0]!;
+    advance(15); await claim(colleague);
+    const current = (await copies(incident.id)).find(c => c.id !== old.id)!;
+    max.editMessage.mockImplementation(async (mid: string) => {
+      if (mid === old.firstMessageId) throw new MaxError(404, { code: 'message.not.found', message: 'Deleted' });
+    });
+    await services.distribution.reject(incident.id, 'Дублирующее обращение', colleague);
+    expect(max.editMessage).toHaveBeenCalledWith(current.firstMessageId, expect.stringContaining('Дублирующее обращение'), []);
+    expect(await prisma.outboundMessage.count({ where: { incidentId: incident.id, status: { in: ['PENDING', 'FAILED'] } } })).toBe(0);
+  });
+
+  it('rolls back assignment if its durable card refresh cannot be saved', async () => {
+    const incident = await create(); await claim();
+    const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: GROUP_CODES.facility } });
+    vi.spyOn(outbox, 'queueDistributionRefresh').mockRejectedValueOnce(new Error('cannot queue edit'));
+    await expect(services.distribution.assign(incident.id, group.id, actor)).rejects.toThrow('cannot queue edit');
+    expect((await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).status).toBe('DISTRIBUTION');
+    expect(await prisma.incidentHistory.count({ where: { incidentId: incident.id, action: 'ASSIGNED' } })).toBe(0);
+    expect(await prisma.outboundMessage.count({ where: { dedupeKey: `sector-card:${incident.id}` } })).toBe(0);
+  });
 
   it('gives oldest distinct incidents to concurrent operators and reuses the same operator claim', async () => {
     const newest = await create(1);

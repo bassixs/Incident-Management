@@ -1,6 +1,6 @@
 import { acquireAdvisoryLock, TRANSACTION_OPTIONS } from '../database/prisma';
 import { assertClaimOwner, CLAIM_LOCK } from './queue-state';
-import { queueSector, queueRejection } from '../delivery/workflow-outbox';
+import { queueSector, queueRejection, queueDistributionRefresh } from '../delivery/workflow-outbox';
 import {
   IncidentStatus,
   type PrismaClient,
@@ -166,6 +166,7 @@ export class DistributionService {
         metadata: { groupId: group.id, groupCode: group.code, dispatcher: actor.displayName },
       }, tx);
       await queueSector(tx, incidentId);
+      await queueDistributionRefresh(tx, incidentId, 'assigned');
     }, TRANSACTION_OPTIONS);
 
     log.info(
@@ -187,6 +188,7 @@ export class DistributionService {
     }
 
     await this.sector.publishCard(incidentId);
+    await this.messages.flush();
     return (await this.repository.findById(incidentId))!;
   }
 
@@ -233,6 +235,7 @@ export class DistributionService {
         metadata: { reason, dispatcher: actor.displayName },
       }, tx);
       await queueRejection(tx, incidentId, reason);
+      await queueDistributionRefresh(tx, incidentId, 'rejected');
     }, TRANSACTION_OPTIONS);
 
     await this.delivery.notify(
@@ -256,6 +259,7 @@ export class DistributionService {
         ].join('\n'),
       );
     }
+    await this.messages.flush();
 
     log.info(
       incidentLogFields({
