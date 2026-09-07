@@ -76,6 +76,7 @@ const envSchema = z
     HTTP_HOST: z.string().default('0.0.0.0'),
     HTTP_PORT: int(3000),
     INBOX_CONCURRENCY: int(8).pipe(z.number().min(1).max(32)),
+    OUTBOX_CONCURRENCY: int(8).pipe(z.number().min(1).max(32)),
 
     DISTRIBUTION_CHAT_ID: optionalBigInt,
     DISTRIBUTION_QUEUE_ENABLED: boolean(true),

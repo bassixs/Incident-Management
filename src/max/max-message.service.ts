@@ -98,6 +98,8 @@ type StagedAttachment = {
 const OUTBOX_INTERVAL_MS = 5_000;
 const OUTBOX_LEASE_MS = 120_000;
 const OUTBOX_MAX_ATTEMPTS = 12;
+type OutboxTarget = Pick<OutboundMessage, 'targetType' | 'targetId'>;
+const targetKey = (target: OutboxTarget): string => `${target.targetType}:${target.targetId}`;
 
 /**
  * Delivers a logical message that may not fit into a single MAX message.
@@ -112,11 +114,16 @@ export class MaxMessageService {
   private readonly activity = new AsyncActivity();
   private timer?: NodeJS.Timeout;
   private drainPromise?: Promise<void>;
+  // Shared by immediate sends and background retries, including long messages.
+  private readonly activeTargets = new Map<string, { target: OutboxTarget; done: Promise<unknown> }>();
 
   constructor(
     private readonly max: MaxClient,
     private readonly durable?: DurableMessageDependencies,
-  ) {}
+    private readonly concurrency = getConfig().OUTBOX_CONCURRENCY,
+  ) {
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 32) throw new Error('Outbox concurrency must be between 1 and 32');
+  }
 
   /**
    * Deliver text, media and buttons as ONE MAX message wherever possible.
@@ -133,8 +140,13 @@ export class MaxMessageService {
 
   private async sendNow(target: SendTarget, message: CompositeMessage): Promise<MessageSendResult> {
     if (!this.durable || message.immediatePreview) {
-      const { firstMessageId } = await this.deliverLogical(target, message);
-      return { firstMessageId, state: 'sent', trackingApplied: false };
+      const destination = 'chatId' in target ? { targetType: 'chat', targetId: target.chatId } : { targetType: 'user', targetId: target.userId };
+      const key = targetKey(destination);
+      while (this.activeTargets.has(key)) await this.activeTargets.get(key)!.done.catch(() => undefined);
+      return this.withTarget(destination, async () => {
+        const { firstMessageId } = await this.deliverLogical(target, message);
+        return { firstMessageId, state: 'sent' as const, trackingApplied: false };
+      });
     }
 
     const row = await this.enqueue(target, message);
@@ -146,7 +158,34 @@ export class MaxMessageService {
       };
     }
     if (this.stopping) return { state: 'queued', trackingApplied: false };
-    return this.attempt(row.id);
+    return this.attemptInOrder(row);
+  }
+
+  private async withTarget<T>(target: OutboxTarget, work: () => Promise<T>): Promise<T> {
+    const key = targetKey(target);
+    const done = this.activity.run(work);
+    this.activeTargets.set(key, { target, done });
+    try { return await done; }
+    finally { if (this.activeTargets.get(key)?.done === done) this.activeTargets.delete(key); }
+  }
+
+  /** Deferred business reminders do not block a chat; an actual failed send does. */
+  private async attemptInOrder(row: OutboundMessage): Promise<MessageSendResult> {
+    if (this.stopping || this.activeTargets.has(targetKey(row))) return { state: 'queued', trackingApplied: false };
+    return this.withTarget(row, async () => {
+      const predecessor = await this.durable!.prisma.outboundMessage.findFirst({
+        where: {
+          targetType: row.targetType, targetId: row.targetId, id: { not: row.id },
+          OR: [
+            { status: 'SENDING', OR: [{ sequence: { lt: row.sequence } }, { lockedAt: { gt: new Date(Date.now() - OUTBOX_LEASE_MS) } }] },
+            { status: 'PENDING', sequence: { lt: row.sequence }, OR: [{ nextAttemptAt: { lte: new Date() } }, { attempts: { gt: 0 } }] },
+          ],
+        }, select: { id: true },
+      });
+      if (predecessor) return { state: 'queued', trackingApplied: false };
+      if (this.stopping) return { state: 'queued', trackingApplied: false };
+      return this.attempt(row.id);
+    });
   }
 
   private async deliverLogical(
@@ -203,9 +242,9 @@ export class MaxMessageService {
       .catch((error) =>
         log.warn({ err: error instanceof Error ? error.message : String(error) }, 'outbox cleanup failed'),
       );
-    this.timer = setInterval(() => void this.kick(), OUTBOX_INTERVAL_MS);
+    this.timer = setInterval(() => void this.kick().catch(error => log.error({ err: String(error) }, 'outbox sweep failed')), OUTBOX_INTERVAL_MS);
     this.timer.unref?.();
-    void this.kick();
+    void this.kick().catch(error => log.error({ err: String(error) }, 'outbox startup failed'));
   }
 
   stop(): void {
@@ -655,22 +694,51 @@ export class MaxMessageService {
 
   private async drain(): Promise<void> {
     const prisma = this.durable!.prisma;
-    for (let processed = 0; processed < 50 && !this.stopping; processed += 1) {
-      const now = new Date();
-      const stale = new Date(now.getTime() - OUTBOX_LEASE_MS);
-      const candidate = await prisma.outboundMessage.findFirst({
-        where: {
-          OR: [
-            { status: OutboxStatus.PENDING, nextAttemptAt: { lte: now } },
-            { status: OutboxStatus.SENDING, lockedAt: { lte: stale } },
-          ],
-        },
-        orderBy: { createdAt: 'asc' },
-        select: { id: true },
-      });
-      if (!candidate || this.stopping) break;
-      await this.attempt(candidate.id);
+    const active = new Set<Promise<void>>();
+    const deferred = new Map<string, OutboxTarget>();
+    let failure: unknown;
+    try {
+      // Keep refilling free lanes: a slow request must not stall the next batch.
+      while (!this.stopping && !failure) {
+        while (active.size < this.concurrency && !this.stopping && !failure) {
+          const now = new Date();
+          const blocked = [...deferred.values(), ...[...this.activeTargets.values()].map(item => item.target)];
+          const candidate = await prisma.outboundMessage.findFirst({
+            where: {
+              NOT: blocked.map(({ targetType, targetId }) => ({ targetType, targetId })),
+              OR: [
+                { status: OutboxStatus.PENDING, nextAttemptAt: { lte: now } },
+                { status: OutboxStatus.SENDING, lockedAt: { lte: new Date(now.getTime() - OUTBOX_LEASE_MS) } },
+              ],
+            },
+            orderBy: { sequence: 'asc' },
+          });
+          if (this.stopping) break;
+          if (!candidate) {
+            // A lane may finish while this database read excludes it. Read again
+            // with fresh exclusions before concluding that the queue is empty.
+            if (blocked.some(target => !deferred.has(targetKey(target)) && !this.activeTargets.has(targetKey(target)))) continue;
+            break;
+          }
+          const task = this.attemptInOrder(candidate)
+            .then(async result => {
+              if (result.state !== 'queued') return;
+              const current = await prisma.outboundMessage.findUnique({ where: { id: candidate.id } });
+              // A business hold (rating/SLA) must let later ready messages pass.
+              if (current?.status === 'PENDING' && current.attempts === 0 && current.nextAttemptAt > new Date()) return;
+              deferred.set(targetKey(candidate), candidate);
+            })
+            .catch(error => { failure = error; })
+            .finally(() => { active.delete(task); });
+          active.add(task);
+        }
+        if (!active.size) break;
+        await Promise.race(active);
+      }
+    } finally {
+      await Promise.all(active);
     }
+    if (failure) throw failure;
   }
 
   /**

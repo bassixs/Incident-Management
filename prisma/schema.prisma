@@ -457,6 +457,7 @@ model InboundUpdate {
 /// the bounded failure threshold is reached.
 model OutboundMessage {
   id                String                @id @default(uuid())
+  sequence          BigInt                @unique @default(autoincrement())
   dedupeKey         String?               @unique
   targetType        String
   targetId          BigInt
@@ -482,6 +483,7 @@ model OutboundMessage {
   @@index([lockedAt])
   @@index([incidentId])
   @@index([createdAt])
+  @@index([targetType, targetId, status, sequence])
 }
 
 /// Short database-backed lease used to debounce repeated button presses. A
