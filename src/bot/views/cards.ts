@@ -294,7 +294,8 @@ export function rulesText(): string {
     MESSAGE_LEGAL_NOTICE,
     '',
     'Сообщения, нарушающие эти правила, остаются без рассмотрения, а автор может быть заблокирован.',
-    `К рассмотрению принимается не более ${config.DAILY_INCIDENT_LIMIT} сообщений одного автора в сутки.`,
+    // Published rules stay at 3 even when the runtime quota is raised for testing.
+    'К рассмотрению принимается не более 3 сообщений одного автора в сутки.',
     '',
     'Причины отказа в рассмотрении сообщения:',
     '',
