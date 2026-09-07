@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { Prisma, type PrismaClient } from '@prisma/client';
+import { Prisma, SessionType, type PrismaClient } from '@prisma/client';
 import type { AppConfig } from '../config';
 import { isPhotoReference } from '../media/max-photo-reference';
 import type { MediaStorage } from '../media/media-storage.interface';
@@ -35,6 +35,12 @@ function localFiles(value: unknown): string[] {
   return [...new Set(storageKeys(value).filter(key => key && !isPhotoReference(key)))];
 }
 const STAFF_PREFIX = 'maintenance.cleanup-staff:';
+const REQUESTER_DRAFT_SESSIONS = [
+  SessionType.WAITING_REQUESTER_NAME, SessionType.WAITING_REQUESTER_PHONE,
+  SessionType.WAITING_INCIDENT_SELECTION, SessionType.WAITING_INCIDENT_TEXT,
+  SessionType.WAITING_CUSTOM_LOCALITY, SessionType.WAITING_INCIDENT_CONFIRMATION,
+  SessionType.WAITING_INCIDENT_EDIT_SELECTION, SessionType.WAITING_INCIDENT_EDIT_VALUE,
+];
 
 /** Manual deletion is previewed, bound to an administrator and committed once.
  * Execution is performed by the runtime only after handlers and senders drain.
@@ -153,19 +159,24 @@ export class CleanupService {
       _count: { select: { incidents: true, assignedByMe: true, respondingTo: true, approvedByMe: true, authoredAnswers: true, approvedAnswers: true, bansIssued: true } },
       legalAcceptances: { select: { id: true }, orderBy: { id: 'asc' } },
     } }) : [];
-    // Context-only staff have no global role. Preserve users with staff history too.
+    // Reset requester details for everyone; staff protection only prevents
+    // deleting their account, MAX identity and permissions.
     const staffIds = plan.kind === 'users' ? await this.staffIds(tx) : new Set<string>();
-    const users = allUsers.filter(user => !isStaff(resolveRoles(user.maxUserId, user.roles)) && !staffIds.has(String(user.maxUserId)) &&
-      !user._count.assignedByMe && !user._count.respondingTo && !user._count.approvedByMe && !user._count.authoredAnswers && !user._count.approvedAnswers && !user._count.bansIssued);
+    const users = allUsers.map(user => ({ ...user, protectedAccount: isStaff(resolveRoles(user.maxUserId, user.roles)) || staffIds.has(String(user.maxUserId)) ||
+      Boolean(user._count.assignedByMe || user._count.respondingTo || user._count.approvedByMe || user._count.authoredAnswers || user._count.approvedAnswers || user._count.bansIssued) }));
+    const deletableUsers = users.filter(user => !user.protectedAccount && user._count.incidents === 0);
     const counts = { incidents: incidents.length, active: incidents.filter(incident => !['RESOLVED', 'REJECTED'].includes(incident.status)).length,
-      profiles: users.length, deletedProfiles: users.filter(user => user._count.incidents === 0).length, consents: users.reduce((sum, user) => sum + user.legalAcceptances.length, 0) };
-    return { incidents, users, counts, fingerprint: fingerprint({
+      profiles: users.length, deletedProfiles: deletableUsers.length, consents: users.reduce((sum, user) => sum + user.legalAcceptances.length, 0) };
+    return { incidents, users, deletableUsers, counts, fingerprint: fingerprint({
       incidents: incidents.map(incident => ({ id: incident.id, updatedAt: incident.updatedAt, status: incident.status,
         answers: incident.answers.map(answer => [answer.id, answer.updatedAt, answer.status]),
         clarifications: incident.clarifications.map(item => [item.id, item.status, item.answeredAt]),
         history: incident.history.map(item => item.id),
         attachments: [...incident.attachments, ...incident.answers.flatMap(item => item.attachments), ...incident.clarifications.flatMap(item => item.attachments)].map(item => item.id).sort() })),
-      users: users.map(user => [user.id, user.updatedAt, user._count.incidents, user.legalAcceptances]),
+      // The administrator's confirmation itself refreshes User.updatedAt.
+      // Compare the actual reset scope/data instead, and invalidate old plans.
+      users: users.map(user => ['requester-reset-v2', user.id, user.requesterName, user.requesterPhone,
+        user.roles, user.protectedAccount, user._count, user.legalAcceptances]),
     }) };
   }
 
@@ -221,7 +232,8 @@ export class CleanupService {
         outboxWhere = { OR: [outboxWhere, { id: { in: cachedIds } }] };
       }
       const outbox = await tx.outboundMessage.findMany({ where: outboxWhere });
-      const sessions = await tx.operatorSession.findMany({ where: plan.kind === 'data' ? { incidentId: { in: ids } } : { maxUserId: { in: maxIds }, incidentId: null } });
+      const sessions = await tx.operatorSession.findMany({ where: plan.kind === 'data' ? { incidentId: { in: ids } }
+        : { maxUserId: { in: maxIds }, incidentId: null, type: { in: REQUESTER_DRAFT_SESSIONS } } });
       const files = localFiles([snapshot.incidents, outbox.map(item => item.attachments), sessions.map(item => item.data)]);
       await tx.outboundMessage.deleteMany({ where: outboxWhere });
       await tx.operatorSession.deleteMany({ where: { id: { in: sessions.map(item => item.id) } } });
@@ -232,9 +244,10 @@ export class CleanupService {
         await tx.incident.deleteMany({ where: { id: { in: ids } } });
       } else {
         await tx.legalAcceptance.deleteMany({ where: { userId: { in: userIds } } });
-        await tx.user.updateMany({ where: { id: { in: userIds } }, data: { requesterName: null, requesterPhone: null, displayName: 'Житель', username: null } });
-        await tx.actionLock.deleteMany({ where: { maxUserId: { in: maxIds }, incidentId: null } });
-        await tx.user.deleteMany({ where: { id: { in: snapshot.users.filter(item => item._count.incidents === 0).map(item => item.id) } } });
+        await tx.user.updateMany({ where: { id: { in: userIds } }, data: { requesterName: null, requesterPhone: null } });
+        await tx.user.updateMany({ where: { id: { in: snapshot.users.filter(item => !item.protectedAccount).map(item => item.id) } }, data: { displayName: 'Житель', username: null } });
+        await tx.actionLock.deleteMany({ where: { maxUserId: { in: maxIds }, incidentId: null, action: { startsWith: 'user:' } } });
+        await tx.user.deleteMany({ where: { id: { in: snapshot.deletableUsers.map(item => item.id) } } });
       }
       // Never remove a physical object still referenced by surviving records.
       const surviving = files.length ? await Promise.all([
@@ -270,7 +283,7 @@ export class CleanupService {
         ? `Данные в базе очищены. Не удалось удалить ${remaining.length} файлов из хранилища; бот повторит попытку. Новая очистка доступна после завершения этой.`
         : plan.kind === 'data'
           ? `Очистка завершена: удалено обращений — ${plan.counts.incidents} (${plan.title}). Сохранённые пользователи не сбрасывались.`
-          : `Сброс завершён: данные жителей — ${plan.counts.profiles}, полностью удалённые профили без обращений — ${plan.counts.deletedProfiles}. При новом обращении бот снова запросит данные и согласия. Существующие обращения сохранены.`;
+          : `Сброс завершён: данные для подачи обращений — ${plan.counts.profiles}, полностью удалённые профили без обращений — ${plan.counts.deletedProfiles}. ФИО, телефон и согласия сброшены также у сотрудников и администраторов. Их учётные записи и рабочие права сохранены. Для прохождения заново откройте личный чат с ботом и отправьте /start. Существующие обращения сохранены.`;
       await this.notice(tx, plan, text, remaining.length ? 'files-pending' : 'done');
     });
   }
@@ -290,12 +303,12 @@ export function cleanupPreviewText(plan: CleanupPlan): string {
       `Период создания обращений: ${plan.title}.`, `Обращений: ${plan.counts.incidents}, из них незавершённых: ${plan.counts.active}.`,
       'Будут удалены сами обращения, ответы, оценки, уточнения, история, связанные вложения и задания доставки. Профили жителей останутся.',
     ] : [
-      `Сбросить сохранённые данные жителей: ${plan.counts.profiles}.`, `Из них полностью удалить профили без обращений: ${plan.counts.deletedProfiles}.`,
+      `Сбросить данные для подачи обращений (включая сотрудников и администраторов): ${plan.counts.profiles}.`, `Из них полностью удалить профили жителей без обращений: ${plan.counts.deletedProfiles}.`,
       `Удалить подтверждения документов: ${plan.counts.consents}.`,
-      'У всех выбранных жителей будут сброшены ФИО, телефон и согласия, незавершённое заполнение нового обращения придётся начать заново.',
+      'У всех выбранных пользователей будут сброшены сохранённые ФИО, телефон и согласия для подачи обращения. Незавершённое заполнение нового обращения придётся начать заново.',
       'Сами обращения, сведения внутри них и ожидание уточнений сохраняются. MAX ID остаётся, если нужен для существующих обращений.',
     ]), '',
-    'Сотрудники, права, настройки чатов, блокировки, нумерация и журнал действий администратора сохраняются.',
+    'Учётные записи сотрудников, их рабочие права и рабочие сессии, настройки чатов, блокировки, нумерация и журнал действий администратора сохраняются.',
     'Сообщения, фото и отчёты, уже отправленные в MAX, а также резервные копии этой командой не удаляются.',
     'Отменить удаление через бота нельзя. Подтвердить может только автор подсчёта в течение 10 минут:', '',
     `${command} confirm ${plan.token}`, '', `${command} cancel — отмена.`,

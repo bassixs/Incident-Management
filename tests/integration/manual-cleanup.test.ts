@@ -2,12 +2,16 @@ import type { PrismaClient } from '@prisma/client';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { CleanupService, CLEANUP_KEY, cleanupPreviewText } from '../../src/maintenance/cleanup.service';
 import { parseCleanupRange } from '../../src/maintenance/cleanup-range';
-import { getConfig } from '../../src/config';
-import { createTestPrisma, describeIntegration, ensureUser, pushSchemaOnce, resetDatabase } from '../helpers/integration';
+import { getConfig, loadConfig } from '../../src/config';
+import { createHarness, createTestPrisma, describeIntegration, ensureUser, pushSchemaOnce, resetDatabase } from '../helpers/integration';
 import type { MediaStorage } from '../../src/media/media-storage.interface';
 import { photoReference } from '../../src/media/max-photo-reference';
 import { COMMANDS } from '../../src/bot/commands';
-import { createHarness } from '../helpers/integration';
+import { handleMessageUpdate } from '../../src/bot/handlers/message.handler';
+import { handleRequesterMessage } from '../../src/bot/handlers/requester.handler';
+import { resolveActor } from '../../src/bot/handlers/helpers';
+import { handleUserCallback } from '../../src/bot/callbacks/user.callbacks';
+import { LegalAcceptanceService } from '../../src/legal/legal-acceptance.service';
 
 const actor = { maxUserId: 9001n, displayName: 'Администратор' };
 const chat = -1005n;
@@ -91,12 +95,12 @@ describeIntegration('manual cleanup with separate data and profile commands', ()
       { maxUserId: linked.maxUserId, chatId: linked.maxUserId, type: 'WAITING_CLARIFICATION_REPLY', incidentId: kept.id, expiresAt: new Date(Date.now() + 60_000) },
     ] });
     const plan = await service.preview('users', actor, chat);
-    expect(plan.counts).toMatchObject({ profiles: 2, deletedProfiles: 1, consents: 2, incidents: 0 });
+    expect(plan.counts).toMatchObject({ profiles: 4, deletedProfiles: 1, consents: 3, incidents: 0 });
     await confirm(plan);
     expect(await prisma.user.findUnique({ where: { id: orphan.id } })).toBeNull();
     expect(await prisma.user.findUniqueOrThrow({ where: { id: linked.id } })).toMatchObject({ requesterName: null, requesterPhone: null, username: null });
     expect(await prisma.incident.findUniqueOrThrow({ where: { id: kept.id } })).toMatchObject({ requesterName: 'Имя в обращении', requesterPhone: '+79990000000' });
-    expect(await prisma.legalAcceptance.count()).toBe(1); expect(await prisma.ban.count()).toBe(1);
+    expect(await prisma.legalAcceptance.count()).toBe(0); expect(await prisma.ban.count()).toBe(1);
     expect(await prisma.operatorSession.count()).toBe(1); expect(await prisma.user.findUnique({ where: { id: storedStaff.id } })).not.toBeNull();
   });
 
@@ -208,7 +212,57 @@ describeIntegration('manual cleanup with separate data and profile commands', ()
     await prisma.inboundUpdate.create({ data: { externalUpdateKey: 'member-added', partitionKey: `user:${employee.maxUserId}`, status: 'PROCESSED', updateType: 'user_added',
       payload: { update_type: 'user_added', chat_id: Number(chat), user: { user_id: Number(employee.maxUserId) } } } });
     const plan = await service.preview('users', actor, chat);
-    expect(plan.counts.profiles).toBe(0); await confirm(plan);
-    expect(await prisma.user.findUnique({ where: { id: employee.id } })).not.toBeNull();
+    expect(plan.counts.profiles).toBe(2); await confirm(plan);
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: employee.id } })).toMatchObject({ requesterName: null, requesterPhone: null, displayName: employee.displayName });
+  });
+
+  it('resets the confirming database administrator through real commands and restarts consent, name and phone collection without losing work access', async () => {
+    const admin = await resident(1961n);
+    await prisma.user.update({ where: { id: admin.id }, data: { roles: ['ADMIN'], username: 'staff-account' } });
+    const harness = await createHarness(prisma);
+    harness.services.cleanup.start(work => work()); harness.services.cleanup.stop();
+    harness.services.legal = new LegalAcceptanceService(prisma, loadConfig({ ...process.env,
+      LEGAL_CONSENT_REQUIRED: 'true', LEGAL_DOCUMENTS_BASE_URL: 'https://example.test/documents/',
+      LEGAL_DOCUMENT_VERSION: '1.0', LEGAL_USER_AGREEMENT_VERSION: '1.1',
+      LEGAL_USER_AGREEMENT_SHA256: 'a'.repeat(64), LEGAL_PRIVACY_POLICY_SHA256: 'b'.repeat(64), LEGAL_PERSONAL_DATA_CONSENT_SHA256: 'c'.repeat(64),
+    }));
+    const evidence = { userId: admin.id, maxUserId: admin.maxUserId, sourceChatId: admin.maxUserId };
+    await harness.services.legal.acceptUserAgreement({ ...evidence, sourceCallbackId: 'admin-old-agreement' });
+    await harness.services.legal.acceptPersonalDataConsent({ ...evidence, sourceCallbackId: 'admin-old-consent' });
+    await prisma.operatorSession.createMany({ data: [
+      { maxUserId: admin.maxUserId, chatId: admin.maxUserId, type: 'WAITING_INCIDENT_CONFIRMATION', data: { requesterName: 'Старое имя', requesterPhone: '+79991234567' }, expiresAt: new Date(Date.now() + 60_000) },
+      { maxUserId: admin.maxUserId, chatId: chat, type: 'WAITING_REPORT_PERIOD', expiresAt: new Date(Date.now() + 60_000) },
+    ] });
+    const sender = { user_id: Number(admin.maxUserId), name: admin.displayName, username: 'staff-account', is_bot: false, last_activity_time: 0 };
+    const command = (text: string) => handleMessageUpdate(harness.services, { update: { update_type: 'message_created',
+      message: { sender, recipient: { chat_type: 'chat', chat_id: Number(chat) }, body: { mid: text, text } } } } as never);
+    await command('/clear_users');
+    const plan = await planState();
+    expect(plan.counts.deletedProfiles).toBe(0);
+    await command(`/clear_users confirm ${plan.token}`);
+    await harness.services.cleanup.tick();
+    expect((await planState()).status).toBe('DONE');
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: admin.id } })).toMatchObject({
+      roles: ['ADMIN'], displayName: admin.displayName, username: 'staff-account', requesterName: null, requesterPhone: null,
+    });
+    expect(await harness.services.sessions.find(admin.maxUserId, chat)).toMatchObject({ type: 'WAITING_REPORT_PERIOD' });
+    expect(await harness.services.sessions.find(admin.maxUserId, admin.maxUserId)).toBeNull();
+    await expect(harness.services.cleanup.authorize({ maxUserId: admin.maxUserId, displayName: admin.displayName }, chat)).resolves.toBeUndefined();
+    const identity = await resolveActor(harness.services, sender);
+    const context = { services: harness.services, actor: identity, chatId: admin.maxUserId, callbackId: 'new-start', messageId: undefined };
+    await handleUserCallback(context, { kind: 'user', action: 'new' });
+    expect(await harness.services.legal.hasCurrentAccess(admin.id)).toBe(false);
+    expect(await harness.services.sessions.find(admin.maxUserId, admin.maxUserId)).toBeNull();
+    await handleUserCallback({ ...context, callbackId: 'admin-new-agreement' }, { kind: 'user', action: 'accept-agreement' });
+    await handleUserCallback({ ...context, callbackId: 'admin-new-consent' }, { kind: 'user', action: 'accept-consent' });
+    expect(await harness.services.sessions.find(admin.maxUserId, admin.maxUserId)).toMatchObject({ type: 'WAITING_REQUESTER_NAME' });
+    const reply = (text: string) => handleRequesterMessage(harness.services, identity, admin.maxUserId,
+      { body: { mid: text, text }, recipient: { chat_type: 'dialog', chat_id: Number(admin.maxUserId) }, sender } as never);
+    await reply('Петров Пётр Петрович');
+    expect(await harness.services.sessions.find(admin.maxUserId, admin.maxUserId)).toMatchObject({ type: 'WAITING_REQUESTER_PHONE' });
+    await reply('+79998887766');
+    expect(await harness.services.sessions.find(admin.maxUserId, admin.maxUserId)).toMatchObject({
+      type: 'WAITING_INCIDENT_SELECTION', data: { requesterName: 'Петров Пётр Петрович', requesterPhone: '+7 999 888-77-66' },
+    });
   });
 });
