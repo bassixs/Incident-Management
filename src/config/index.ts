@@ -98,6 +98,7 @@ const envSchema = z
     LEGAL_CONSENT_REQUIRED: boolean(false),
     LEGAL_DOCUMENTS_BASE_URL: z.string().url().optional(),
     LEGAL_DOCUMENT_VERSION: z.string().trim().min(1).default('1.0'),
+    LEGAL_USER_AGREEMENT_VERSION: z.string().trim().min(1).optional(),
     LEGAL_USER_AGREEMENT_SHA256: z.string().trim().regex(/^[a-fA-F0-9]{64}$/).optional(),
     LEGAL_PRIVACY_POLICY_SHA256: z.string().trim().regex(/^[a-fA-F0-9]{64}$/).optional(),
     LEGAL_PERSONAL_DATA_CONSENT_SHA256: z.string().trim().regex(/^[a-fA-F0-9]{64}$/).optional(),

@@ -44,7 +44,7 @@ def all_text(doc: Document) -> str:
 
 def main() -> None:
     root = Path("legal")
-    actual = {p.name for p in root.glob("*.docx")}
+    actual = {p.name for p in root.glob("*.docx") if not p.name.startswith("~$")}
     assert actual == set(EXPECTED), f"Unexpected DOCX set: {sorted(actual)}"
 
     for name, required in EXPECTED.items():
@@ -61,7 +61,11 @@ def main() -> None:
         assert "ИНН: 4027138814" in text
         assert "1194027000221" in text and "11944027000221" not in text
         assert "min_digital@adm.kaluga.ru" in text
-        assert "04.09.2026" in text
+        if name == "Пользовательское_соглашение_Искра.docx":
+            assert "Редакция документа: 1.1" in text and "07.09.2026" in text
+            assert 'поданными через чат-бот «Искра»' in text and '№ 59-ФЗ' in text
+        else:
+            assert "04.09.2026" in text
         for phrase in required:
             assert phrase in text, f"Missing phrase in {name}: {phrase}"
 

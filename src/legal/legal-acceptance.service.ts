@@ -42,6 +42,10 @@ export class LegalAcceptanceService {
     private readonly config: AppConfig,
   ) {}
 
+  get agreementVersion(): string {
+    return this.config.LEGAL_USER_AGREEMENT_VERSION ?? this.config.LEGAL_DOCUMENT_VERSION;
+  }
+
   links(): LegalDocumentLinks {
     const base = this.config.LEGAL_DOCUMENTS_BASE_URL;
     if (!base) return {};
@@ -66,14 +70,15 @@ export class LegalAcceptanceService {
     const rows = await this.prisma.legalAcceptance.findMany({
       where: {
         userId,
-        documentVersion: this.config.LEGAL_DOCUMENT_VERSION,
         OR: [
           {
             type: LegalAcceptanceType.USER_AGREEMENT,
+            documentVersion: this.agreementVersion,
             documentSha256: this.requireHash('LEGAL_USER_AGREEMENT_SHA256'),
           },
           {
             type: LegalAcceptanceType.PERSONAL_DATA_CONSENT,
+            documentVersion: this.config.LEGAL_DOCUMENT_VERSION,
             documentSha256: this.requireHash('LEGAL_PERSONAL_DATA_CONSENT_SHA256'),
           },
         ],
@@ -133,20 +138,23 @@ export class LegalAcceptanceService {
     }
     const base = this.config.LEGAL_DOCUMENTS_BASE_URL;
     if (!base) throw new Error('Legal document URL is not configured');
+    const documentVersion = type === LegalAcceptanceType.USER_AGREEMENT
+      ? this.agreementVersion
+      : this.config.LEGAL_DOCUMENT_VERSION;
 
     return this.prisma.legalAcceptance.upsert({
       where: {
         userId_type_documentVersion: {
           userId: evidence.userId,
           type,
-          documentVersion: this.config.LEGAL_DOCUMENT_VERSION,
+          documentVersion,
         },
       },
       create: {
         userId: evidence.userId,
         maxUserId: evidence.maxUserId,
         type,
-        documentVersion: this.config.LEGAL_DOCUMENT_VERSION,
+        documentVersion,
         documentUrl: `${base}/${fileName}`,
         documentSha256,
         confirmationText,

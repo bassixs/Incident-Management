@@ -69,6 +69,7 @@ cp .env.example .env
 | `ADMINS` | MAX ID первых администраторов через запятую |
 | `LEGAL_CONSENT_REQUIRED` | включает обязательное раздельное подтверждение документов; до юридической готовности должно быть `false` |
 | `LEGAL_DOCUMENTS_BASE_URL` | публичный адрес каталога PDF, например `https://bot.example.ru/documents` |
+| `LEGAL_USER_AGREEMENT_VERSION` | отдельная редакция соглашения; если не задана, используется `LEGAL_DOCUMENT_VERSION`. Позволяет обновить соглашение без повторного согласия на ПДн |
 
 Полный список с комментариями — в [.env.example](.env.example).
 

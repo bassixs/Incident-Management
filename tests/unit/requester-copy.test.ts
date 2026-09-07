@@ -45,6 +45,7 @@ describe('requester-facing copy', () => {
     expect(greetingText()).toContain('отдельно подтвердите согласие');
     expect(greetingText()).toContain('их передачу в органы');
     for (const text of [greetingText(), rulesText()]) {
+      expect(text).toContain('поданными через чат-бот «Искра»');
       expect(text).toContain('не применяются положения Федерального закона');
       expect(text).toContain('02.05.2006');
       expect(text).toContain('59-ФЗ');

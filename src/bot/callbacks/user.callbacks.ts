@@ -178,7 +178,7 @@ export async function handleUserCallback(
       if (!status.agreementAccepted) {
         if (!links.userAgreement) throw new ValidationError('Документ временно недоступен.');
         await services.messages.send(target, {
-          text: agreementAcceptanceText(services.config.LEGAL_DOCUMENT_VERSION),
+          text: agreementAcceptanceText(services.legal.agreementVersion),
           keyboard: agreementAcceptanceKeyboard(links.userAgreement),
         });
         return undefined;
@@ -208,8 +208,12 @@ export async function handleUserCallback(
       if (context.messageId) {
         await services.messages.finalizeCard(
           context.messageId,
-          `Пользовательское соглашение редакции ${services.config.LEGAL_DOCUMENT_VERSION} принято.`,
+          `Пользовательское соглашение редакции ${services.legal.agreementVersion} принято.`,
         );
+      }
+      if ((await services.legal.status(actor.userId)).consentAccepted) {
+        await beginNewIncident(context);
+        return 'Соглашение принято';
       }
       await services.messages.send(target, {
         text: personalDataConsentText(services.config.LEGAL_DOCUMENT_VERSION),
