@@ -5,6 +5,7 @@ import { describeStatus } from '../../incidents/incident-state.service';
 import type { IncidentWithRelations } from '../../incidents/incident.repository';
 import type { LegalAccessStatus } from '../../legal/legal-acceptance.service';
 import { formatDate, formatDateTime } from '../../utils/datetime';
+import { answerSignature } from '../../responsible-groups/answer-signature';
 
 /** `№ INC-20260823-0001` — the label repeated on every fragment of a message. */
 export function codeLabel(incident: Pick<Incident, 'publicCode'>): string {
@@ -143,6 +144,7 @@ export function reviewCard(
   const photoCount = answer.attachments.filter((item) => item.type === 'IMAGE').length;
   const fileCount = answer.attachments.filter((item) => item.type === 'FILE').length;
   const attachmentLines = attachmentLine(photoCount, fileCount);
+  const signature = answerSignature(group?.authorityName);
   return [
     '📝 ОТВЕТ НА СОГЛАСОВАНИЕ',
     '',
@@ -167,8 +169,8 @@ export function reviewCard(
     answer.text,
     // The approver must see the signature the requester will get, since it is
     // added automatically and is not part of the text under review.
-    ...(group?.authorityName
-      ? ['', 'Уйдёт за подписью:', group.authorityName]
+    ...(signature
+      ? ['', 'Подпись в ответе жителю:', signature]
       : ['', '⚠️ Ведомство для подписи не задано — ответ уйдёт без подписи.']),
     ...(attachmentLines.length ? ['', '📎 Вложения ответа:', ...attachmentLines] : []),
     '',
@@ -207,11 +209,8 @@ export function revisionCard(incident: Incident, answerVersion: number, reason: 
 /**
  * §31 — the final answer, delivered to the incident's own requester.
  *
- * The authority signature is filled in from the сфера, never typed by the
- * responder: it cannot be forgotten, mistyped or attributed to the wrong body.
- * When a сфера has no authority set yet, the block is omitted entirely rather
- * than falling back to the topic name — «Ответ подготовлен Здравоохранением»
- * would read as nonsense.
+ * The signature comes from the actual responsible group's authority, never
+ * from the incident topic. Review and delivery use the same formatter.
  */
 export function finalAnswerToRequester(
   incident: Incident,
@@ -219,6 +218,7 @@ export function finalAnswerToRequester(
   answeredAt: Date,
   authorityName?: string | null,
 ): string {
+  const signature = answerSignature(authorityName);
   return [
     '✅ Получен ответ по вашему обращению.',
     '',
@@ -229,7 +229,7 @@ export function finalAnswerToRequester(
     '',
     'Ответ:',
     answer.text,
-    ...(authorityName ? ['', 'Ответ подготовлен:', authorityName] : []),
+    ...(signature ? ['', signature] : []),
     '',
     'Дата ответа:',
     formatDate(answeredAt),
