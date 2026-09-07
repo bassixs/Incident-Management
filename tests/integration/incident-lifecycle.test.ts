@@ -176,18 +176,30 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     expect(harness.messages.toUser(actor.maxUserId).at(-1)!.message.text).toContain('Использую сохранённые');
   });
 
-  it('accepts the account owner contact from the MAX contact button', async () => {
+  it('asks for a typed name first and offers the contact button only for the phone without replacing the name', async () => {
     const actor = await actorFor(prisma, TEST_USERS.requesterA, 'Профиль MAX', []);
     if ((await harness.services.legal.status(actor.userId)).required) {
       const evidence = { userId: actor.userId, maxUserId: actor.maxUserId };
       await harness.services.legal.acceptUserAgreement(evidence);
       await harness.services.legal.acceptPersonalDataConsent(evidence);
     }
-    await harness.services.sessions.start({
-      maxUserId: actor.maxUserId,
-      chatId: actor.maxUserId,
-      type: 'WAITING_REQUESTER_NAME',
-    });
+    await handleUserCallback({ services: harness.services, actor, chatId: actor.maxUserId,
+      messageId: 'new-menu', callbackId: 'new-name-first' }, { kind: 'user', action: 'new' });
+    const namePrompt = harness.messages.toUser(actor.maxUserId).at(-1)!.message;
+    expect(namePrompt.text).toContain('Шаг 1.');
+    expect(namePrompt.text).not.toContain('Поделиться контактом');
+    expect(namePrompt.keyboard).toBeUndefined();
+
+    // A contact sent using an old button must not skip the name step.
+    await handleRequesterMessage(harness.services, actor, actor.maxUserId, requesterContactMessage(),
+      { fullName: 'Иванов Иван', tel: '+79001234567' });
+    expect((await harness.services.sessions.find(actor.maxUserId, actor.maxUserId))?.type).toBe('WAITING_REQUESTER_NAME');
+    expect(harness.messages.toUser(actor.maxUserId).at(-1)!.message.keyboard).toBeUndefined();
+    await handleRequesterMessage(harness.services, actor, actor.maxUserId, requesterMessage('Иванов Иван Иванович'));
+    expect((await harness.services.sessions.find(actor.maxUserId, actor.maxUserId))?.type).toBe('WAITING_REQUESTER_PHONE');
+    const phonePrompt = harness.messages.toUser(actor.maxUserId).at(-1)!.message;
+    expect(phonePrompt.text).toContain('Шаг 2.');
+    expect(phonePrompt.keyboard?.flat()).toContainEqual({ type: 'request_contact', text: '📱 Поделиться контактом' });
 
     await handleRequesterMessage(
       harness.services,
@@ -199,7 +211,7 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     const session = await harness.services.sessions.find(actor.maxUserId, actor.maxUserId);
     expect(session?.type).toBe('WAITING_INCIDENT_SELECTION');
     expect(harness.services.sessions.readData(session!)).toMatchObject({
-      requesterName: 'Иванов Иван',
+      requesterName: 'Иванов Иван Иванович',
       requesterPhone: '+7 900 123-45-67',
     });
   });
@@ -214,7 +226,8 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     await harness.services.sessions.start({
       maxUserId: actor.maxUserId,
       chatId: actor.maxUserId,
-      type: 'WAITING_REQUESTER_NAME',
+      type: 'WAITING_REQUESTER_PHONE',
+      data: { requesterName: 'Иванов Иван Иванович' },
     });
 
     await handleRequesterMessage(
@@ -225,7 +238,7 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
       { fullName: 'Петров Пётр', tel: '+79004445566' },
     );
     expect((await harness.services.sessions.find(actor.maxUserId, actor.maxUserId))?.type).toBe(
-      'WAITING_REQUESTER_NAME',
+      'WAITING_REQUESTER_PHONE',
     );
   });
 
@@ -270,6 +283,7 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
       action: 'draft-field',
       argument: 'name',
     });
+    expect(harness.messages.toUser(actor.maxUserId).at(-1)!.message.keyboard).toBeUndefined();
     await handleRequesterMessage(harness.services, actor, actor.maxUserId, requesterMessage('Петров Пётр'));
 
     await handleUserCallback(context('edit-phone-menu'), { kind: 'user', action: 'draft-edit' });
@@ -278,6 +292,7 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
       action: 'draft-field',
       argument: 'phone',
     });
+    expect(harness.messages.toUser(actor.maxUserId).at(-1)!.message.keyboard?.flat()).toContainEqual({ type: 'request_contact', text: '📱 Поделиться контактом' });
     await handleRequesterMessage(harness.services, actor, actor.maxUserId, requesterMessage('8 999 000 11 22'));
 
     await handleUserCallback(context('edit-category-menu'), { kind: 'user', action: 'draft-edit' });

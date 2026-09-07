@@ -391,7 +391,7 @@ export async function handleUserCallback(
                 : payload.argument === 'phone'
                   ? requesterPhonePromptText()
                   : 'Отправьте новый текст обращения одним сообщением.',
-            ...(payload.argument === 'name' || payload.argument === 'phone'
+            ...(payload.argument === 'phone'
               ? { keyboard: requesterContactKeyboard() }
               : {}),
           });
@@ -738,7 +738,7 @@ async function beginNewIncident(context: UserCallbackContext): Promise<void> {
   });
   await services.messages.send(target, {
     text: requester.requesterName ? requesterPhonePromptText() : requesterNamePromptText(),
-    keyboard: requesterContactKeyboard(),
+    ...(requester.requesterName ? { keyboard: requesterContactKeyboard() } : {}),
   });
 }
 

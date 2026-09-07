@@ -27,7 +27,6 @@ import {
   greetingText,
   incidentPromptText,
   legalGateText,
-  requesterNamePromptText,
   requesterPhonePromptText,
 } from '../views/cards';
 import type { ResolvedActor } from './helpers';
@@ -113,43 +112,10 @@ export async function handleRequesterMessage(
 
   if (session.type === SessionType.WAITING_REQUESTER_NAME) {
     try {
-      if (contactInfo?.tel) {
-        const requesterPhone = normaliseRequesterPhone(contactInfo.tel);
-        let requesterName: string | undefined;
-        try {
-          if (contactInfo.fullName) requesterName = normaliseRequesterName(contactInfo.fullName);
-        } catch {
-          // A MAX profile may contain only one name. Keep the verified phone
-          // and ask the person to complete their full name manually.
-        }
-        if (requesterName) {
-          await continueToCategorySelection(services, actor.maxUserId, chatId, requesterName, requesterPhone);
-        } else {
-          await services.sessions.start({
-            maxUserId: actor.maxUserId,
-            chatId,
-            type: SessionType.WAITING_REQUESTER_NAME,
-            data: { requesterPhone },
-          });
-          await services.messages.send(target, {
-            text: ['Номер телефона получен из вашего контакта.', '', requesterNamePromptText()].join('\n'),
-            keyboard: requesterContactKeyboard(),
-          });
-        }
-        return;
+      if (sharedContact || contactInfo || media.length > 0) {
+        throw new ValidationError('Сначала отправьте фамилию, имя и отчество (если есть) обычным текстом. Телефон укажете на следующем шаге.');
       }
-      if (media.length > 0) throw new ValidationError('Отправьте ФИО обычным текстовым сообщением.');
       const requesterName = normaliseRequesterName(text);
-      if (data.requesterPhone) {
-        await continueToCategorySelection(
-          services,
-          actor.maxUserId,
-          chatId,
-          requesterName,
-          data.requesterPhone,
-        );
-        return;
-      }
       await services.sessions.start({
         maxUserId: actor.maxUserId,
         chatId,
@@ -196,14 +162,7 @@ export async function handleRequesterMessage(
       const draft = requireCompleteIncidentDraft(data);
       switch (data.draftEditField) {
         case 'name': {
-          if (contactInfo?.fullName) {
-            await showIncidentDraftPreview(services, actor.maxUserId, chatId, {
-              ...draft,
-              requesterName: normaliseRequesterName(contactInfo.fullName),
-            });
-            return;
-          }
-          if (media.length > 0) throw new ValidationError('Отправьте ФИО обычным текстовым сообщением.');
+          if (sharedContact || contactInfo || media.length > 0) throw new ValidationError('Отправьте ФИО обычным текстовым сообщением.');
           await showIncidentDraftPreview(services, actor.maxUserId, chatId, {
             ...draft,
             requesterName: normaliseRequesterName(text),
