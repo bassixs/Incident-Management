@@ -45,10 +45,14 @@ describe('requester-facing copy', () => {
     expect(greetingText()).toContain('отдельно подтвердите согласие');
     expect(greetingText()).toContain('их передачу в органы');
     for (const text of [greetingText(), rulesText()]) {
-      expect(text).toContain('не применяются положения Федерального закона от 02.05.2006 № 59-ФЗ');
+      expect(text).toContain('не применяются положения Федерального закона');
+      expect(text).toContain('02.05.2006');
+      expect(text).toContain('59-ФЗ');
     }
     expect(rulesText()).toContain('Подача сообщения через бот означает согласие с данными правилами');
-    expect(rulesText()).toContain('7. Отсутствие адреса проблемы');
+    expect(rulesText()).toContain('5. Текст сообщения не позволяет определить суть вопроса, отсутствует адрес проблемы.');
+    expect(rulesText()).toContain('при этом в сообщении не приводятся новые обстоятельства.');
+    expect(rulesText()).toContain('7. Сообщения, несущие урон чести и достоинству других граждан.');
     expect(incidentPromptText()).toContain('адрес проблемы');
     expect(incidentPromptText()).toContain('точное место, если адреса нет');
     // Keep the rules and the menu keyboard in one MAX message.

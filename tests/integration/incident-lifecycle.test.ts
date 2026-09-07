@@ -364,7 +364,7 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     const rejected = results.find(result => result.status === 'rejected') as PromiseRejectedResult;
     expect(rejected.reason).toBeInstanceOf(RateLimitError);
     expect(await harness.services.incidents.remainingDailyQuota(TEST_USERS.requesterA)).toBe(0);
-    expect(rulesText()).toContain('не более 3 сообщений одного автора в сутки');
+    expect(rulesText()).toContain('не более трех сообщений одного автора в сутки');
   });
 
   it('allows two incidents a day and refuses the third', async () => {
