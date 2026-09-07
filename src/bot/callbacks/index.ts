@@ -15,6 +15,7 @@ import { handleUserCallback } from './user.callbacks';
 import { handleQueueCallback } from './queue.callbacks';
 import { assertWorkingChat } from '../middleware/authorize';
 import { sendChatGuide } from '../views/chat-guide';
+import { cleanupCommand } from '../commands/cleanup';
 
 const log = moduleLogger('bot-callbacks');
 
@@ -103,6 +104,12 @@ async function dispatchCallback(
   isDialog: boolean,
 ): Promise<string | undefined> {
   switch (payload.kind) {
+    case 'cleanup':
+      await services.cleanup.authorize(actor, chatId, isDialog);
+      if (payload.action === 'custom') {
+        await services.messages.send({ chatId: chatId! }, { text: 'Укажите даты одной командой, например:\n\n/clear_data 01.09.2026 - 07.09.2026\n\nИли один день: /clear_data 07.09.2026\nБот сначала покажет подсчёт. Без отдельного подтверждения ничего не удаляется.' });
+      } else await cleanupCommand({ services, actor, chatId: chatId!, isDialog, args: [payload.action] }, 'data');
+      return undefined;
     case 'help':
       await sendChatGuide(services, actor, chatId, isDialog, payload.action);
       return undefined;

@@ -14,6 +14,7 @@ import { incidentLookupCard, myIncidentsText, rulesText } from '../views/cards';
 import { sendMainMenu } from '../handlers/requester.handler';
 import type { ResolvedActor } from '../handlers/helpers';
 import { adminAuditText, incidentHistoryText } from '../views/history';
+import { cleanupCommand } from './cleanup';
 
 const log = moduleLogger('bot-commands');
 
@@ -28,6 +29,8 @@ export type CommandContext = {
 type CommandHandler = (context: CommandContext) => Promise<void>;
 
 export const COMMANDS: Record<string, CommandHandler> = {
+  clear_data: context => cleanupCommand(context, 'data'),
+  clear_users: context => cleanupCommand(context, 'users'),
   queue: async ({ services, actor, chatId, isDialog }) => {
     if (isDialog) throw new ForbiddenError('Очередь доступна в чате распределения.');
     services.distributionQueue.authorize(actor, chatId);

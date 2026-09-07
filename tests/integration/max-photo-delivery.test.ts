@@ -94,6 +94,10 @@ describeIntegration('MAX photo references in persistent delivery', () => {
     const services = buildServices(prisma, { messages, media });
     const incident = await services.incidents.create({ requester: { maxUserId: 7001n, name: 'Иван Иванов', phone: '+79001112233' }, text: 'Фонарь', media: [{ kind: 'IMAGE', token: 'revoked' }] });
     await messages.flush();
+    // A failed photo send defers this recipient until the next worker sweep.
+    // The fallback is durable; do not require a timing-dependent single sweep.
+    expect(await prisma.outboundMessage.count({ where: { incidentId: incident.id, dedupeKey: { startsWith: 'photo-recovery:' } } })).toBe(1);
+    await messages.flush();
     expect((await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).distributionMessageId).toBe('fallback-card');
     expect(sent).toHaveLength(1);
     expect(sent[0]!.text).toContain('Запросите её повторно');

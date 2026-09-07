@@ -10,6 +10,7 @@ import { PollingRunner } from './server/polling.runner';
 import { UpdateDispatcher } from './server/update-dispatcher';
 import { createWebhookServer } from './server/webhook.server';
 import { logger, moduleLogger } from './utils/logger';
+import { withRuntimePaused } from './maintenance/runtime-maintenance';
 
 const log = moduleLogger('bootstrap');
 
@@ -52,11 +53,17 @@ async function main(): Promise<void> {
   services.sla.start();
   services.distributionQueue.start();
 
+  let shuttingDown = false;
+  services.cleanup.start(work => withRuntimePaused(dispatcher, services.messages,
+    [services.sla, services.distributionQueue, services.deliveryAlerts], work, () => shuttingDown));
+
   let shutdownPromise: Promise<void> | undefined;
   const shutdown = (signal: string): Promise<void> => {
     if (shutdownPromise) return shutdownPromise;
     shutdownPromise = (async () => {
       log.info({ signal }, 'shutting down');
+      shuttingDown = true;
+      services.cleanup.stop();
       dispatcher.stop();
       polling?.stop();
       services.sla.stop();
@@ -69,6 +76,7 @@ async function main(): Promise<void> {
           dispatcher.waitForIdle(), polling?.waitForIdle(),
           services.sla.waitForIdle(), services.deliveryAlerts.waitForIdle(),
           services.distributionQueue.waitForIdle(),
+          services.cleanup.waitForIdle(),
         ]),
         waitForMessages: () => services.messages.waitForIdle(),
         disconnect: disconnectDatabase,

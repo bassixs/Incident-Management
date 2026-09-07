@@ -24,6 +24,7 @@ import { createMediaStorage, MediaService } from '../media/media.service';
 import type { MediaStorage } from '../media/media-storage.interface';
 import { ExcelReportService } from '../reports/excel-report.service';
 import { RetentionService } from '../retention/retention.service';
+import { CleanupService } from '../maintenance/cleanup.service';
 import { ResponsibleGroupService } from '../responsible-groups/responsible-group.service';
 import { ReviewService } from '../review/review.service';
 import { SectorService } from '../sector/sector.service';
@@ -49,6 +50,7 @@ export type AppServices = {
   actionGuard: ActionGuardService;
   audit: AdminAuditService;
   retention: RetentionService;
+  cleanup: CleanupService;
   legal: LegalAcceptanceService;
 
   users: UserService;
@@ -99,6 +101,7 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
   const actionGuard = new ActionGuardService(prisma);
   const audit = new AdminAuditService(prisma);
   const retention = new RetentionService(prisma, storage);
+  const cleanup = new CleanupService(prisma, storage, config);
   const legal = new LegalAcceptanceService(prisma, config);
 
   const users = new UserService(prisma);
@@ -168,6 +171,7 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
     actionGuard,
     audit,
     retention,
+    cleanup,
     legal,
     users,
     categories,

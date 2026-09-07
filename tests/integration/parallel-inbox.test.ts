@@ -79,4 +79,20 @@ describeIntegration('bounded parallel inbox', () => {
   it('keeps callbacks in their author’s lane instead of the bot sender’s lane', () => {
     expect(updatePartition({ ...update(999, 'bot-message'), update_type: 'message_callback', callback: { user: { user_id: 12 } } } as unknown as Update)).toBe('user:12');
   });
+
+  it('accepts and deduplicates updates during maintenance, then processes them after resume', async () => {
+    const dispatched = vi.fn(async () => undefined);
+    const worker = new UpdateDispatcher(prisma, { dispatch: dispatched } as never, 2);
+    worker.pauseProcessing();
+    const event = update(10, 'maintenance-pending');
+    expect((await worker.reserve(event)).fresh).toBe(true);
+    expect((await worker.reserve(event)).fresh).toBe(false);
+    await worker.kick(); await worker.waitForIdle();
+    expect(dispatched).not.toHaveBeenCalled();
+    expect(await prisma.inboundUpdate.count({ where: { status: 'PENDING' } })).toBe(1);
+    worker.resumeProcessing(); await worker.kick(); await worker.waitForIdle();
+    expect(dispatched).toHaveBeenCalledTimes(1);
+    expect(await prisma.inboundUpdate.count({ where: { status: 'PROCESSED' } })).toBe(1);
+    worker.stop();
+  });
 });

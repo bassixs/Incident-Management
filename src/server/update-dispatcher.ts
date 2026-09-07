@@ -23,6 +23,7 @@ export type Reservation = { id?: string; key: string; fresh: boolean };
  */
 export class UpdateDispatcher {
   private stopping = false;
+  private paused = false;
   private readonly activity = new AsyncActivity();
   private timer?: NodeJS.Timeout;
   private drainPromise?: Promise<void>;
@@ -104,8 +105,15 @@ export class UpdateDispatcher {
     await this.activity.waitForIdle();
   }
 
+  /** Keep accepting durable webhook reservations while maintenance drains work. */
+  pauseProcessing(): void { this.paused = true; }
+  resumeProcessing(): void {
+    this.paused = false;
+    if (!this.stopping) void this.kick().catch(error => log.error({ err: String(error) }, 'inbox resume failed'));
+  }
+
   async kick(): Promise<void> {
-    if (this.stopping) return;
+    if (this.stopping || this.paused) return;
     if (this.drainPromise) return this.drainPromise;
     this.drainPromise = this.drain().finally(() => {
       this.drainPromise = undefined;
@@ -117,8 +125,8 @@ export class UpdateDispatcher {
     const active = new Map<string, Promise<void>>();
     let failure: unknown;
     try {
-      while (!this.stopping && !failure) {
-        while (active.size < this.concurrency && !this.stopping && !failure) {
+      while (!this.stopping && !this.paused && !failure) {
+        while (active.size < this.concurrency && !this.stopping && !this.paused && !failure) {
           const blocked = [...active.keys()];
           const row = await this.prisma.inboundUpdate.findFirst({
             where: { status: InboxStatus.PENDING, nextAttemptAt: { lte: new Date() },
@@ -127,7 +135,7 @@ export class UpdateDispatcher {
             select: { id: true, partitionKey: true },
           });
           if (!row && blocked.length && !active.size) continue;
-          if (!row || this.stopping) break;
+          if (!row || this.stopping || this.paused) break;
           const task = this.processById(row.id)
             .catch(error => { failure = error; })
             .finally(() => { active.delete(row.partitionKey); });
@@ -143,7 +151,7 @@ export class UpdateDispatcher {
   }
 
   private async processById(id: string): Promise<void> {
-    if (this.stopping) return;
+    if (this.stopping || this.paused) return;
     return this.activity.run(() => this.processClaimed(id));
   }
 
