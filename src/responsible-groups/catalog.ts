@@ -6,6 +6,7 @@ export type ResponsibleGroupSeed = {
   kind: ResponsibleGroupKind;
   maxChatId: bigint;
   municipalityCode?: string;
+  authorityName?: string;
   bypassReview?: boolean;
 };
 
@@ -24,6 +25,15 @@ const regional = (
   bypassReview,
 });
 
+/** Full chat title / answer signature; routing keeps the short municipality name. */
+export function localAdministrationTitle(name: string): string {
+  if (name === 'Город Калуга') return 'Администрация города Калуги';
+  if (name === 'Город Обнинск') return 'Администрация города Обнинска';
+  const match = /^(.+)ий (округ|район)$/.exec(name);
+  if (!match) throw new Error('Unexpected local municipality name: ' + name);
+  return 'Администрация ' + match[1] + 'ого ' + (match[2] === 'округ' ? 'округа' : 'района');
+}
+
 const local = (
   code: string,
   name: string,
@@ -33,6 +43,7 @@ const local = (
   code,
   name,
   kind: ResponsibleGroupKind.LOCAL_GOVERNMENT,
+  authorityName: localAdministrationTitle(name),
   maxChatId,
   municipalityCode,
 });
@@ -48,32 +59,32 @@ const executive = (code: string, name: string, maxChatId: bigint): ResponsibleGr
 export const RESPONSIBLE_GROUPS: ResponsibleGroupSeed[] = [
   regional('REGION_KALUGA', 'Калужская область', -78347547385914n, 'KALUGA_REGION', true),
 
-  local('LG_BABYNINSKY', 'Бабынинский район', -78339541704762n, 'BABYNINSKY'),
-  local('LG_BARYATINSKY', 'Барятинский район', -78347519270970n, 'BARYATINSKY'),
-  local('LG_BOROVSKY', 'Боровский район', -78347583430714n, 'BOROVSKY'),
+  local('LG_BABYNINSKY', 'Бабынинский округ', -78339541704762n, 'BABYNINSKY'),
+  local('LG_BARYATINSKY', 'Барятинский округ', -78347519270970n, 'BARYATINSKY'),
+  local('LG_BOROVSKY', 'Боровский округ', -78347583430714n, 'BOROVSKY'),
   local('LG_KALUGA_CITY', 'Город Калуга', -78344795004986n, 'KALUGA_CITY'),
   local('LG_OBNINSK_CITY', 'Город Обнинск', -78344672059450n, 'OBNINSK_CITY'),
-  local('LG_DZERZHINSKY', 'Дзержинский район', -78347616526394n, 'DZERZHINSKY'),
-  local('LG_DUMINICHSKY', 'Думиничский район', -78347487354938n, 'DUMINICHSKY'),
-  local('LG_ZHIZDRINSKY', 'Жиздринский район', -78347446067258n, 'ZHIZDRINSKY'),
-  local('LG_ZHUKOVSKY', 'Жуковский район', -78347408711738n, 'ZHUKOVSKY'),
-  local('LG_IZNOSKOVSKY', 'Износковский район', -78347367489594n, 'IZNOSKOVSKY'),
-  local('LG_KIROVSKY', 'Кировский район', -78347321548858n, 'KIROVSKY'),
-  local('LG_KOZELSKY', 'Козельский район', -78347277377594n, 'KOZELSKY'),
+  local('LG_DZERZHINSKY', 'Дзержинский округ', -78347616526394n, 'DZERZHINSKY'),
+  local('LG_DUMINICHSKY', 'Думиничский округ', -78347487354938n, 'DUMINICHSKY'),
+  local('LG_ZHIZDRINSKY', 'Жиздринский округ', -78347446067258n, 'ZHIZDRINSKY'),
+  local('LG_ZHUKOVSKY', 'Жуковский округ', -78347408711738n, 'ZHUKOVSKY'),
+  local('LG_IZNOSKOVSKY', 'Износковский округ', -78347367489594n, 'IZNOSKOVSKY'),
+  local('LG_KIROVSKY', 'Кировский округ', -78347321548858n, 'KIROVSKY'),
+  local('LG_KOZELSKY', 'Козельский округ', -78347277377594n, 'KOZELSKY'),
   local('LG_KUYBYSHEVSKY', 'Куйбышевский район', -78347236483130n, 'KUYBYSHEVSKY'),
-  local('LG_LYUDINOVSKY', 'Людиновский район', -78347197816890n, 'LYUDINOVSKY'),
-  local('LG_MALOYAROSLAVETSKY', 'Малоярославецкий район', -78347154825274n, 'MALOYAROSLAVETSKY'),
-  local('LG_MEDYNSKY', 'Медынский район', -78344994365498n, 'MEDYNSKY'),
-  local('LG_MESHCHOVSKY', 'Мещовский район', -78344957075514n, 'MESHCHOVSKY'),
-  local('LG_MOSALSKY', 'Мосальский район', -78344918540346n, 'MOSALSKY'),
-  local('LG_PEREMYSHLSKY', 'Перемышльский район', -78344880791610n, 'PEREMYSHLSKY'),
-  local('LG_SPAS_DEMENSKY', 'Спас-Деменский район', -78344840159290n, 'SPAS_DEMENSKY'),
-  local('LG_SUKHINICHSKY', 'Сухиничский район', -78344714133562n, 'SUKHINICHSKY'),
-  local('LG_TARUSSKY', 'Тарусский район', -78341985280058n, 'TARUSSKY'),
-  local('LG_ULYANOVSKY', 'Ульяновский район', -78341943140410n, 'ULYANOVSKY'),
-  local('LG_FERZIKOVSKY', 'Ферзиковский район', -78339531415610n, 'FERZIKOVSKY'),
-  local('LG_KHVASTOVICHSKY', 'Хвастовичский район', -78540154609722n, 'KHVASTOVICHSKY'),
-  local('LG_YUKHNOVSKY', 'Юхновский район', -78540182331450n, 'YUKHNOVSKY'),
+  local('LG_LYUDINOVSKY', 'Людиновский округ', -78347197816890n, 'LYUDINOVSKY'),
+  local('LG_MALOYAROSLAVETSKY', 'Малоярославецкий округ', -78347154825274n, 'MALOYAROSLAVETSKY'),
+  local('LG_MEDYNSKY', 'Медынский округ', -78344994365498n, 'MEDYNSKY'),
+  local('LG_MESHCHOVSKY', 'Мещовский округ', -78344957075514n, 'MESHCHOVSKY'),
+  local('LG_MOSALSKY', 'Мосальский округ', -78344918540346n, 'MOSALSKY'),
+  local('LG_PEREMYSHLSKY', 'Перемышльский округ', -78344880791610n, 'PEREMYSHLSKY'),
+  local('LG_SPAS_DEMENSKY', 'Спас-Деменский округ', -78344840159290n, 'SPAS_DEMENSKY'),
+  local('LG_SUKHINICHSKY', 'Сухиничский округ', -78344714133562n, 'SUKHINICHSKY'),
+  local('LG_TARUSSKY', 'Тарусский округ', -78341985280058n, 'TARUSSKY'),
+  local('LG_ULYANOVSKY', 'Ульяновский округ', -78341943140410n, 'ULYANOVSKY'),
+  local('LG_FERZIKOVSKY', 'Ферзиковский округ', -78339531415610n, 'FERZIKOVSKY'),
+  local('LG_KHVASTOVICHSKY', 'Хвастовичский округ', -78540154609722n, 'KHVASTOVICHSKY'),
+  local('LG_YUKHNOVSKY', 'Юхновский округ', -78540182331450n, 'YUKHNOVSKY'),
 
   executive('EA_INTERNAL_POLICY', 'Министерство внутренней политики', -78540262744122n),
   executive('EA_TRANSPORT', 'Министерство транспорта', -78540295643194n),
