@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   greetingText,
+  incidentPromptText,
   myIncidentsText,
   registrationConfirmation,
   rulesText,
@@ -37,6 +38,21 @@ describe('requester-facing copy', () => {
     expect(rules).toContain('Любое поле и фотографии можно исправить');
     expect(rules).toContain('Только после этого обращение будет зарегистрировано');
     expect(rules).toContain('итоговый ответ придёт в этот личный чат');
+  });
+
+  it('includes the customer notice and describes explicit consent rather than automatic consent', () => {
+    expect(greetingText()).toContain('органам исполнительной власти и местного самоуправления');
+    expect(greetingText()).toContain('отдельно подтвердите согласие');
+    expect(greetingText()).toContain('их передачу в органы');
+    for (const text of [greetingText(), rulesText()]) {
+      expect(text).toContain('не применяются положения Федерального закона от 02.05.2006 № 59-ФЗ');
+    }
+    expect(rulesText()).toContain('Подача сообщения через бот означает согласие с данными правилами');
+    expect(rulesText()).toContain('7. Отсутствие адреса проблемы');
+    expect(incidentPromptText()).toContain('адрес проблемы');
+    expect(incidentPromptText()).toContain('точное место, если адреса нет');
+    // Keep the rules and the menu keyboard in one MAX message.
+    expect([...rulesText()].length).toBeLessThanOrEqual(3800);
   });
 
   it('registration notice gives the number and status location without a deadline', () => {

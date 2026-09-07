@@ -7,6 +7,8 @@ import { handleUserCallback } from '../../src/bot/callbacks/user.callbacks';
 import { handleRequesterMessage } from '../../src/bot/handlers/requester.handler';
 import type { Message } from '../../src/max/max-types';
 import { ConflictError, RateLimitError } from '../../src/utils/errors';
+import * as configModule from '../../src/config';
+import { rulesText } from '../../src/bot/views/cards';
 import {
   actorFor,
   CATEGORY_CODES,
@@ -352,6 +354,18 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
   });
 
   // --- §11 daily limit -----------------------------------------------------
+
+  it('enforces the published three-message limit under concurrent submissions', async () => {
+    vi.spyOn(configModule, 'getConfig').mockReturnValue({ ...configModule.getConfig(), DAILY_INCIDENT_LIMIT: 3 });
+    const results = await Promise.allSettled(Array.from({ length: 4 }, (_, i) =>
+      harness.services.incidents.create({ requester: requesterA(), text: `Проблема ${i}` }),
+    ));
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(3);
+    const rejected = results.find(result => result.status === 'rejected') as PromiseRejectedResult;
+    expect(rejected.reason).toBeInstanceOf(RateLimitError);
+    expect(await harness.services.incidents.remainingDailyQuota(TEST_USERS.requesterA)).toBe(0);
+    expect(rulesText()).toContain('не более 3 сообщений одного автора в сутки');
+  });
 
   it('allows two incidents a day and refuses the third', async () => {
     const first = await harness.services.incidents.create({

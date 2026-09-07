@@ -86,7 +86,7 @@ const envSchema = z
     REVIEW_CHAT_ID: optionalBigInt,
     DELIVERY_ALERT_CHAT_ID: optionalBigInt,
 
-    DAILY_INCIDENT_LIMIT: int(2),
+    DAILY_INCIDENT_LIMIT: int(3),
     INCIDENT_MAX_LENGTH: int(150),
     INCIDENT_SLA_HOURS: int(72),
     SLA_CHECK_INTERVAL_MINUTES: int(10),
