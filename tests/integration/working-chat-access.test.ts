@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import ExcelJS from 'exceljs';
 import { type PrismaClient, UserRole } from '@prisma/client';
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { handleMessageUpdate } from '../../src/bot/handlers/message.handler';
@@ -116,6 +117,36 @@ describeIntegration('automatic access in configured work chats', () => {
     await command(-1005n, '/role 86001 ADMIN'); expect(lastText()).toContain('нет прав');
     await command(TEST_CHATS.sector, '/delivery_status'); expect(lastText()).toContain('нет прав');
     await command(86001n, '/delivery_status', true); expect(lastText()).toContain('нет прав');
+  });
+
+  it('automatically lets existing and new system-chat members build reports by command, buttons and custom dates', async () => {
+    const row = await incident();
+    await prisma.incident.update({ where: { id: row.id }, data: { deadlineAt: new Date(Date.now() - 3_600_000) } });
+    await handleMembershipUpdate(h.services, { update: membership(-1005n) } as never);
+    expect(lastText()).toContain('аналитика и отчёты'); expect(lastText()).toContain('/info');
+    await command(-1005n, '/info'); expect(lastText()).toContain('/report'); expect(lastText()).toContain('Excel придёт в этот же чат');
+    await command(-1005n, '/report', false, 86002);
+    expect(lastText()).toContain('За какой период');
+    await command(-1005n, '/report 7d', false, 86002);
+    await click(-1005n, 'report:all');
+    await click(-1005n, 'report:custom');
+    expect((await h.services.sessions.find(86001n, -1005n))?.type).toBe('WAITING_REPORT_PERIOD');
+    await command(-1005n, '01.01.2020 - 31.12.2099');
+    expect(await h.services.sessions.find(86001n, -1005n)).toBeNull();
+    const files = h.messages.sent.filter(m => m.message.attachments?.some(a => a.type === 'FILE'));
+    expect(files).toHaveLength(3);
+    for (const file of files) {
+      expect(file.target).toEqual({ chatId: -1005n });
+      const attachment = file.message.attachments![0]!;
+      if (!('body' in attachment)) throw new Error('Missing report body');
+      const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(attachment.body as never);
+      expect(workbook.worksheets.map(s => s.name)).toEqual(['Обращения', 'Просроченные']);
+      expect(workbook.worksheets[1]!.getCell(4, 1).value).toBe(row.publicCode);
+    }
+    expect((await resolveActor(h.services, person())).roles).toEqual([UserRole.REQUESTER]);
+    await command(TEST_CHATS.sector, '/report'); expect(lastText()).toContain('нет прав');
+    await command(86001n, '/report', true); expect(lastText()).toContain('нет прав');
+    expect(h.messages.sent.filter(m => m.message.attachments?.length)).toHaveLength(3);
   });
 
   it('does not expose other sectors via lookup, history, resend or copied buttons', async () => {

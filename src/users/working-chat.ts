@@ -31,7 +31,7 @@ export async function workingChatFor(services: AppServices, chatId: bigint): Pro
   if (groups.length) { roles.add(UserRole.RESPONDER); labels.push('исполнитель'); }
   // The regional group sends answers directly; its existing guard requires a dispatcher.
   if (groups.some(group => group.bypassReview)) roles.add(UserRole.DISPATCHER);
-  if (delivery) labels.push('контроль доставки');
+  if (delivery) labels.push('аналитика и отчёты', 'контроль доставки');
   return { chatId, distribution, review, delivery, groups, roles: [...roles], labels,
-    permissions: delivery ? ['delivery.manage', 'incident.lookup'] : [] };
+    permissions: delivery ? ['delivery.manage', 'incident.lookup', 'report.generate'] : [] };
 }
