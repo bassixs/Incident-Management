@@ -29,6 +29,7 @@ COPY --from=build /app/dist ./dist
 COPY prisma ./prisma
 
 # Attachments live here when MEDIA_STORAGE=local.
+COPY output/pdf ./output/pdf
 RUN mkdir -p /app/data/uploads && chown -R node:node /app/data
 USER node
 

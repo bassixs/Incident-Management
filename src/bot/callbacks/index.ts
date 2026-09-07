@@ -14,6 +14,7 @@ import { handleReportCallback } from './report.callbacks';
 import { handleUserCallback } from './user.callbacks';
 import { handleQueueCallback } from './queue.callbacks';
 import { assertWorkingChat } from '../middleware/authorize';
+import { sendChatGuide } from '../views/chat-guide';
 
 const log = moduleLogger('bot-callbacks');
 
@@ -102,6 +103,9 @@ async function dispatchCallback(
   isDialog: boolean,
 ): Promise<string | undefined> {
   switch (payload.kind) {
+    case 'help':
+      await sendChatGuide(services, actor, chatId, isDialog, payload.action);
+      return undefined;
     case 'queue':
       await assertWorkingChat(services, chatId, isDialog);
       return handleQueueCallback(services, actor, chatId, payload);

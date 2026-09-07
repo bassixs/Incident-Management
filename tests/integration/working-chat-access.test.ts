@@ -34,10 +34,10 @@ describeIntegration('automatic access in configured work chats', () => {
       message: { sender: person(id), recipient: { chat_id: Number(chatId), chat_type: dialog ? 'dialog' : 'chat' },
         body: { mid: randomUUID(), text } } } } as never);
   }
-  async function click(chatId: bigint, payload: string, id = 86001) {
+  async function click(chatId: bigint, payload: string, id = 86001, dialog = false) {
     await handleCallbackUpdate(h.services, { update: { update_type: 'message_callback', timestamp: Date.now(),
       callback: { callback_id: randomUUID(), user: person(id), payload },
-      message: { sender: { ...person(999), is_bot: true }, recipient: { chat_id: Number(chatId), chat_type: 'chat' }, body: { mid: randomUUID() } } } } as never);
+      message: { sender: { ...person(999), is_bot: true }, recipient: { chat_id: Number(chatId), chat_type: dialog ? 'dialog' : 'chat' }, body: { mid: randomUUID() } } } } as never);
   }
   async function incident() {
     return h.services.incidents.create({ requester: { maxUserId: 87001n, name: 'Житель Тест', phone: '+79001112233' }, text: 'Не горит фонарь' });
@@ -111,7 +111,7 @@ describeIntegration('automatic access in configured work chats', () => {
   });
 
   it('grants delivery commands in the alert chat without granting administrative commands', async () => {
-    await command(-1005n, '/info'); expect(lastText()).toContain('/delivery_retry'); expect(lastText()).not.toContain('/role');
+    await command(-1005n, '/info'); expect(lastText()).toContain('/delivery_errors'); expect(lastText()).not.toContain('/role');
     await command(-1005n, '/delivery_status'); expect(lastText()).toContain('Очереди доставки:');
     await command(-1005n, '/delivery_retry'); expect(lastText()).toContain('Неудачных исходящих доставок нет');
     await command(-1005n, '/role 86001 ADMIN'); expect(lastText()).toContain('нет прав');
@@ -200,5 +200,54 @@ describeIntegration('automatic access in configured work chats', () => {
     const assigned = { assignedGroup: { maxChatId: TEST_CHATS.regional, bypassReview: true }, publicCode: 'test' };
     const regionalActor = await resolveActor(h.services, person(), TEST_CHATS.regional);
     expect(() => assertResponder(regionalActor, assigned as never, TEST_CHATS.regional)).not.toThrow();
+  });
+
+  it('keeps help short and sends the real PDF only after a click in each working chat', async () => {
+    for (const chat of [TEST_CHATS.distribution, TEST_CHATS.sector, TEST_CHATS.regional, TEST_CHATS.review, -1005n]) {
+      await command(chat, '/info');
+      const info = h.messages.sent.at(-1)!.message;
+      expect(info.text.length).toBeLessThan(1100);
+      expect(info.attachments).toBeUndefined();
+      expect(info.keyboard).toEqual([[expect.objectContaining({ payload: 'help:guide' })]]);
+      await command(chat, '/help');
+      expect(h.messages.sent.at(-1)!.message).toEqual(info);
+      await click(chat, 'help:guide');
+      const sent = h.messages.sent.at(-1)!;
+      expect(sent.target).toEqual({ chatId: chat });
+      const file = sent.message.attachments![0]!;
+      expect(file).toMatchObject({ type: 'FILE', originalName: 'iskra-staff-guide.pdf' });
+      if (!('body' in file) || !file.body) throw new Error('Missing guide body');
+      expect(file.body.subarray(0, 5).toString()).toBe('%PDF-');
+    }
+  });
+
+  it('selects the resident guide in a dialog and leaves an unfinished action intact', async () => {
+    await h.services.sessions.start({ maxUserId: 86001n, chatId: 86001n, type: 'WAITING_INCIDENT_TEXT' });
+    const before = await h.services.sessions.find(86001n, 86001n);
+    await command(86001n, '/help', true);
+    expect(h.messages.sent.at(-1)!.target).toEqual({ userId: 86001n });
+    await click(86001n, 'help:guide', 86001, true);
+    const sent = h.messages.sent.at(-1)!;
+    expect(sent.target).toEqual({ userId: 86001n });
+    expect(sent.message.attachments![0]).toMatchObject({ type: 'FILE', originalName: 'iskra-resident-guide.pdf' });
+    expect((await h.services.sessions.find(86001n, 86001n))?.id).toBe(before?.id);
+  });
+
+  it('checks current chat and administrator access even for copied guide buttons', async () => {
+    await command(-99999n, '/info');
+    expect(h.messages.sent.at(-1)!.message.keyboard).toBeUndefined();
+    await click(-99999n, 'help:guide');
+    await click(TEST_CHATS.sector, 'help:admin');
+    await click(86001n, 'help:admin', 86001, true);
+    expect(h.messages.sent.filter(m => m.message.attachments?.length)).toHaveLength(0);
+    await prisma.user.update({ where: { maxUserId: 86001n }, data: { roles: [UserRole.ADMIN] } });
+    await command(TEST_CHATS.sector, '/info');
+    expect(h.messages.sent.at(-1)!.message.keyboard?.flat()).toContainEqual(expect.objectContaining({ payload: 'help:admin' }));
+    await click(TEST_CHATS.sector, 'help:admin');
+    expect(h.messages.sent.at(-1)!.message.attachments![0]).toMatchObject({ type: 'FILE', originalName: 'iskra-admin-guide.pdf' });
+    await prisma.responsibleGroup.updateMany({ where: { maxChatId: TEST_CHATS.sector }, data: { isActive: false } });
+    const count = h.messages.sent.length;
+    await click(TEST_CHATS.sector, 'help:guide');
+    expect(h.messages.sent).toHaveLength(count);
   });
 });

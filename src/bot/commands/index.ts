@@ -6,7 +6,7 @@ import { parseReportRange, REPORT_USAGE } from '../../reports/report-range';
 import { formatRetentionPreview, formatRetentionRun } from '../../retention/retention.service';
 import { AppError, ForbiddenError, ValidationError } from '../../utils/errors';
 import { moduleLogger } from '../../utils/logger';
-import { chatInfoText } from '../views/chat-info';
+import { sendChatInfo } from '../views/chat-guide';
 import { assertIncidentVisible, assertWorkingChat, requirePermission } from '../middleware/authorize';
 import { reportPeriodKeyboard } from '../keyboards';
 import { sendReport } from '../views/report';
@@ -41,7 +41,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
   },
 
   info: async ({ services, actor, chatId, isDialog }) => {
-    await reply(services, chatId, isDialog, actor, await chatInfoText(services, actor, chatId, isDialog));
+    await sendChatInfo(services, actor, chatId, isDialog);
   },
 
   help: async context => { await COMMANDS.info!(context); },
