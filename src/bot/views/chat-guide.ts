@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import type { AppServices } from '../../app/container';
 import type { Button } from '../../max/max-types';
 import { hasPermission } from '../../users/roles';
+import { ForbiddenError } from '../../utils/errors';
 import { workingChatFor } from '../../users/working-chat';
 import type { ResolvedActor } from '../handlers/helpers';
 import { assertWorkingChat, requirePermission } from '../middleware/authorize';
@@ -23,15 +24,25 @@ export async function sendChatInfo(services: AppServices, actor: ResolvedActor, 
 export async function sendChatGuide(services: AppServices, actor: ResolvedActor, chatId: bigint | undefined, dialog: boolean, action: 'guide' | 'admin'): Promise<void> {
   if (action === 'admin') requirePermission(actor, 'admin.manage');
   if (!dialog) await assertWorkingChat(services, chatId, false);
-  const audience = action === 'admin' ? 'admin' : dialog ? 'resident' : 'staff';
-  const originalName = `iskra-${audience}-guide.pdf`;
-  const body = await readFile(resolve(__dirname, '../../../output/pdf', originalName));
-  const text = audience === 'admin'
-    ? 'Инструкция администратора: настройка групп, права и служебные команды с примерами.'
-    : audience === 'resident'
-      ? 'Как подать обращение, уточнить детали и посмотреть ответ. Откройте PDF ниже.'
-      : 'Подробная инструкция: распределение — стр. 2; профильный чат — стр. 3–4; согласование — стр. 5; отчёты — стр. 6; проблемы доставки — стр. 7. Общие команды — стр. 1.';
+  const guides: Array<{ name: string; title: string }> = [];
+  if (action === 'admin') guides.push({ name: 'admin', title: 'Администратор: настройки и служебные команды' });
+  else if (dialog) guides.push({ name: 'resident', title: 'Житель: подача обращения и получение ответа' });
+  else {
+    // Reload configuration: even an old button must select the current chat's guide.
+    const chat = await workingChatFor(services, chatId!);
+    if (!chat) throw new ForbiddenError('Этот чат больше не настроен как рабочий.');
+    if (chat.distribution) guides.push({ name: 'distribution', title: 'Распределение обращений' });
+    if (chat.groups.some(group => !group.bypassReview)) guides.push({ name: 'profile', title: 'Профильный чат: подготовка ответа и уточнения' });
+    if (chat.groups.some(group => group.bypassReview)) guides.push({ name: 'profile-direct', title: 'Профильный чат: ответы без согласования' });
+    if (chat.review) guides.push({ name: 'review', title: 'Согласование ответов' });
+    if (chat.delivery) guides.push({ name: 'analytics', title: 'Аналитика: отчёты и проблемы доставки' });
+  }
+  const attachments = await Promise.all(guides.map(async guide => {
+    const originalName = `iskra-${guide.name}-guide.pdf`;
+    const body = await readFile(resolve(__dirname, '../../../output/pdf', originalName));
+    return { type: 'FILE' as const, body, originalName };
+  }));
   await services.messages.send(dialog ? { userId: actor.maxUserId } : { chatId: chatId! }, {
-    text, attachments: [{ type: 'FILE', body, originalName }],
+    text: `${guides.map(guide => guide.title).join('\n')}\n\nВ файле — действия для этого чата и примеры команд.`, attachments,
   });
 }

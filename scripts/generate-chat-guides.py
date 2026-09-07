@@ -2,8 +2,8 @@
 
 Usage: python scripts/generate-chat-guides.py --font-dir C:/Windows/Fonts
 On Linux supply a directory with DejaVuSans.ttf and DejaVuSans-Bold.ttf.
-Review rendered pages after changing the copy. Page references in chat-guide.ts
-and the staff contents page must match the checked page count below.
+Review rendered pages after changing the copy. Each working chat receives only
+the guide(s) corresponding to its configured purpose, independent of manual roles.
 """
 from pathlib import Path
 import argparse
@@ -219,6 +219,83 @@ ADMIN = [
 ]),
 ]
 
+def commands_page(title, *, direct=False, resend=True, profile=False):
+    blocks = [
+        ('P', 'Эти команды отправляйте в свой рабочий чат. Напишите команду в поле сообщения и нажмите отправку. Начальный знак / обязателен. Отправляйте одну команду одним сообщением.'),
+        ('H', 'Открыть памятку и эту инструкцию'),
+        ('C', '/info'),
+        ('P', 'Покажет короткие шаги для вашего чата и кнопку получения PDF. Команда /help делает то же самое. Просмотр справки не отменяет незавершённое действие.'),
+        ('H', 'Найти обращение по номеру'),
+        ('C', '/incident INC-20260906-0001'),
+        ('P', 'Замените вымышленный номер на полный номер из нужной карточки. Бот покажет сведения об обращении. Для работы с кнопками используйте исходную карточку.' + (' В этом чате доступны обращения, назначенные вашей организации.' if profile else '')),
+        ('H', 'Посмотреть историю обращения'),
+        ('C', '/history INC-20260906-0001'),
+        ('P', 'Замените номер на нужный. Бот покажет, кто и когда работал с обращением и как менялось его состояние.'),
+        ('H', 'Узнать свой ID и ID чата'),
+        ('C', '/whoami'),
+        ('P', 'Покажет ваш ID в MAX, ID чата и права. Передайте эти сведения администратору, если нужна помощь. Команда /chatid показывает только ID текущего чата.'),
+    ]
+    if resend:
+        blocks += [
+            ('H', 'Повторить доставку готового ответа'),
+            ('C', '/resend INC-20260906-0001'),
+            ('P', 'Замените номер на нужный. Команда повторяет доставку ' + ('подготовленного' if direct else 'согласованного') + ' ответа. Уже доставленный ответ повторно не отправляется. Если бот сообщает об ожидании доставки, дождитесь подтверждения.'),
+        ]
+    blocks += [
+        ('H', 'Права участников'),
+        ('P', 'В подключённом рабочем чате нужные права доступны участникам автоматически. Если бот не разрешает действие, проверьте, что открыли правильный чат и актуальную карточку, затем обратитесь к администратору.'),
+    ]
+    return (title, blocks)
+
+
+def profile_pages(direct):
+    blocks = []
+    skip = False
+    for kind, value in STAFF[2][1]:
+        if kind == 'H':
+            skip = value == 'Что будет дальше'
+            if skip:
+                blocks += [('H', 'После подготовки ответа')]
+                if direct:
+                    blocks += [('P', 'В этом чате отдельного согласования нет. Ваш готовый ответ отправляется жителю напрямую. Перед отправкой проверьте текст и вложения. Дождитесь сообщения бота о доставке: постановка в очередь ещё не означает, что житель получил ответ.')]
+                else:
+                    blocks += [('P', 'Ответ проверят в чате согласования. Если его вернули, прочитайте замечание, нажмите «Исправить ответ» и отправьте новую полную версию с нужными вложениями. После согласования бот отправит ответ жителю.')]
+                continue
+        if skip:
+            continue
+        if direct:
+            value = value.replace('ответ принят на согласование, ожидает доставки или уже доставлен', 'ответ ожидает доставки или уже доставлен')
+        blocks.append((kind, value))
+    clarification = []
+    for kind, value in STAFF[3][1]:
+        if direct:
+            value = value.replace('Во время согласования и после закрытия обращения запрос недоступен.', 'После закрытия обращения запрос недоступен.')
+            value = value.replace('Возврат ответа на доработку срок не продлевает. ', '')
+            value = value.replace(' Если предусмотрено согласование, новая версия проходит его снова.', '')
+        clarification.append((kind, value))
+    title = 'Профильный чат: прямой ответ' if direct else 'Профильный чат: ответ жителю'
+    return [(title, blocks), (STAFF[3][0], clarification), commands_page('Команды профильного чата', direct=direct, profile=True)]
+
+
+def scoped_guides():
+    review = [(kind, value.replace('(стр. 5)', '')) for kind, value in STAFF[4][1]]
+    delivery = [(kind, value.replace(' (стр. 5)', '')) for kind, value in STAFF[6][1]]
+    admin = []
+    for title, blocks in ADMIN:
+        admin.append((title, [(kind, value
+            .replace('в отдельном файле для сотрудников', 'в отдельном файле соответствующего рабочего чата')
+            .replace('Подробный порядок приведён на стр. 7 инструкции сотрудников.', 'Скопируйте код из /delivery_errors, например a1b2c3d4, и отправьте /delivery_retry a1b2c3d4 с реальным кодом. Затем снова проверьте /delivery_status и /delivery_errors.')) for kind, value in blocks]))
+    return {
+        'distribution': [STAFF[1], commands_page('Команды распределения')],
+        'profile': profile_pages(False),
+        'profile-direct': profile_pages(True),
+        'review': [(STAFF[4][0], review), commands_page('Команды согласования', resend=False)],
+        'analytics': [STAFF[5], (STAFF[6][0], delivery), commands_page('Команды аналитики')],
+        'admin': admin,
+        'resident': RESIDENT,
+    }
+
+
 def build(name, pages, font_dir):
     regular, bold = (font_dir / 'arial.ttf', font_dir / 'arialbd.ttf')
     if not regular.exists():
@@ -233,7 +310,7 @@ def build(name, pages, font_dir):
     }
     output = ROOT / 'output/pdf' / f'iskra-{name}-guide.pdf'
     output.parent.mkdir(parents=True, exist_ok=True)
-    doc = SimpleDocTemplate(str(output), pagesize=A4, rightMargin=42, leftMargin=42, topMargin=55, bottomMargin=43, title='Искра - инструкция', author='Искра')
+    doc = SimpleDocTemplate(str(output), pagesize=A4, rightMargin=42, leftMargin=42, topMargin=55, bottomMargin=43, title='Искра - ' + pages[0][0], author='Искра')
     story = []
     for idx, (title, blocks) in enumerate(pages):
         if idx: story.append(PageBreak())
@@ -260,6 +337,7 @@ def build(name, pages, font_dir):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--font-dir', type=Path, required=True)
+    parser.add_argument('--guides', nargs='+', choices=list(scoped_guides()), default=list(scoped_guides()))
     args = parser.parse_args()
-    for name, pages in [('staff', STAFF), ('resident', RESIDENT), ('admin', ADMIN)]:
-        build(name, pages, args.font_dir)
+    for name in args.guides:
+        build(name, scoped_guides()[name], args.font_dir)

@@ -8,6 +8,7 @@ import { handleCallbackUpdate } from '../../src/bot/callbacks';
 import { resolveActor } from '../../src/bot/handlers/helpers';
 import { assertApprover, assertDispatcher, assertResponder, requirePermission } from '../../src/bot/middleware/authorize';
 import { chatInfoText } from '../../src/bot/views/chat-info';
+import { sendChatGuide } from '../../src/bot/views/chat-guide';
 import { incidentCallback } from '../../src/max/callback-payload';
 import { SUBSCRIBED_UPDATE_TYPES, type Update } from '../../src/max/max-types';
 import { UpdateDispatcher } from '../../src/server/update-dispatcher';
@@ -203,7 +204,10 @@ describeIntegration('automatic access in configured work chats', () => {
   });
 
   it('keeps help short and sends the real PDF only after a click in each working chat', async () => {
-    for (const chat of [TEST_CHATS.distribution, TEST_CHATS.sector, TEST_CHATS.regional, TEST_CHATS.review, -1005n]) {
+    for (const [chat, guide] of [
+      [TEST_CHATS.distribution, 'distribution'], [TEST_CHATS.sector, 'profile'],
+      [TEST_CHATS.regional, 'profile-direct'], [TEST_CHATS.review, 'review'], [-1005n, 'analytics'],
+    ] as const) {
       await command(chat, '/info');
       const info = h.messages.sent.at(-1)!.message;
       expect(info.text.length).toBeLessThan(1100);
@@ -215,10 +219,31 @@ describeIntegration('automatic access in configured work chats', () => {
       const sent = h.messages.sent.at(-1)!;
       expect(sent.target).toEqual({ chatId: chat });
       const file = sent.message.attachments![0]!;
-      expect(file).toMatchObject({ type: 'FILE', originalName: 'iskra-staff-guide.pdf' });
+      expect(sent.message.attachments).toHaveLength(1);
+      expect(file).toMatchObject({ type: 'FILE', originalName: `iskra-${guide}-guide.pdf` });
       if (!('body' in file) || !file.body) throw new Error('Missing guide body');
       expect(file.body.subarray(0, 5).toString()).toBe('%PDF-');
     }
+  });
+
+  it('selects guides from current chat configuration, including combined chat purposes', async () => {
+    const actor = await resolveActor(h.services, person(), TEST_CHATS.sector);
+    await prisma.responsibleGroup.updateMany({ where: { maxChatId: TEST_CHATS.sector }, data: { bypassReview: true } });
+    await sendChatGuide(h.services, actor, TEST_CHATS.sector, false, 'guide');
+    expect(h.messages.sent.at(-1)!.message.attachments).toEqual([
+      expect.objectContaining({ originalName: 'iskra-profile-direct-guide.pdf' }),
+    ]);
+    const combined = { ...h.services, config: { ...h.services.config, REVIEW_CHAT_ID: TEST_CHATS.distribution } };
+    await sendChatGuide(combined, actor, TEST_CHATS.distribution, false, 'guide');
+    expect(h.messages.sent.at(-1)!.message.attachments?.map(file => file.originalName)).toEqual([
+      'iskra-distribution-guide.pdf', 'iskra-review-guide.pdf',
+    ]);
+    // A manually assigned role must not add unrelated instructions to this chat.
+    await prisma.user.update({ where: { maxUserId: 86001n }, data: { roles: [UserRole.ADMIN, UserRole.DISPATCHER] } });
+    await click(TEST_CHATS.review, 'help:guide');
+    expect(h.messages.sent.at(-1)!.message.attachments).toEqual([
+      expect.objectContaining({ originalName: 'iskra-review-guide.pdf' }),
+    ]);
   });
 
   it('selects the resident guide in a dialog and leaves an unfinished action intact', async () => {
