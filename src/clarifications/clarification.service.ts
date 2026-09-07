@@ -10,7 +10,7 @@ import type { ResolvedActor } from '../bot/handlers/helpers';
 import { assertResponder } from '../bot/middleware/authorize';
 import { ConflictError, ForbiddenError, ValidationError } from '../utils/errors';
 import { formatDateTime } from '../utils/datetime';
-import { mainMenuKeyboard } from '../bot/keyboards';
+import { mainMenuKeyboard, sectorKeyboard } from '../bot/keyboards';
 
 const OPEN: IncidentStatus[] = ['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'];
 
@@ -131,6 +131,7 @@ export class ClarificationService {
       await queueMessage(tx, { chatId }, {
         text: `💬 Получено уточнение по ${incident.publicCode}\n\nВопрос:\n${question.question}\n\nОтвет жителя:\n${text.trim() || 'Приложены фотографии.'}\n\nСрок возобновлён. Дедлайн: ${formatDateTime(deadlineAt)}`,
         label: `№ ${incident.publicCode}`, operation: { type: 'clarification-reply', incidentId: incident.id, clarificationId: id },
+        keyboard: sectorKeyboard(incident.id, { hasTemplate: Boolean(incident.assignedGroup?.answerTemplate) }),
         delivery: { dedupeKey: `clarification-reply:${id}` },
       }, incident.id, stored.map(item => ({ ...item, originalName: item.originalName ?? null })));
       await queueSectorRefresh(tx, incident.id, `clarification:${id}:answered`);

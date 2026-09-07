@@ -411,6 +411,11 @@ export class MaxMessageService {
         if (!incident.sectorMessageId || !incident.assignedGroup?.maxChatId) throw new Error('Clarification reply is waiting for the sector card');
         payload.replyToMessageId = incident.sectorMessageId;
         target = { chatId: incident.assignedGroup.maxChatId };
+        // Also upgrades older queued replies. A delayed clarification must not
+        // offer work buttons after the incident closes or another question starts.
+        payload.keyboard = ['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status) && !incident.activeClarificationId
+          ? sectorKeyboard(incident.id, { hasTemplate: Boolean(incident.assignedGroup.answerTemplate) })
+          : [];
       }
       const result = payload.operation?.type === 'distribution-panel'
         ? await this.refreshDistributionPanel(row.targetId)

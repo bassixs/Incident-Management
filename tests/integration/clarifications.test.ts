@@ -124,10 +124,51 @@ describeIntegration('clarifications, requester routing and paused SLA', () => {
     expect(delivered[0]!.text).not.toContain(other.publicCode);
     expect(delivered[0]!.extra.link).toEqual({ type: 'reply', mid: (await services.repository.findById(incident.id))!.sectorMessageId });
     expect(delivered[0]!.extra.attachments[0].type).toBe('image');
+    const buttons = delivered[0]!.extra.attachments.find((item: any) => item.type === 'inline_keyboard').payload.buttons.flat();
+    expect(buttons).toEqual(expect.arrayContaining([
+      expect.objectContaining({ text: 'Подготовить ответ', payload: `incident:answer:${incident.id}` }),
+      expect.objectContaining({ text: '💬 Уточнить у жителя', payload: `incident:clarify:${incident.id}` }),
+    ]));
     expect(await prisma.clarificationAttachment.count({ where: { clarificationId: draft.id } })).toBe(1);
     expect(await services.sessions.find(requester.maxUserId, requester.maxUserId)).toBeNull();
     expect((await services.repository.findById(other.id))!.deadlineAt).toEqual(other.deadlineAt);
     expect(await prisma.outboundMessage.count({ where: { dedupeKey: `subscription-invite:${incident.id}` } })).toBe(0);
+  });
+
+  it('photo-only clarification includes actions and lets staff prepare an answer from that message', async () => {
+    const incident = await routed();
+    const question = await ask(incident.id);
+    await services.clarifications.reply(question.id, TEST_USERS.requesterA, '', [{ kind: 'IMAGE', token: 'resident-photo' }], 'photo-only');
+    const message = sends.find(item => item.text.includes('Получено уточнение'))!;
+    expect(message.text).toContain('Приложены фотографии.');
+    expect(message.extra.attachments.some((item: any) => item.type === 'image')).toBe(true);
+    const keyboard = message.extra.attachments.find((item: any) => item.type === 'inline_keyboard').payload.buttons.flat();
+    const action = keyboard.find((item: any) => item.text === 'Подготовить ответ');
+    expect(action.payload).toBe(`incident:answer:${incident.id}`);
+    const sent = await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: `clarification-reply:${question.id}` } });
+    await handleIncidentCallback({ services, actor, chatId: TEST_CHATS.sector, messageId: sent.firstMessageId! },
+      { kind: 'incident', action: 'answer', incidentId: incident.id });
+    expect((await services.sessions.find(actor.maxUserId, TEST_CHATS.sector))?.incidentId).toBe(incident.id);
+  });
+
+  it('adds buttons to a legacy queued reply but omits them when the incident is already on review', async () => {
+    const incident = await routed();
+    const question = await ask(incident.id);
+    await services.clarifications.reply(question.id, TEST_USERS.requesterA, 'Дом 10', [], 'legacy-reply');
+    const row = await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: `clarification-reply:${question.id}` } });
+    const { keyboard: _keyboard, ...legacy } = row.payload as any;
+    await prisma.responsibleGroup.update({ where: { code: GROUP_CODES.facility }, data: { answerTemplate: 'Шаблон ответа' } });
+    await prisma.outboundMessage.update({ where: { id: row.id }, data: { payload: legacy, status: 'PENDING', nextAttemptAt: new Date(0) } });
+    await services.messages.flush();
+    let message = sends.filter(item => item.text.includes('Получено уточнение')).at(-1)!;
+    expect(message.extra.attachments.some((item: any) => item.type === 'inline_keyboard')).toBe(true);
+    expect(message.extra.attachments.find((item: any) => item.type === 'inline_keyboard').payload.buttons.flat())
+      .toContainEqual(expect.objectContaining({ text: 'Использовать шаблон', payload: `incident:template:${incident.id}` }));
+    await services.answers.submit(incident.id, actor, 'Работы выполнены', []);
+    await prisma.outboundMessage.update({ where: { id: row.id }, data: { status: 'PENDING', nextAttemptAt: new Date(0) } });
+    await services.messages.flush();
+    message = sends.filter(item => item.text.includes('Получено уточнение')).at(-1)!;
+    expect((message.extra?.attachments ?? []).some((item: any) => item.type === 'inline_keyboard')).toBe(false);
   });
 
   it('holds an already queued reminder during the pause without exhausting retries', async () => {
