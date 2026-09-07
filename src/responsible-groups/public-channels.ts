@@ -1,0 +1,58 @@
+/** Public subscription channels supplied by the project owner. Keys are stable
+ * responsible-group codes, never requester location, category or MAX chat title.
+ * REGION_KALUGA already has the common regional channels; Gosstroynadzor has none.
+ */
+const CHANNELS = new Map<string, { name: string; url: string }>([
+  ['LG_BABYNINSKY', 'Администрация Бабынинского округа', 'id4000028966_gos'],
+  ['LG_BARYATINSKY', 'Администрация Барятинского округа', 'id4000029141_gos'],
+  ['LG_BOROVSKY', 'Администрация Боровского округа', 'id4000028684_gos'],
+  ['LG_KALUGA_CITY', 'Администрация города Калуги', 'id4027017947_gos'],
+  ['LG_OBNINSK_CITY', 'Администрация города Обнинска', 'obninsk_today'],
+  ['LG_DZERZHINSKY', 'Администрация Дзержинского округа', 'id4000028638_gos'],
+  ['LG_DUMINICHSKY', 'Администрация Думиничского округа', 'id4000028437_gos'],
+  ['LG_ZHIZDRINSKY', 'Администрация Жиздринского округа', 'id4000029127_gos'],
+  ['LG_ZHUKOVSKY', 'Администрация Жуковского округа', 'id4000028451_gos'],
+  ['LG_IZNOSKOVSKY', 'Администрация Износковского округа', 'id4000029021_gos'],
+  ['LG_KIROVSKY', 'Администрация Кировского округа', 'id4000028268_gos'],
+  ['LG_KOZELSKY', 'Администрация Козельского округа', 'id4000028839_gos'],
+  ['LG_KUYBYSHEVSKY', 'Администрация Куйбышевского района', 'id4010000021_gos'],
+  ['LG_LYUDINOVSKY', 'Администрация Людиновского округа', 'id4000028564_gos'],
+  ['LG_MALOYAROSLAVETSKY', 'Администрация Малоярославецкого округа', 'id4000028356_gos'],
+  ['LG_MEDYNSKY', 'Администрация Медынского округа', 'id4000028589_gos'],
+  ['LG_MESHCHOVSKY', 'Администрация Мещовского округа', 'id4000028677_gos'],
+  ['LG_MOSALSKY', 'Администрация Мосальского округа', 'id4000029247_gos'],
+  ['LG_PEREMYSHLSKY', 'Администрация Перемышльского округа', 'id4000028412_gos'],
+  ['LG_SPAS_DEMENSKY', 'Администрация Спас-Деменского округа', 'id4000029046_gos'],
+  ['LG_SUKHINICHSKY', 'Администрация Сухиничского округа', 'channel_suhadm'],
+  ['LG_TARUSSKY', 'Администрация Тарусского округа', 'id4000029166_gos'],
+  ['LG_ULYANOVSKY', 'Администрация Ульяновского округа', 'id4000029938_gos'],
+  ['LG_FERZIKOVSKY', 'Администрация Ферзиковского округа', 'id4000028892_gos'],
+  ['LG_KHVASTOVICHSKY', 'Администрация Хвастовичского округа', 'id4000028740_gos'],
+  ['LG_YUKHNOVSKY', 'Администрация Юхновского округа', 'id4000028772_gos'],
+  ['EA_INTERNAL_POLICY', 'Министерство внутренней политики', 'id4027116024_gos'],
+  ['EA_TRANSPORT', 'Министерство транспорта', 'mintrans40'],
+  ['EA_HEALTH', 'Министерство здравоохранения', 'minzdrav40'],
+  ['EA_COMPETITION', 'Министерство конкурентной политики', 'id4027078890_gos'],
+  ['EA_CULTURE_TOURISM', 'Министерство культуры и туризма', 'minkult_40'],
+  ['EA_EDUCATION', 'Министерство образования и науки', 'minobr_40'],
+  ['EA_NATURE', 'Министерство природных ресурсов и экологии', 'id4029045065_gos'],
+  ['EA_AGRICULTURE', 'Министерство сельского хозяйства', 'id4027064295_gos'],
+  ['EA_SPORT', 'Министерство спорта', 'minsporta_40'],
+  ['EA_CONSTRUCTION', 'Министерство строительства и ЖКХ', 'minstroy_40'],
+  ['EA_LABOR', 'Министерство труда и социальной защиты', 'kalugaoblmintrud'],
+  ['EA_FINANCE', 'Министерство финансов', 'id4027064190_gos'],
+  ['EA_DIGITAL', 'Министерство цифрового развития', 'id4027138814_gos'],
+  ['EA_ECONOMY', 'Министерство экономического развития и промышленности', 'id4027064200_gos'],
+  ['EA_GZHI', 'Государственная жилищная инспекция', 'id4027064312_gos'],
+  ['EA_UATK', 'Управление административно-технического контроля', 'id4029044858_gos'],
+  ['EA_ZAGS', 'Управление ЗАГС', 'id4027060438_gos'],
+  ['EA_ARCHIVES', 'Управление по делам архивов', 'id4027018203_gos'],
+  ['EA_CULTURAL_HERITAGE', 'Управление по охране культурного наследия', 'id4028060590_gos'],
+  ['EA_ARCHITECTURE', 'Управление архитектуры и градостроительства', 'id4027103378_gos'],
+  ['EA_VETERINARY', 'Комитет ветеринарии при Правительстве Калужской области', 'id4027019207_gos'],
+  ['EA_YOUTH', 'Управление молодежной политики', 'id4028073454_gos'],
+].map(([code, name, slug]) => [code!, { name: name!, url: `https://max.ru/${slug}` }]));
+
+export function publicChannelFor(groupCode: string | null | undefined): { name: string; url: string } | undefined {
+  return groupCode ? CHANNELS.get(groupCode) : undefined;
+}

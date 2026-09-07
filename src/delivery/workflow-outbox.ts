@@ -9,6 +9,7 @@ import { INCIDENT_INCLUDE } from '../incidents/incident.repository';
 import type { CompositeMessage, SendTarget } from '../max/max-message.service';
 import type { StoredAttachmentRecord } from '../media/attachment-loader';
 import { AppError } from '../utils/errors';
+import { publicChannelFor } from '../responsible-groups/public-channels';
 
 /** Only database writes: no MAX or file I/O may happen inside a business transaction.
  * Borrowed attachment references remain owned by the incident/answer retention policy.
@@ -44,20 +45,28 @@ function requiredChat(chatId: bigint | null | undefined): bigint {
 
 /** Persist the invitation with the rating, and release any pre-upgrade queued invitation. */
 export async function queueSubscriptionInvite(tx: Tx, incidentId: string): Promise<void> {
-  const incident = await tx.incident.findUniqueOrThrow({ where: { id: incidentId }, include: { requester: true } });
-  if (incident.responseRating === null) throw new Error('A subscription invitation requires a saved rating');
+  const incident = await tx.incident.findUniqueOrThrow({ where: { id: incidentId }, include: {
+    requester: true, assignedGroup: { select: { code: true } }, answers: { select: { deliveredAt: true } },
+  } });
+  if (incident.status !== 'RESOLVED' || incident.responseRating === null || !incident.answers.some(answer => answer.deliveredAt)) {
+    throw new Error('A subscription invitation requires a resolved incident, delivered answer and saved rating');
+  }
+  const channel = publicChannelFor(incident.assignedGroup?.code);
   const dedupeKey = `subscription-invite:${incidentId}`;
-  await queueMessage(tx, { userId: incident.requester.maxUserId }, {
-    text: 'Ответы на волнующие вас вопросы можно также узнать в этих каналах. Подпишитесь:',
+  const message: CompositeMessage = {
+    text: channel
+      ? 'Ответы на волнующие вас вопросы можно также узнать в этих каналах, в том числе на канале исполнителя вашего обращения. Подпишитесь:'
+      : 'Ответы на волнующие вас вопросы можно также узнать в этих каналах. Подпишитесь:',
     keyboard: [
       [{ type: 'link', text: 'Владислав Шапша', url: 'https://max.ru/Shapsha_VV' }],
       [{ type: 'link', text: 'Правительство Калужской области', url: 'https://max.ru/pravitelstvo40' }],
+      ...(channel ? [[{ type: 'link' as const, text: channel.name, url: channel.url }]] : []),
     ],
-    delivery: { dedupeKey },
-  }, incidentId);
+  };
+  await queueMessage(tx, { userId: incident.requester.maxUserId }, { ...message, delivery: { dedupeKey } }, incidentId);
   await tx.outboundMessage.updateMany({
     where: { dedupeKey, status: { in: ['PENDING', 'FAILED'] } },
-    data: { status: 'PENDING', nextAttemptAt: new Date(), attempts: 0, lastError: null, lockedAt: null },
+    data: { payload: message as unknown as Prisma.InputJsonValue, status: 'PENDING', nextAttemptAt: new Date(), attempts: 0, lastError: null, lockedAt: null },
   });
 }
 
