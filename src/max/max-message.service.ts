@@ -1,4 +1,5 @@
 import { AsyncActivity } from '../utils/async-activity';
+import { workingHours } from '../utils/work-calendar';
 import { isPhotoReference, photoReference, photoToken, isUnavailablePhoto } from '../media/max-photo-reference';
 import { ValidationError } from '../utils/errors';
 import { getConfig } from '../config';
@@ -376,6 +377,17 @@ export class MaxMessageService {
 
     try {
       if (payload.operation?.type === 'sla-reminder') {
+        if (!workingHours(new Date())) {
+          // Re-arm the stage for the next working sweep. Holding this job until
+          // morning would block unrelated cards/answers in the same chat.
+          const operation = payload.operation;
+          const field = operation.stage === 24 ? 'slaReminder24SentAt' : operation.stage === 48 ? 'slaWarn24SentAt' : 'overdueNotifiedAt';
+          await durable.prisma.$transaction(async tx => {
+            await tx.incident.updateMany({ where: { id: operation.incidentId }, data: { [field]: null } });
+            await tx.outboundMessage.delete({ where: { id: row.id } });
+          });
+          return { state: 'sent', trackingApplied: false };
+        }
         const incident = await durable.prisma.incident.findUnique({ where: { id: payload.operation.incidentId }, select: { slaPausedAt: true } });
         if (incident?.slaPausedAt) {
           await durable.prisma.outboundMessage.update({ where: { id: row.id }, data: {

@@ -9,16 +9,15 @@ import {
 } from '../../src/utils/datetime';
 
 describe('SLA arithmetic', () => {
-  it('sets the deadline exactly 72 hours after registration', () => {
+  it('sets a Sunday arrival deadline to Wednesday at 17:00 Moscow', () => {
     const createdAt = new Date('2026-08-23T15:42:00.000Z');
-    const deadline = computeDeadline(createdAt, 72);
-    expect(deadline.toISOString()).toBe('2026-08-26T15:42:00.000Z');
-    expect(deadline.getTime() - createdAt.getTime()).toBe(72 * 3_600_000);
+    const deadline = computeDeadline(createdAt, 3);
+    expect(deadline.toISOString()).toBe('2026-08-26T14:00:00.000Z');
   });
 
   it('is a pure function of createdAt, so recomputation cannot drift', () => {
     const createdAt = new Date('2026-08-23T15:42:00.000Z');
-    expect(computeDeadline(createdAt, 72).getTime()).toBe(computeDeadline(createdAt, 72).getTime());
+    expect(computeDeadline(createdAt, 3).getTime()).toBe(computeDeadline(createdAt, 3).getTime());
   });
 
   it('reports remaining hours for the warning thresholds', () => {

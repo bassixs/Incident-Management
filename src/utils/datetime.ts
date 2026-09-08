@@ -1,4 +1,4 @@
-import { addHours } from 'date-fns';
+import { incidentWorkday } from './work-calendar';
 import { formatInTimeZone, fromZonedTime, toZonedTime } from 'date-fns-tz';
 
 import { getConfig } from '../config';
@@ -62,8 +62,8 @@ export function endOfIsoDay(isoDay: string, timeZone?: string): Date {
  * SLA deadline. Deliberately a pure function of createdAt: nothing in the
  * workflow (revision, reassignment, AI) is allowed to recompute it later.
  */
-export function computeDeadline(createdAt: Date, slaHours: number): Date {
-  return addHours(createdAt, slaHours);
+export function computeDeadline(createdAt: Date, workdays: number): Date {
+  return incidentWorkday(createdAt, workdays).end;
 }
 
 export function hoursUntil(target: Date, now: Date = new Date()): number {

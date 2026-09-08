@@ -18,10 +18,11 @@ describeIntegration('parallel outbox with recipient ordering', () => {
 
   it('a slow chat does not block other recipients; all parts finish before the next message in that chat', async () => {
     const blocked = gate(); const entered = gate(); const sent: string[] = [];
+    let firstSlowPart = true;
     const long = 'А'.repeat(4000);
     await enqueue(long, 1n, 'chat'); await enqueue('chat-next', 1n, 'chat'); await enqueue('other', 2n, 'chat');
     const sendToChat = vi.fn(async (id: bigint, text: string) => {
-      if (id === 1n && !sent.length) { entered.resolve(); await blocked.promise; }
+      if (id === 1n && firstSlowPart) { firstSlowPart = false; entered.resolve(); await blocked.promise; }
       sent.push(text); return { body: { mid: `mid-${sent.length}` } };
     });
     const worker = new MaxMessageService({ sendToChat } as never, { prisma, storage: {} as never }, 2);

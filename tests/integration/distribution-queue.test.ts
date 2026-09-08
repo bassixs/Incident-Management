@@ -28,6 +28,7 @@ describeIntegration('persistent distribution queue', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     // DB defaults must be earlier than the fake clock so queued jobs are eligible.
     const tomorrow = new Date(Date.now() + 86_400_000);
+    while ([0, 6].includes(tomorrow.getUTCDay())) tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
     tomorrow.setUTCHours(9, 0, 0, 0);
     vi.setSystemTime(tomorrow);
     sends = [];
@@ -216,8 +217,8 @@ describeIntegration('persistent distribution queue', () => {
     await new DistributionQueueService(prisma, services.messages).sweep();
     await services.messages.flush();
     expect(sends.filter(s => s.text.includes('требует внимания'))).toHaveLength(1);
-    // Queue before closing time, deliver after 22:00 Moscow: nothing new is sent.
-    const evening = new Date(); evening.setUTCHours(18, 59, 0, 0); vi.setSystemTime(evening);
+    // Queue before closing time, deliver after 17:00 Moscow: nothing new is sent.
+    const evening = new Date(); evening.setUTCHours(13, 59, 0, 0); vi.setSystemTime(evening);
     await services.distributionQueue.sweep();
     advance(1);
     const count = sends.length;

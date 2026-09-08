@@ -1,3 +1,4 @@
+import { incidentWorkday } from '../../src/utils/work-calendar';
 import { AnswerStatus, IncidentStatus, UserRole, type PrismaClient } from '@prisma/client';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 
@@ -450,12 +451,12 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
 
   // --- §13 SLA -------------------------------------------------------------
 
-  it('sets the deadline to createdAt + 72h', async () => {
+  it('sets the deadline to closing time of the third workday', async () => {
     const incident = await harness.services.incidents.create({
       requester: requesterA(),
       text: 'Проверка срока',
     });
-    expect(incident.deadlineAt.getTime() - incident.createdAt.getTime()).toBe(72 * 3_600_000);
+    expect(incident.deadlineAt).toEqual(incidentWorkday(incident.createdAt, 3).end);
   });
 
   it('stores the selected municipality and locality independently from the topic', async () => {

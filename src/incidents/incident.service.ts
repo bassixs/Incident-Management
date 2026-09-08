@@ -208,7 +208,7 @@ export class IncidentService {
         problemLocality: input.problemLocality ?? null,
         status: IncidentStatus.DISTRIBUTION,
         createdAt: now,
-        deadlineAt: computeDeadline(now, config.INCIDENT_SLA_HOURS),
+        deadlineAt: computeDeadline(now, config.INCIDENT_SLA_WORKDAYS),
       });
 
       await this.history.record(

@@ -1,3 +1,4 @@
+import { incidentWorkday } from '../utils/work-calendar';
 import type { Incident, ResponsibleGroup, User } from '@prisma/client';
 
 import { getConfig } from '../config';
@@ -16,9 +17,8 @@ export function slaStage(incident: Incident, now: Date): SlaStage | undefined {
   if (incident.slaPausedAt) return undefined;
   if (incident.status === 'RESOLVED' || incident.status === 'REJECTED') return undefined;
   if (incident.deadlineAt <= now) return 'overdue';
-  const elapsed = (now.getTime() - incident.createdAt.getTime() - Number(incident.slaPausedMs ?? 0)) / 3_600_000;
-  if (elapsed >= 48) return 48;
-  if (elapsed >= 24) return 24;
+  if (now >= incidentWorkday(incident.createdAt, 3).start) return 48;
+  if (now >= incidentWorkday(incident.createdAt, 2).start) return 24;
   return undefined;
 }
 
@@ -30,7 +30,7 @@ export function slaNotification(incident: SlaIncident, stage: SlaStage): { targe
     target: { chatId },
     message: {
       text: [
-        stage === 'overdue' ? '🚨 ПРОСРОЧЕНО' : `⚠️ Напоминание: прошло ${stage === 24 ? '24 часа' : '48 часов'}`,
+        stage === 'overdue' ? '🚨 ПРОСРОЧЕНО' : `⚠️ Напоминание: ${stage === 24 ? 'второй' : 'третий'} рабочий день`,
         '',
         `№ ${incident.publicCode}`,
         stage === 'overdue' ? 'Срок ответа истёк. Обращение не закрыто.' : 'Обращение ещё не закрыто.',

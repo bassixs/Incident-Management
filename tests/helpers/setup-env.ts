@@ -25,7 +25,9 @@ process.env.DELIVERY_ALERT_CHAT_ID = '-1005';
 
 process.env.DAILY_INCIDENT_LIMIT = '2';
 process.env.INCIDENT_MAX_LENGTH = '150';
-process.env.INCIDENT_SLA_HOURS = '72';
+process.env.INCIDENT_SLA_WORKDAYS = '3';
+process.env.WORKDAY_START = '08:00';
+process.env.WORKDAY_END = '17:00';
 process.env.SLA_ENABLED = 'false';
 process.env.SESSION_TTL_MINUTES = '10';
 

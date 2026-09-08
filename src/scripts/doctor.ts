@@ -335,7 +335,7 @@ async function main(): Promise<void> {
     [
       'Проверка окружения Incident Management Bot',
       `NODE_ENV=${config.NODE_ENV}  BOT_MODE=${config.BOT_MODE}  TZ=${config.APP_TIMEZONE}`,
-      `Лимит/сутки: ${config.DAILY_INCIDENT_LIMIT}  Длина: ${config.INCIDENT_MAX_LENGTH}  SLA: ${config.INCIDENT_SLA_HOURS}ч`,
+      `Лимит/сутки: ${config.DAILY_INCIDENT_LIMIT}  Длина: ${config.INCIDENT_MAX_LENGTH}  SLA: ${config.INCIDENT_SLA_WORKDAYS} рабочих дня, ${config.WORKDAY_START}–${config.WORKDAY_END} МСК, пн–пт`,
       '',
     ].join('\n'),
   );

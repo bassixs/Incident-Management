@@ -1,7 +1,7 @@
 import { type Incident, IncidentStatus, Prisma, type PrismaClient } from '@prisma/client';
 
 import type { PrismaLike, Tx } from '../database/prisma';
-import { formatCounterDay } from '../utils/datetime';
+import { formatCounterDay, dayBoundaries } from '../utils/datetime';
 
 export const INCIDENT_INCLUDE = {
   requester: true,
@@ -119,7 +119,7 @@ export class IncidentRepository {
 
   /** Active incidents whose deadline needs an SLA decision. */
   async listActiveForSla(now: Date): Promise<Incident[]> {
-    const firstReminder = new Date(now.getTime() - 24 * 3_600_000);
+    const firstReminder = dayBoundaries(now, 'Europe/Moscow').start;
     return this.prisma.incident.findMany({
       where: {
         status: { notIn: [IncidentStatus.RESOLVED, IncidentStatus.REJECTED] },

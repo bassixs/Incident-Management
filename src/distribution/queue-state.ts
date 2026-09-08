@@ -1,3 +1,4 @@
+import { workingHours } from '../utils/work-calendar';
 import type { Incident, PrismaClient } from '@prisma/client';
 import type { AppConfig } from '../config';
 import type { Tx } from '../database/prisma';
@@ -42,14 +43,11 @@ export function queuePanelText(s: QueueSnapshot): string {
     `Самое старое ожидает: ${waitLabel(s.oldestMinutes)}`, '',
     '«Следующее обращение» — самое старое свободное. Закрепление за оператором на 15 минут.',
     'Обращение остаётся в очереди до распределения или отклонения.',
-    'Панель обновляется каждую минуту. Напоминания: ежедневно, 08:00–22:00 МСК.',
+    'Панель обновляется каждую минуту. Напоминания: пн–пт, 08:00–17:00 МСК.',
   ].join('\n');
 }
 
-/** Quiet hours affect distribution alerts only, not registration or the 72h SLA. */
-export function distributionAlertsAllowed(now: Date, config: Pick<AppConfig, 'DISTRIBUTION_WORK_START' | 'DISTRIBUTION_WORK_END'>): boolean {
-  const time = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
-  const start = config.DISTRIBUTION_WORK_START;
-  const end = config.DISTRIBUTION_WORK_END;
-  return start <= end ? time >= start && time < end : time >= start || time < end;
+/** Distribution summaries use the same work schedule as SLA reminders. */
+export function distributionAlertsAllowed(now: Date, config: Pick<AppConfig, 'WORKDAY_START' | 'WORKDAY_END'>): boolean {
+  return workingHours(now, config);
 }

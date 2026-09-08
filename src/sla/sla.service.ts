@@ -1,4 +1,5 @@
 import { AsyncActivity } from '../utils/async-activity';
+import { workingHours } from '../utils/work-calendar';
 import type { Incident, PrismaClient } from '@prisma/client';
 import { TRANSACTION_OPTIONS } from '../database/prisma';
 import { queueMessage } from '../delivery/workflow-outbox';
@@ -76,6 +77,14 @@ export class SlaService {
   private async sweepNow(now: Date): Promise<SlaSweepResult> {
     const result: SlaSweepResult = { checked: 0, warned24: 0, warned48: 0, overdue: 0, sessionsPurged: 0 };
     result.sessionsPurged = await this.sessions.purgeExpired();
+
+    // Expiration is visible in cards/reports immediately, even after closing.
+    // Only the notification waits until employees are working again.
+    await this.prisma.incident.updateMany({ where: {
+      status: { notIn: ['RESOLVED', 'REJECTED'] }, slaPausedAt: null,
+      deadlineAt: { lte: now }, isOverdue: false,
+    }, data: { isOverdue: true } });
+    if (!workingHours(now)) return result;
 
     const candidates = await this.repository.listActiveForSla(now);
     result.checked = candidates.length;

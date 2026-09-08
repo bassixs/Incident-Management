@@ -80,15 +80,15 @@ const envSchema = z
 
     DISTRIBUTION_CHAT_ID: optionalBigInt,
     DISTRIBUTION_QUEUE_ENABLED: boolean(true),
-    DISTRIBUTION_WORK_START: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default('08:00'),
-    DISTRIBUTION_WORK_END: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default('22:00'),
+    WORKDAY_START: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default('08:00'),
+    WORKDAY_END: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).default('17:00'),
     DISTRIBUTION_OVERLOAD_COUNT: int(30),
     REVIEW_CHAT_ID: optionalBigInt,
     DELIVERY_ALERT_CHAT_ID: optionalBigInt,
 
     DAILY_INCIDENT_LIMIT: int(3),
     INCIDENT_MAX_LENGTH: int(150),
-    INCIDENT_SLA_HOURS: int(72),
+    INCIDENT_SLA_WORKDAYS: int(3).pipe(z.number().min(1).max(30)),
     SLA_CHECK_INTERVAL_MINUTES: int(10),
     SLA_ENABLED: boolean(true),
     SESSION_TTL_MINUTES: int(10),
@@ -119,6 +119,9 @@ const envSchema = z
     RESPONDERS: bigIntList,
   })
   .superRefine((value, ctx) => {
+    if (value.WORKDAY_START >= value.WORKDAY_END) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['WORKDAY_END'], message: 'WORKDAY_END must be later than WORKDAY_START within the same day.' });
+    }
     if (value.BOT_MODE === 'polling' && value.NODE_ENV === 'production') {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
