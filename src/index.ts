@@ -1,4 +1,5 @@
 import { completeShutdown } from './server/shutdown';
+import { retireClarifications } from './maintenance/retire-clarifications';
 import type { FastifyInstance } from 'fastify';
 
 import { buildServices, type AppServices } from './app/container';
@@ -19,6 +20,7 @@ async function main(): Promise<void> {
   const prisma = await connectDatabase();
   const services: AppServices = buildServices(prisma);
 
+  await retireClarifications(prisma);
   registerHandlers(services);
   services.messages.start();
   services.deliveryAlerts.start();

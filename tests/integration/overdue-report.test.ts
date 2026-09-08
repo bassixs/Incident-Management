@@ -55,12 +55,12 @@ describeIntegration('Excel overdue worksheet', () => {
     const sheet = workbook.worksheets[1]!;
     expect(sheet.getCell(1, 1).value).toContain('05.09.2026 15:00');
     expect(sheet.getCell(2, 1).value).toContain('Всего: 7');
-    expect(sheet.getCell(3, 4).value).toBe('Просрочка, ч');
+    expect(sheet.getCell(3, 5).value).toBe('Просрочка, ч');
     expect(sheet.getRow(4).values).toEqual(expect.arrayContaining(['OLD-0', 24, 'Не назначена', 'Иванов Иван']));
     const codes = Array.from({ length: result.overdueRows }, (_, index) => sheet.getCell(index + 4, 1).value);
     expect(codes).toEqual(['OLD-0', 'OLD-1', 'OLD-2', 'OLD-3', 'OLD-4', 'OLD-5', 'EXACT-DEADLINE']);
-    for (const [index, status] of active.entries()) expect(sheet.getCell(index + 4, 5).value).toBe(describeStatus(status));
-    expect(sheet.getCell(10, 4).value).toBe(0);
+    for (const [index, status] of active.entries()) expect(sheet.getCell(index + 4, 6).value).toBe(describeStatus(status));
+    expect(sheet.getCell(10, 5).value).toBe(0);
     expect(sheet.views[0]).toMatchObject({ state: 'frozen', ySplit: 3 });
     expect(sheet.autoFilter).toBeTruthy();
   });
@@ -72,6 +72,24 @@ describeIntegration('Excel overdue worksheet', () => {
     await workbook.xlsx.load(result.buffer as never);
     expect(result.overdueRows).toBe(0);
     expect(workbook.worksheets[1]!.getCell(4, 1).value).toBe('Нерешённых обращений с истекшим сроком нет.');
+  });
+
+  it('shows the resident selected topic next to the overdue number and uses Иное on both sheets for no selection', async () => {
+    const category = await prisma.category.findFirstOrThrow({ where: { isActive: true } });
+    const selected = await create('TOPIC', IncidentStatus.ASSIGNED, new Date(NOW.getTime() - 2 * HOUR));
+    await prisma.incident.update({ where: { id: selected.id }, data: { userSelectedCategoryId: category.id } });
+    await create('OTHER', IncidentStatus.DISTRIBUTION, new Date(NOW.getTime() - HOUR));
+    const report = await h.services.reports.build({ ...TODAY, from: new Date(NOW.getTime() - 7 * 24 * HOUR) }, NOW);
+    const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(report.buffer as never);
+    const overdue = workbook.getWorksheet('Просроченные')!;
+    expect(overdue.getCell(3, 2).value).toBe('Тематика жителя');
+    expect(overdue.getCell(4, 2).value).toBe(category.name);
+    expect(overdue.getCell(5, 2).value).toBe('Иное');
+    expect(overdue.getColumn(5).numFmt).toBe('0.0');
+    const all = workbook.getWorksheet('Обращения')!;
+    expect(all.getCell(1, 7).value).toBe('Тематика жителя');
+    const topics = [all.getCell(2, 7).value, all.getCell(3, 7).value];
+    expect(topics).toEqual(expect.arrayContaining([category.name, 'Иное']));
   });
 
   it('sends a workbook when the period is empty but there is an older overdue incident', async () => {

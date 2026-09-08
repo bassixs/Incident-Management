@@ -15,7 +15,7 @@ describeIntegration('MAX photo references in persistent delivery', () => {
   afterAll(() => prisma.$disconnect());
   const storage = () => ({ save: vi.fn(), load: vi.fn(), remove: vi.fn() });
 
-  it('uses MAX for registration, assignment, clarification and answers, including replacement after final delivery fails', async () => {
+  it('uses MAX for registration, assignment and answers, including replacement after final delivery fails', async () => {
     const files = storage(); let counter = 0;
     const photoTokens: string[] = [];
     const send = async (target: string, _text: string, extra?: { attachments?: Array<{ type: string; payload?: { token?: string } }> }) => {
@@ -38,9 +38,6 @@ describeIntegration('MAX photo references in persistent delivery', () => {
     await messages.flush();
     const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { maxChatId: TEST_CHATS.sector } });
     await services.distribution.assign(incident.id, group.id, actor); await messages.flush();
-    const question = await services.clarifications.prepare(incident.id, actor, TEST_CHATS.sector, 'Пришлите фото поближе', 'question');
-    await services.clarifications.confirm(incident.id, question.id, actor, TEST_CHATS.sector);
-    await services.clarifications.reply(question.id, TEST_USERS.requesterA, 'Вот', [{ kind: 'IMAGE', token: 'clarification' }], 'reply');
     const { answer } = await services.answers.submit(incident.id, actor, 'Готово', [{ kind: 'IMAGE', token: 'answer-expired' }]);
     await messages.flush();
     await services.review.approve(incident.id, actor, answer.id); await messages.flush();
@@ -60,7 +57,7 @@ describeIntegration('MAX photo references in persistent delivery', () => {
     expect((await services.repository.findById(incident.id))?.status).toBe('WAITING_REVIEW');
     await services.review.approve(incident.id, actor, replacement.id); await messages.flush();
     expect((await prisma.incidentAnswer.findUniqueOrThrow({ where: { id: replacement.id } })).deliveredAt).not.toBeNull();
-    expect(photoTokens).toEqual(expect.arrayContaining(['resident', 'clarification', 'answer-expired', 'replacement']));
+    expect(photoTokens).toEqual(expect.arrayContaining(['resident', 'answer-expired', 'replacement']));
     const failedAttempts = photoTokens.filter(token => token === 'answer-expired').length;
     await prisma.outboundMessage.update({ where: { id: failed.id }, data: { status: 'PENDING', nextAttemptAt: new Date(0) } });
     await messages.flush();
@@ -100,7 +97,8 @@ describeIntegration('MAX photo references in persistent delivery', () => {
     await messages.flush();
     expect((await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).distributionMessageId).toBe('fallback-card');
     expect(sent).toHaveLength(1);
-    expect(sent[0]!.text).toContain('Запросите её повторно');
+    expect(sent[0]!.text).toContain('требуется проверка сотрудником');
+    expect(sent[0]!.text).not.toContain('Уточнить у жителя');
     expect(sent[0]!.extra).toMatchObject({ attachments: [{ type: 'inline_keyboard' }] });
     expect(await prisma.outboundMessage.count({ where: { status: 'FAILED', incidentId: incident.id } })).toBe(1);
     for (const fn of Object.values(files)) expect(fn).not.toHaveBeenCalled();

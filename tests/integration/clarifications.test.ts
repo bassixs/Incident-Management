@@ -1,250 +1,107 @@
-import { type PrismaClient, UserRole } from '@prisma/client';
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
-import { buildServices, type AppServices } from '../../src/app/container';
-import { MaxMessageService } from '../../src/max/max-message.service';
-import { slaStage } from '../../src/sla/sla-notification';
+import { UserRole, type PrismaClient } from '@prisma/client';
+import { afterAll, beforeAll, beforeEach, afterEach, expect, it, vi } from 'vitest';
+import { retireClarifications } from '../../src/maintenance/retire-clarifications';
+import * as outbox from '../../src/delivery/workflow-outbox';
 import { handleIncidentCallback } from '../../src/bot/callbacks/incident.callbacks';
 import { handleUserCallback } from '../../src/bot/callbacks/user.callbacks';
 import { handleOperatorMessage } from '../../src/bot/handlers/operator.handler';
 import { handleRequesterMessage } from '../../src/bot/handlers/requester.handler';
-import * as outbox from '../../src/delivery/workflow-outbox';
-import { actorFor, createTestPrisma, describeIntegration, pushSchemaOnce, resetDatabase, seedCategories, GROUP_CODES } from '../helpers/integration';
+import { sectorKeyboard, revisionKeyboard } from '../../src/bot/keyboards';
+import { MaxMessageService } from '../../src/max/max-message.service';
+import { actorFor, createHarness, createTestPrisma, describeIntegration, pushSchemaOnce, resetDatabase, seedCategories, type TestHarness } from '../helpers/integration';
 import { TEST_CHATS, TEST_USERS } from '../helpers/setup-env';
 
-describeIntegration('clarifications, requester routing and paused SLA', () => {
+describeIntegration('retired clarification workflow', () => {
   let prisma: PrismaClient;
-  let services: AppServices;
+  let h: TestHarness;
   let actor: Awaited<ReturnType<typeof actorFor>>;
-  let sends: Array<{ target: bigint; text: string; extra: any }>;
-  let failQuestion: boolean;
-  let media: { ingestAll: ReturnType<typeof vi.fn>; discard: ReturnType<typeof vi.fn>; load: (key: string) => Promise<Buffer> };
   beforeAll(() => { pushSchemaOnce(); prisma = createTestPrisma(); });
+  beforeEach(async () => { await resetDatabase(prisma); await seedCategories(prisma); h = await createHarness(prisma);
+    actor = await actorFor(prisma, TEST_USERS.admin, 'Администратор', [UserRole.ADMIN]); });
+  afterEach(() => vi.restoreAllMocks());
   afterAll(() => prisma.$disconnect());
-  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
-  beforeEach(async () => {
-    await resetDatabase(prisma);
-    await seedCategories(prisma);
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(Date.now() + 3_600_000);
-    sends = [];
-    failQuestion = false;
-    const max = {
-      sendToUser: async (target: bigint, text: string, extra: any) => {
-        if (failQuestion && text.includes('Вопрос специалиста:')) throw new Error('MAX unavailable');
-        sends.push({ target, text, extra }); return { body: { mid: `u-${sends.length}` } };
-      },
-      sendToChat: async (target: bigint, text: string, extra: any) => {
-        sends.push({ target, text, extra }); return { body: { mid: `c-${sends.length}` } };
-      },
-      editMessage: vi.fn(async () => undefined),
-      uploadImage: async () => ({ type: 'image', payload: { token: 'photo-token' } }),
-    };
-    const storage = { load: async () => Buffer.from('photo'), remove: vi.fn(async () => undefined) };
-    media = { ingestAll: vi.fn(async (prefix: string, items: any[]) => items.map((_, i) => ({
-      type: 'IMAGE', storageKey: `${prefix}/${i}.jpg`, originalName: 'photo.jpg', size: 5,
-    }))), discard: vi.fn(async () => undefined), load: storage.load };
-    const messages = new MaxMessageService(max as never, { prisma, storage: storage as never });
-    services = buildServices(prisma, { messages, storage: storage as never, media: media as never });
-    vi.spyOn(services.legal, 'hasCurrentAccess').mockResolvedValue(true);
-    actor = await actorFor(prisma, TEST_USERS.admin, 'Сотрудник', [UserRole.ADMIN]);
-  });
-
-  async function routed(userId = TEST_USERS.requesterA) {
-    const incident = await services.incidents.create({ requester: { maxUserId: userId, name: 'Иванов Иван', phone: '+79001112233' }, text: 'Не работает фонарь' });
-    await services.distribution.publishCard(incident.id);
-    const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: GROUP_CODES.facility } });
-    await services.distribution.assign(incident.id, group.id, actor);
-    return incident;
+  async function fixture() {
+    const incident = await h.services.incidents.create({ requester: { maxUserId: TEST_USERS.requesterA, name: 'Иван Иванов', phone: '+79001112233' }, text: 'Фонарь' });
+    const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { maxChatId: TEST_CHATS.sector } });
+    await h.services.distribution.assign(incident.id, group.id, actor);
+    const question = await prisma.clarification.create({ data: { incidentId: incident.id, question: 'Укажите дом', askedByUserId: actor.userId,
+      askedByMaxUserId: actor.maxUserId, chatId: TEST_CHATS.sector, questionSourceId: incident.id, status: 'WAITING_REPLY' } });
+    return { incident, question };
   }
-  async function ask(incidentId: string, source = 'question') {
-    const draft = await services.clarifications.prepare(incidentId, actor, TEST_CHATS.sector, 'Уточните адрес дома', source);
-    await services.clarifications.confirm(incidentId, draft.id, actor, TEST_CHATS.sector);
-    return draft;
-  }
-  const advance = (hours: number) => vi.setSystemTime(Date.now() + hours * 3_600_000);
-
-  it('previews without pausing, then cancels without contacting the requester', async () => {
-    const incident = await routed();
-    const draft = await services.clarifications.prepare(incident.id, actor, TEST_CHATS.sector, 'Какой дом?', 'preview');
-    expect((await services.repository.findById(incident.id))!.slaPausedAt).toBeNull();
-    expect(sends.some(item => item.text.includes('Вопрос специалиста:'))).toBe(false);
-    await services.clarifications.cancel(incident.id, draft.id, actor, TEST_CHATS.sector);
-    await expect(services.clarifications.confirm(incident.id, draft.id, actor, TEST_CHATS.sector)).rejects.toThrow('обработан');
-  });
-
-  it('pauses only after delivery, preserves 52 hours remaining and resumes reminders', async () => {
-    const incident = await routed();
-    advance(20);
-    failQuestion = true;
-    const draft = await ask(incident.id);
-    expect((await services.repository.findById(incident.id))!.slaPausedAt).toBeNull();
-    expect((await prisma.clarification.findUniqueOrThrow({ where: { id: draft.id } })).status).toBe('PENDING_DELIVERY');
-    failQuestion = false;
-    await prisma.outboundMessage.update({ where: { dedupeKey: `clarification-question:${draft.id}` }, data: { nextAttemptAt: new Date(0) } });
-    await services.messages.flush();
-    const paused = (await services.repository.findById(incident.id))!;
-    expect(paused.slaPausedAt?.getTime()).toBe(Date.now());
-    advance(100);
-    expect(slaStage(paused, new Date())).toBeUndefined();
-    expect((await services.sla.sweep()).overdue).toBe(0);
-    expect(await services.repository.listOverdueForReport(new Date())).toHaveLength(0);
-    await services.clarifications.reply(draft.id, TEST_USERS.requesterA, 'Дом 10', [], 'reply');
-    const resumed = (await services.repository.findById(incident.id))!;
-    expect(resumed.slaPausedAt).toBeNull();
-    expect(resumed.activeClarificationId).toBeNull();
-    expect(resumed.deadlineAt.getTime() - Date.now()).toBe(52 * 3_600_000);
-    expect(resumed.slaPausedMs).toBe(BigInt(100 * 3_600_000));
-    expect(slaStage(resumed, new Date())).toBeUndefined();
-    advance(4);
-    expect((await services.sla.sweep()).warned24).toBe(1);
-    const second = await ask(incident.id, 'question-2');
-    advance(2);
-    await services.clarifications.reply(second.id, TEST_USERS.requesterA, 'Рядом с подъездом', [], 'reply-2');
-    expect((await services.repository.findById(incident.id))!.slaPausedMs).toBe(BigInt(102 * 3_600_000));
-  });
-
-  it('binds the complete button/question/reply/photo flow to the right incident and card', async () => {
-    const incident = await routed();
-    const other = await routed(TEST_USERS.requesterB);
-    const staffContext = { services, actor, chatId: TEST_CHATS.sector };
-    await handleIncidentCallback(staffContext, { kind: 'incident', action: 'clarify', incidentId: incident.id });
-    const session = (await services.sessions.find(actor.maxUserId, TEST_CHATS.sector))!;
-    await handleOperatorMessage(services, actor, TEST_CHATS.sector, { body: { mid: 'staff-question', text: 'Укажите точный адрес', attachments: [] } } as never, session);
-    const draft = await prisma.clarification.findUniqueOrThrow({ where: { questionSourceId: 'staff-question' } });
-    await handleIncidentCallback(staffContext, { kind: 'incident', action: 'clarify-send', incidentId: incident.id, argument: draft.id });
-    const requester = await actorFor(prisma, TEST_USERS.requesterA, 'Иванов Иван', []);
-    await handleUserCallback({ services, actor: requester, chatId: requester.maxUserId, messageId: undefined, callbackId: 'reply-button' },
-      { kind: 'user', action: 'clarify-reply', argument: draft.id });
-    await handleRequesterMessage(services, requester, requester.maxUserId, { body: { mid: 'resident-reply', text: 'Улица Ленина, дом 10',
-      attachments: [{ type: 'image', payload: { url: 'https://example.test/photo' } }] } } as never);
-    const delivered = sends.filter(item => item.text.includes('Получено уточнение'));
-    expect(delivered).toHaveLength(1);
-    expect(delivered[0]!.target).toBe(TEST_CHATS.sector);
-    expect(delivered[0]!.text).toContain(incident.publicCode);
-    expect(delivered[0]!.text).not.toContain(other.publicCode);
-    expect(delivered[0]!.extra.link).toEqual({ type: 'reply', mid: (await services.repository.findById(incident.id))!.sectorMessageId });
-    expect(delivered[0]!.extra.attachments[0].type).toBe('image');
-    const buttons = delivered[0]!.extra.attachments.find((item: any) => item.type === 'inline_keyboard').payload.buttons.flat();
-    expect(buttons).toEqual(expect.arrayContaining([
-      expect.objectContaining({ text: 'Подготовить ответ', payload: `incident:answer:${incident.id}` }),
-      expect.objectContaining({ text: '💬 Уточнить у жителя', payload: `incident:clarify:${incident.id}` }),
-    ]));
-    expect(await prisma.clarificationAttachment.count({ where: { clarificationId: draft.id } })).toBe(1);
-    expect(await services.sessions.find(requester.maxUserId, requester.maxUserId)).toBeNull();
-    expect((await services.repository.findById(other.id))!.deadlineAt).toEqual(other.deadlineAt);
-    expect(await prisma.outboundMessage.count({ where: { dedupeKey: `subscription-invite:${incident.id}` } })).toBe(0);
-  });
-
-  it('photo-only clarification includes actions and lets staff prepare an answer from that message', async () => {
-    const incident = await routed();
-    const question = await ask(incident.id);
-    await services.clarifications.reply(question.id, TEST_USERS.requesterA, '', [{ kind: 'IMAGE', token: 'resident-photo' }], 'photo-only');
-    const message = sends.find(item => item.text.includes('Получено уточнение'))!;
-    expect(message.text).toContain('Приложены фотографии.');
-    expect(message.extra.attachments.some((item: any) => item.type === 'image')).toBe(true);
-    const keyboard = message.extra.attachments.find((item: any) => item.type === 'inline_keyboard').payload.buttons.flat();
-    const action = keyboard.find((item: any) => item.text === 'Подготовить ответ');
-    expect(action.payload).toBe(`incident:answer:${incident.id}`);
-    const sent = await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: `clarification-reply:${question.id}` } });
-    await handleIncidentCallback({ services, actor, chatId: TEST_CHATS.sector, messageId: sent.firstMessageId! },
-      { kind: 'incident', action: 'answer', incidentId: incident.id });
-    expect((await services.sessions.find(actor.maxUserId, TEST_CHATS.sector))?.incidentId).toBe(incident.id);
-  });
-
-  it('adds buttons to a legacy queued reply but omits them when the incident is already on review', async () => {
-    const incident = await routed();
-    const question = await ask(incident.id);
-    await services.clarifications.reply(question.id, TEST_USERS.requesterA, 'Дом 10', [], 'legacy-reply');
-    const row = await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: `clarification-reply:${question.id}` } });
-    const { keyboard: _keyboard, ...legacy } = row.payload as any;
-    await prisma.responsibleGroup.update({ where: { code: GROUP_CODES.facility }, data: { answerTemplate: 'Шаблон ответа' } });
-    await prisma.outboundMessage.update({ where: { id: row.id }, data: { payload: legacy, status: 'PENDING', nextAttemptAt: new Date(0) } });
-    await services.messages.flush();
-    let message = sends.filter(item => item.text.includes('Получено уточнение')).at(-1)!;
-    expect(message.extra.attachments.some((item: any) => item.type === 'inline_keyboard')).toBe(true);
-    expect(message.extra.attachments.find((item: any) => item.type === 'inline_keyboard').payload.buttons.flat())
-      .toContainEqual(expect.objectContaining({ text: 'Использовать шаблон', payload: `incident:template:${incident.id}` }));
-    await services.answers.submit(incident.id, actor, 'Работы выполнены', []);
-    await prisma.outboundMessage.update({ where: { id: row.id }, data: { status: 'PENDING', nextAttemptAt: new Date(0) } });
-    await services.messages.flush();
-    message = sends.filter(item => item.text.includes('Получено уточнение')).at(-1)!;
-    expect((message.extra?.attachments ?? []).some((item: any) => item.type === 'inline_keyboard')).toBe(false);
-  });
-
-  it('holds an already queued reminder during the pause without exhausting retries', async () => {
-    const incident = await routed();
-    advance(25);
-    const question = await ask(incident.id);
-    await prisma.$transaction(tx => outbox.queueMessage(tx, { chatId: TEST_CHATS.sector }, {
-      text: 'Reminder queued before the pause',
-      operation: { type: 'sla-reminder', incidentId: incident.id, stage: 24 },
-      delivery: { dedupeKey: 'held-reminder' },
-    }, incident.id));
-    for (let i = 0; i < 13; i += 1) {
-      advance(1);
-      await services.messages.flush();
+  it('removes the controls and makes every old question/reply button inert', async () => {
+    const { incident, question } = await fixture();
+    for (const keyboard of [sectorKeyboard(incident.id, { hasTemplate: true }), revisionKeyboard(incident.id)])
+      expect(JSON.stringify(keyboard)).not.toContain('clarify');
+    for (const action of ['clarify', 'clarify-send', 'clarify-cancel'] as const) {
+      expect(await handleIncidentCallback({ services: h.services, actor, chatId: TEST_CHATS.sector },
+        { kind: 'incident', incidentId: incident.id, action, argument: question.id })).toContain('больше не используются');
     }
-    const held = await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: 'held-reminder' } });
-    expect(held.status).toBe('PENDING');
-    expect(held.attempts).toBe(0);
-    expect(sends.some(item => item.text.includes('Напоминание:'))).toBe(false);
-    await services.clarifications.reply(question.id, TEST_USERS.requesterA, 'Дом 5', [], 'resume-held');
-    advance(1);
-    await services.messages.flush();
-    expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: 'held-reminder' } })).status).toBe('SENT');
-    expect(sends.filter(item => item.text.includes('Напоминание:'))).toHaveLength(1);
+    const requester = await actorFor(prisma, TEST_USERS.requesterA, 'Иван Иванов', []);
+    expect(await handleUserCallback({ services: h.services, actor: requester, chatId: requester.maxUserId, messageId: undefined, callbackId: 'old-reply' },
+      { kind: 'user', action: 'clarify-reply', argument: question.id })).toContain('больше не требуется');
+    expect(await prisma.operatorSession.count()).toBe(0);
+    expect(await prisma.clarification.count()).toBe(1);
   });
-
-  it('refuses a different chat, staff author or requester, and blocks final answers while waiting', async () => {
-    const incident = await routed();
-    await expect(services.clarifications.prepare(incident.id, actor, TEST_CHATS.otherSector, 'Адрес?', 'wrong-chat')).rejects.toThrow('профильном');
-    const draft = await services.clarifications.prepare(incident.id, actor, TEST_CHATS.sector, 'Адрес?', 'auth');
-    const colleague = await actorFor(prisma, TEST_USERS.responder, 'Коллега', [UserRole.RESPONDER]);
-    await expect(services.clarifications.confirm(incident.id, draft.id, colleague, TEST_CHATS.sector)).rejects.toThrow('автор');
-    await services.clarifications.confirm(incident.id, draft.id, actor, TEST_CHATS.sector);
-    await expect(services.clarifications.reply(draft.id, TEST_USERS.requesterB, 'Чужой ответ', [], 'wrong')).rejects.toThrow('недоступно');
-    await expect(services.answers.submit(incident.id, actor, 'Готово')).rejects.toThrow('уточнения');
-    await expect(services.clarifications.reply(draft.id, TEST_USERS.requesterA, 'Видео', [{ kind: 'VIDEO' }], 'video')).rejects.toThrow('не принимаются');
-    expect(media.ingestAll).not.toHaveBeenCalledWith(expect.anything(), [{ kind: 'VIDEO' }]);
-    const paused = await services.repository.findById(incident.id);
-    const uploadsBefore = media.ingestAll.mock.calls.length;
-    await expect(services.clarifications.reply(draft.id, TEST_USERS.requesterA, 'Уточнение',
-      [{ kind: 'IMAGE' }, { kind: 'FILE', filename: 'photo.jpg' }], 'file')).rejects.toThrow('не принимаются');
-    expect(media.ingestAll).toHaveBeenCalledTimes(uploadsBefore);
-    expect(await services.repository.findById(incident.id)).toMatchObject({
-      activeClarificationId: draft.id, slaPausedAt: paused!.slaPausedAt, deadlineAt: paused!.deadlineAt,
-    });
+  it('resumes remaining time once, preserves answered evidence and removes only unfinished questions and sessions', async () => {
+    const { incident, question } = await fixture();
+    const now = new Date('2026-09-08T12:00:00Z'); const hour = 3_600_000;
+    const deadline = new Date(now.getTime() + 10 * hour);
+    await prisma.incident.update({ where: { id: incident.id }, data: { deadlineAt: deadline, activeClarificationId: question.id,
+      slaPausedAt: new Date(now.getTime() - 2 * hour), slaPausedMs: 1000n } });
+    const answered = await prisma.clarification.create({ data: { incidentId: incident.id, question: 'Старый вопрос', replyText: 'Старый ответ',
+      askedByUserId: actor.userId, askedByMaxUserId: actor.maxUserId, chatId: TEST_CHATS.sector, questionSourceId: 'answered', status: 'ANSWERED' } });
+    await prisma.operatorSession.createMany({ data: [
+      { maxUserId: actor.maxUserId, chatId: TEST_CHATS.sector, incidentId: incident.id, type: 'WAITING_CLARIFICATION_QUESTION', expiresAt: now },
+      { maxUserId: TEST_USERS.requesterA, chatId: TEST_USERS.requesterA, incidentId: incident.id, type: 'WAITING_CLARIFICATION_REPLY', expiresAt: now },
+      { maxUserId: actor.maxUserId, chatId: -1005n, type: 'WAITING_REPORT_PERIOD', expiresAt: now },
+    ] });
+    await prisma.outboundMessage.createMany({ data: [
+      { targetType: 'user', targetId: TEST_USERS.requesterA, payload: {}, attachments: [], dedupeKey: `clarification-question:${question.id}` },
+      { targetType: 'chat', targetId: TEST_CHATS.sector, payload: {}, attachments: [], dedupeKey: `clarification-reply:${answered.id}` },
+    ] });
+    await retireClarifications(prisma, now);
+    const result = await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } });
+    expect(result).toMatchObject({ activeClarificationId: null, slaPausedAt: null, slaPausedMs: BigInt(2 * hour + 1000), deadlineAt: new Date(deadline.getTime() + 2 * hour) });
+    expect((await prisma.clarification.findUniqueOrThrow({ where: { id: question.id } })).status).toBe('CANCELLED');
+    expect(await prisma.clarification.findUniqueOrThrow({ where: { id: answered.id } })).toMatchObject({ status: 'ANSWERED', replyText: 'Старый ответ' });
+    expect(await prisma.operatorSession.findMany()).toEqual([expect.objectContaining({ type: 'WAITING_REPORT_PERIOD' })]);
+    expect(await prisma.outboundMessage.findUnique({ where: { dedupeKey: `clarification-question:${question.id}` } })).toBeNull();
+    expect(await prisma.outboundMessage.findUnique({ where: { dedupeKey: `clarification-reply:${answered.id}` } })).not.toBeNull();
+    await retireClarifications(prisma, new Date(now.getTime() + hour));
+    expect((await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).deadlineAt).toEqual(result.deadlineAt);
+    expect(await prisma.incidentHistory.count({ where: { action: 'CLARIFICATION_RETIRED' } })).toBe(1);
+    await expect(h.services.answers.submit(incident.id, actor, 'Ответ после отмены уточнения', [])).resolves.toBeDefined();
   });
-
-  it('allows one concurrent request and one reply without extending SLA twice', async () => {
-    const incident = await routed();
-    const first = await services.clarifications.prepare(incident.id, actor, TEST_CHATS.sector, 'Первый?', 'concurrent-1');
-    const second = await services.clarifications.prepare(incident.id, actor, TEST_CHATS.sector, 'Второй?', 'concurrent-2');
-    const results = await Promise.allSettled([services.clarifications.confirm(incident.id, first.id, actor, TEST_CHATS.sector), services.clarifications.confirm(incident.id, second.id, actor, TEST_CHATS.sector)]);
-    expect(results.filter(item => item.status === 'fulfilled')).toHaveLength(1);
-    const id = (await services.repository.findById(incident.id))!.activeClarificationId!;
-    advance(3);
-    const replies = await Promise.allSettled([services.clarifications.reply(id, TEST_USERS.requesterA, 'Дом 1', [], 'reply-1'), services.clarifications.reply(id, TEST_USERS.requesterA, 'Дом 2', [], 'reply-2')]);
-    expect(replies.filter(item => item.status === 'fulfilled')).toHaveLength(1);
-    expect((await services.repository.findById(incident.id))!.deadlineAt.getTime()).toBe(incident.deadlineAt.getTime() + 3 * 3_600_000);
-    expect(sends.filter(item => item.text.includes('Получено уточнение'))).toHaveLength(1);
+  it('rolls back all retirement changes if queueing the refreshed cards fails', async () => {
+    const { incident, question } = await fixture();
+    await prisma.incident.update({ where: { id: incident.id }, data: { activeClarificationId: question.id, slaPausedAt: new Date() } });
+    vi.spyOn(outbox, 'queueSectorRefresh').mockRejectedValue(new Error('refresh unavailable'));
+    await expect(retireClarifications(prisma)).rejects.toThrow('refresh unavailable');
+    expect((await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).activeClarificationId).toBe(question.id);
+    expect((await prisma.clarification.findUniqueOrThrow({ where: { id: question.id } })).status).toBe('WAITING_REPLY');
   });
-
-  it('rolls back confirmation and reply with their queues and retains the pause on media failure', async () => {
-    const incident = await routed();
-    const draft = await services.clarifications.prepare(incident.id, actor, TEST_CHATS.sector, 'Адрес?', 'rollback');
-    vi.spyOn(outbox, 'queueMessage').mockRejectedValueOnce(new Error('queue unavailable'));
-    await expect(services.clarifications.confirm(incident.id, draft.id, actor, TEST_CHATS.sector)).rejects.toThrow('queue unavailable');
-    expect((await services.repository.findById(incident.id))!.activeClarificationId).toBeNull();
-    await services.clarifications.confirm(incident.id, draft.id, actor, TEST_CHATS.sector);
-    media.ingestAll.mockRejectedValueOnce(new Error('download failed'));
-    await expect(services.clarifications.reply(draft.id, TEST_USERS.requesterA, '', [{ kind: 'IMAGE' }], 'media-fail')).rejects.toThrow('download failed');
-    vi.spyOn(outbox, 'queueMessage').mockRejectedValueOnce(new Error('reply queue unavailable'));
-    await expect(services.clarifications.reply(draft.id, TEST_USERS.requesterA, 'Дом 5', [], 'failed-reply')).rejects.toThrow('reply queue unavailable');
-    expect((await services.repository.findById(incident.id))!.slaPausedAt).not.toBeNull();
-    expect((await prisma.clarification.findUniqueOrThrow({ where: { id: draft.id } })).status).toBe('WAITING_REPLY');
-    await services.clarifications.reply(draft.id, TEST_USERS.requesterA, 'Дом 5', [], 'retry');
-    await services.clarifications.reply(draft.id, TEST_USERS.requesterA, 'Дом 5', [], 'retry');
-    expect(sends.filter(item => item.text.includes('Получено уточнение'))).toHaveLength(1);
+  it('does not deliver an obsolete queued question even if it appears after retirement', async () => {
+    const { incident, question } = await fixture();
+    const max = { sendToUser: vi.fn(), sendToChat: vi.fn() };
+    const messages = new MaxMessageService(max as never, { prisma, storage: { load: vi.fn(), remove: vi.fn() } as never });
+    await prisma.outboundMessage.create({ data: { targetType: 'user', targetId: TEST_USERS.requesterA, payload: {
+      text: 'Старый вопрос', operation: { type: 'clarification-question', incidentId: incident.id, clarificationId: question.id },
+    }, attachments: [], dedupeKey: 'obsolete-question' } });
+    await messages.flush();
+    expect(JSON.stringify(max.sendToUser.mock.calls, (_key, value) => typeof value === 'bigint' ? value.toString() : value)).not.toContain('Старый вопрос');
+    expect(await prisma.outboundMessage.findUnique({ where: { dedupeKey: 'obsolete-question' } })).toBeNull();
+    expect((await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).slaPausedAt).toBeNull();
+  });
+  it('clears legacy input sessions without saving a question or reply', async () => {
+    const { incident } = await fixture();
+    const session = await prisma.operatorSession.create({ data: { maxUserId: actor.maxUserId, chatId: TEST_CHATS.sector,
+      incidentId: incident.id, type: 'WAITING_CLARIFICATION_QUESTION', expiresAt: new Date(Date.now() + 60_000) } });
+    await handleOperatorMessage(h.services, actor, TEST_CHATS.sector, { body: { text: 'Новый вопрос', mid: 'legacy' } } as never, session);
+    const requester = await actorFor(prisma, TEST_USERS.requesterA, 'Иван Иванов', []);
+    await h.services.sessions.start({ maxUserId: requester.maxUserId, chatId: requester.maxUserId, incidentId: incident.id, type: 'WAITING_CLARIFICATION_REPLY' });
+    await handleRequesterMessage(h.services, requester, requester.maxUserId, { body: { text: 'Новый ответ', mid: 'reply' } } as never);
+    expect(await prisma.operatorSession.count()).toBe(0);
+    expect(await prisma.clarification.count()).toBe(1);
+    expect(h.messages.toUser(requester.maxUserId).at(-1)!.message.text).toContain('больше не требуется');
   });
 });

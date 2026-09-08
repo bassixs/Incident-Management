@@ -34,7 +34,7 @@ describe('requester-facing copy', () => {
     expect(rules).toContain('действующий номер телефона');
     expect(rules).toContain('Поделиться контактом');
     expect(rules).toContain('следующих обращений');
-    expect(rules).toContain('Если не уверены, нажмите «Не знаю»');
+    expect(rules).toContain('Если не уверены, нажмите «Иное»');
     expect(rules).toContain('Любое поле и фотографии можно исправить');
     expect(rules).toContain('Только после этого обращение будет зарегистрировано');
     expect(rules).toContain('итоговый ответ придёт в этот личный чат');

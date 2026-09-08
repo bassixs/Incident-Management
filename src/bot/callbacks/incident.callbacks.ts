@@ -61,22 +61,10 @@ export async function handleIncidentCallback(
       if (context.messageId) await services.messages.finalizeCard(context.messageId, `${incident.publicCode}: ответ возвращён на доработку. Прикрепите фотографии заново.`);
       return 'Ответ возвращён на доработку';
     }
-    case 'clarify': {
-      await services.clarifications.assertCanAsk(incident.id, actor, chatId);
-      if (!(await ensureFreeSession(services, actor, chatId, incident.id))) return undefined;
-      await services.sessions.start({ maxUserId: actor.maxUserId, chatId, incidentId: incident.id, type: 'WAITING_CLARIFICATION_QUESTION' });
-      await services.messages.send({ chatId }, { text: `💬 ${incident.publicCode}\n\nНапишите вопрос жителю одним сообщением (до 1500 символов). Перед отправкой вы сможете проверить его. Для отмены — /cancel.` });
-      return undefined;
-    }
+    case 'clarify':
     case 'clarify-send':
-    case 'clarify-cancel': {
-      if (!payload.argument || !isUuid(payload.argument)) throw new ConflictError('Кнопка уточнения устарела.');
-      if (payload.action === 'clarify-send') await services.clarifications.confirm(incident.id, payload.argument, actor, chatId);
-      else await services.clarifications.cancel(incident.id, payload.argument, actor, chatId);
-      if (context.messageId) await services.messages.finalizeCard(context.messageId,
-        payload.action === 'clarify-send' ? `💬 ${incident.publicCode}: вопрос принят к отправке жителю.` : 'Вопрос отменён.');
-      return payload.action === 'clarify-send' ? 'Вопрос принят к отправке' : 'Вопрос отменён';
-    }
+    case 'clarify-cancel':
+      return 'Запросы уточнений у жителей больше не используются. Продолжите работу с карточкой обращения.';
     case 'assign':
       return startAssignment(services, actor, chatId, incident);
 

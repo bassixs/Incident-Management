@@ -20,6 +20,7 @@ const ACTION_LABELS: Record<string, string> = {
   CLARIFICATION_REQUESTED: 'Запрошены сведения у жителя',
   CLARIFICATION_DELIVERED: 'Вопрос доставлен, срок приостановлен',
   CLARIFICATION_RECEIVED: 'Получено уточнение, срок возобновлён',
+  CLARIFICATION_RETIRED: 'Запрос уточнения отменён при изменении порядка работы, срок возобновлён',
   ANSWER_RATED: 'Заявитель оценил ответ',
   INCIDENT_REJECTED: 'Обращение отклонено',
   USER_BANNED: 'Автор обращения заблокирован',

@@ -70,7 +70,6 @@ const CONSENT_GATED_ACTIONS = new Set([
   'draft-edit',
   'draft-field',
   'draft-photo',
-  'clarify-reply',
 ]);
 
 /** Requester-side buttons (§53, §7, §54, §55). Never touches other people's data. */
@@ -96,19 +95,8 @@ export async function handleUserCallback(
   }
 
   switch (payload.action) {
-    case 'clarify-reply': {
-      if (!payload.argument || !isUuid(payload.argument)) throw new ValidationError('Кнопка уточнения устарела.');
-      const question = await services.clarifications.requireReply(payload.argument, actor.maxUserId);
-      const chatId = context.chatId ?? actor.maxUserId;
-      const existing = await services.sessions.find(actor.maxUserId, chatId);
-      if (existing && (existing.type !== 'WAITING_CLARIFICATION_REPLY' || services.sessions.readData(existing).clarificationId !== question.id)) {
-        throw new ValidationError('Сначала завершите текущее действие или отмените его командой /cancel, затем снова нажмите «Ответить на уточнение».');
-      }
-      await services.sessions.start({ maxUserId: actor.maxUserId, chatId, incidentId: question.incidentId,
-        type: 'WAITING_CLARIFICATION_REPLY', data: { clarificationId: question.id } });
-      await services.messages.send(target, { text: `${question.incident.publicCode}\n\n${question.question}\n\nОтправьте уточнение одним сообщением: текст (до 3000 символов) или до 4 фотографий. Для отмены ввода — /cancel.` });
-      return undefined;
-    }
+    case 'clarify-reply':
+      return 'Ответ на уточнение больше не требуется. Статус обращения доступен в разделе «Мои обращения».';
     case 'menu': {
       await services.messages.send(target, { text: greetingText(), keyboard: mainMenuKeyboard() });
       return undefined;

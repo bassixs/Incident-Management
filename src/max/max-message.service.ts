@@ -25,7 +25,6 @@ import { INCIDENT_INCLUDE } from '../incidents/incident.repository';
 import { distributionResolvedNotice, distributionWorkedNotice, sectorCard } from '../bot/views/cards';
 import { queueDistributionRefresh } from '../delivery/workflow-outbox';
 import { sectorKeyboard } from '../bot/keyboards';
-import { activateClarification } from '../clarifications/clarification-delivery';
 import { slaNotification, slaStage, type SlaStage } from '../sla/sla-notification';
 import { incidentCallback } from './callback-payload';
 
@@ -361,6 +360,13 @@ export class MaxMessageService {
     const row = await durable.prisma.outboundMessage.findUniqueOrThrow({ where: { id } });
     const payload = row.payload as unknown as StoredPayload;
     const staged = row.attachments as unknown as StagedAttachment[];
+    // Retired questions from older releases must never reach a resident.
+    if (payload.operation?.type === 'clarification-question' || row.dedupeKey?.startsWith('clarification-preview:')) {
+      await durable.prisma.outboundMessage.delete({ where: { id: row.id } });
+      return { state: 'sent', trackingApplied: false };
+    }
+    if (payload.keyboard) payload.keyboard = payload.keyboard.map(buttons => buttons.filter(button =>
+      button.type !== 'callback' || !/:clarify(?:-|:)/.test(button.payload))).filter(buttons => buttons.length);
 
     if (payload.operation?.type === 'superseded-answer') {
       await durable.prisma.outboundMessage.update({ where: { id }, data: { status: OutboxStatus.FAILED, lockedAt: null,
@@ -437,7 +443,7 @@ export class MaxMessageService {
       const unavailablePhoto = staged.some(item => isPhotoReference(item.storageKey)) && isUnavailablePhoto(error);
       const terminal = unavailablePhoto || row.attempts >= OUTBOX_MAX_ATTEMPTS;
       const detail = unavailablePhoto
-        ? 'Фотография недоступна в MAX. Запросите её повторно у автора через уточнение. Полное сообщение не доставлено.'
+        ? 'Фотография недоступна в MAX. Полное сообщение не доставлено; требуется проверка сотрудником.'
         : error instanceof Error ? error.message : String(error);
       if (unavailablePhoto) await this.queuePhotoRecovery(row, payload);
       await durable.prisma.outboundMessage.update({
@@ -476,9 +482,6 @@ export class MaxMessageService {
       if (operation?.type === 'distribution-panel' && firstMessageId) {
         const key = panelSettingKey(row.targetId);
         await tx.systemSetting.upsert({ where: { key }, create: { key, value: firstMessageId }, update: { value: firstMessageId } });
-      }
-      if (operation?.type === 'clarification-question') {
-        await activateClarification(tx, operation.incidentId, operation.clarificationId);
       }
       if (row.incidentId && firstMessageId && row.dedupeKey?.startsWith('distribution-claim:')) {
         // The assignment may have happened while MAX was delivering this copy.
@@ -864,7 +867,7 @@ export class MaxMessageService {
   private async queuePhotoRecovery(row: OutboundMessage, payload: StoredPayload): Promise<void> {
     const card = row.trackingType === 'DISTRIBUTION_CARD' || row.trackingType === 'SECTOR_CARD';
     const notice = row.targetType === 'chat'
-      ? '⚠️ Фотография недоступна в MAX. Запросите её повторно у автора. Для фотографии жителя используйте «Уточнить у жителя» в профильном чате.'
+      ? '⚠️ Фотография недоступна в MAX. Для ответа сотрудника подготовьте новую версию с доступными вложениями. По фотографии жителя требуется проверка сотрудником.'
       : '⚠️ Фотография к этому сообщению недоступна в MAX. Специалисты уведомлены: требуется повторная отправка фотографии. Полный ответ пока не доставлен.';
     const text = row.targetType === 'user' ? `${payload.label ?? 'Сообщение по вашему обращению'}\n\n${notice}` : `${payload.text}\n\n${notice}`;
     await this.durable!.prisma.outboundMessage.createMany({ skipDuplicates: true, data: [{

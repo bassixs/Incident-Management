@@ -63,7 +63,7 @@ export function distributionCard(incident: IncidentWithRelations): string {
     incident.requesterPhone ?? 'не указан',
     '',
     'Сфера пользователя:',
-    incident.userSelectedCategory?.name ?? 'Не знаю',
+    incident.userSelectedCategory?.name ?? 'Иное',
     '',
     'Территория проблемы:',
     problemLocationText(incident),
@@ -106,7 +106,7 @@ export function distributionResolvedNotice(
 export function sectorCard(incident: IncidentWithRelations, group: ResponsibleGroup): string {
   const photoCount = incident.attachments.filter((item) => item.type === 'IMAGE').length;
   return [
-    incident.slaPausedAt ? '⏸️ ОЖИДАЕМ УТОЧНЕНИЕ ОТ ЖИТЕЛЯ' : incident.activeClarificationId ? '💬 ВОПРОС ЖИТЕЛЮ ОЖИДАЕТ ДОСТАВКИ' : '📥 НОВОЕ ОБРАЩЕНИЕ',
+    '📥 НОВОЕ ОБРАЩЕНИЕ',
     '',
     codeLabel(incident),
     '',
@@ -320,7 +320,7 @@ export function rulesText(): string {
     '1. Перед первым обращением ознакомьтесь с документами и подтвердите согласие.',
     '2. При первом обращении укажите фамилию, имя и действующий номер телефона — это обязательные поля.',
     '   Номер можно ввести вручную или передать кнопкой «Поделиться контактом» в MAX.',
-    '3. Выберите сферу. Если не уверены, нажмите «Не знаю».',
+    '3. Выберите сферу. Если не уверены, нажмите «Иное».',
     '4. Укажите город или округ, где возникла проблема, и при необходимости населённый пункт.',
     `5. Опишите одну проблему понятным текстом — не более ${config.INCIDENT_MAX_LENGTH} символов. Укажите адрес (улицу, номер дома) или точное место, если адреса нет.`,
     '6. При необходимости приложите фотографии из галереи. Документы и изображения, отправленные как файл, не принимаются.',
@@ -384,7 +384,7 @@ export function incidentDraftPreview(draft: IncidentDraftView, categoryName?: st
     draft.requesterPhone,
     '',
     'Сфера обращения:',
-    categoryName ?? 'Не знаю',
+    categoryName ?? 'Иное',
     '',
     'Территория проблемы:',
     draft.problemLocality
@@ -506,7 +506,7 @@ export function requesterPhonePromptText(): string {
 export function categoryPromptText(total: number): string {
   return [
     'Шаг 3. Выберите сферу обращения.',
-    'Если вы не уверены — нажмите «Не знаю», сферу определит специалист.',
+    'Если вы не уверены — нажмите «Иное», сферу определит специалист.',
     ...(total > 0 ? ['', `Всего сфер: ${total}. Листайте стрелками.`] : []),
   ].join('\n');
 }
@@ -564,7 +564,7 @@ export function myIncidentsText(incidents: Incident[]): string {
     ...incidents.flatMap((incident) => [
       incident.publicCode,
       // Overdue is an internal SLA signal for staff, not a requester-facing status.
-      incident.activeClarificationId ? 'Требуется ваше уточнение — откройте вопрос специалиста выше' : describeStatus(incident.status, false),
+      describeStatus(incident.status, false),
       '',
     ]),
   ]

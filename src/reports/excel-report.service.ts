@@ -32,9 +32,9 @@ const COLUMNS: Column[] = [
     value: (incident) => incident.responseRating ?? '',
   },
   {
-    header: 'Категория пользователя',
+    header: 'Тематика жителя',
     width: 24,
-    value: (incident) => incident.userSelectedCategory?.name ?? 'Не знаю',
+    value: (incident) => incident.userSelectedCategory?.name ?? 'Иное',
   },
   {
     header: 'Округ или город проблемы',
@@ -96,6 +96,7 @@ function finalAnswerText(incident: IncidentWithRelations): string {
 function overdueColumns(now: Date): Column[] {
   return [
     { header: 'Уникальный номер', width: 24, value: incident => incident.publicCode },
+    { header: 'Тематика жителя', width: 28, value: incident => incident.userSelectedCategory?.name ?? 'Иное' },
     { header: 'Дата обращения', width: 21, value: incident => formatDateTime(incident.createdAt) },
     { header: 'Дедлайн', width: 21, value: incident => formatDateTime(incident.deadlineAt) },
     { header: 'Просрочка, ч', width: 16, value: incident =>
@@ -104,7 +105,6 @@ function overdueColumns(now: Date): Column[] {
     { header: 'Ответственная группа', width: 36, value: incident => incident.assignedGroup?.name ?? 'Не назначена' },
     { header: 'Ответственный', width: 28, value: incident => incident.currentResponder?.displayName ?? 'Не назначен' },
     { header: 'Обращение', width: 60, value: incident => incident.text },
-    { header: 'Категория пользователя', width: 24, value: incident => incident.userSelectedCategory?.name ?? 'Не знаю' },
     { header: 'Округ или город проблемы', width: 30, value: incident => incident.problemMunicipalityName ?? '' },
     { header: 'Населённый пункт', width: 24, value: incident => incident.problemLocality ?? '' },
     { header: 'Пользователь', width: 28, value: incident => incident.requesterName },
@@ -150,7 +150,7 @@ export class ExcelReportService {
     sheet.mergeCells(2, 1, 2, columns.length);
     sheet.getCell(2, 1).value = `Все текущие просроченные обращения независимо от выбранного периода. Всего: ${overdue.length}.`;
     sheet.getRow(2).height = 22;
-    sheet.getColumn(4).numFmt = '0.0';
+    sheet.getColumn(5).numFmt = '0.0';
     if (overdue.length === 0) {
       sheet.mergeCells(4, 1, 4, columns.length);
       sheet.getCell(4, 1).value = 'Нерешённых обращений с истекшим сроком нет.';

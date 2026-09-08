@@ -1,7 +1,6 @@
 import { Bot } from '@maxhub/max-bot-api';
 import type { PrismaClient } from '@prisma/client';
 
-import { ClarificationService } from '../clarifications/clarification.service';
 import { AnswerService } from '../answers/answer.service';
 import { AdminAuditService } from '../audit/admin-audit.service';
 import { ActionGuardService } from '../actions/action-guard.service';
@@ -69,7 +68,6 @@ export type AppServices = {
   sector: SectorService;
   review: ReviewService;
   answers: AnswerService;
-  clarifications: ClarificationService;
   delivery: RequesterDeliveryService;
   deliveryAlerts: DeliveryAlertService;
   deliveryProblems: DeliveryProblemService;
@@ -155,7 +153,6 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
   );
   const answers = new AnswerService(prisma, repository, history, state, media, review, distribution);
 
-  const clarifications = new ClarificationService(prisma, repository, messages, media);
   const distributionQueue = new DistributionQueueService(prisma, messages);
   const sla = new SlaService(prisma, repository, history, messages, sessions);
   const reports = new ExcelReportService(repository);
@@ -187,7 +184,6 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
     distributionQueue,
     review,
     answers,
-    clarifications,
     delivery,
     deliveryAlerts,
     deliveryProblems,

@@ -32,7 +32,7 @@ export async function sendChatGuide(services: AppServices, actor: ResolvedActor,
     const chat = await workingChatFor(services, chatId!);
     if (!chat) throw new ForbiddenError('Этот чат больше не настроен как рабочий.');
     if (chat.distribution) guides.push({ name: 'distribution', title: 'Распределение обращений' });
-    if (chat.groups.some(group => !group.bypassReview)) guides.push({ name: 'profile', title: 'Профильный чат: подготовка ответа и уточнения' });
+    if (chat.groups.some(group => !group.bypassReview)) guides.push({ name: 'profile', title: 'Профильный чат: подготовка ответа' });
     if (chat.groups.some(group => group.bypassReview)) guides.push({ name: 'profile-direct', title: 'Профильный чат: ответы без согласования' });
     if (chat.review) guides.push({ name: 'review', title: 'Согласование ответов' });
     if (chat.delivery) guides.push({ name: 'analytics', title: 'Аналитика: отчёты и проблемы доставки' });

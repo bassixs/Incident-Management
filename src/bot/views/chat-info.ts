@@ -40,7 +40,7 @@ export async function chatInfoText(services: AppServices, actor: ResolvedActor, 
       : chat.groups.some(group => group.bypassReview)
         ? 'Порядок отправки зависит от организации: напрямую или после согласования. Бот сообщит результат.'
         : 'Бот передаст ответ на согласование. При возврате исправьте его по замечаниям.',
-    `Не хватает сведений? Нажмите «Уточнить у жителя». Пока ждём его ответ, срок приостановлен. Обычный срок — ${services.config.INCIDENT_SLA_HOURS} ч.`,
+    `Срок работы с обращением — ${services.config.INCIDENT_SLA_HOURS} ч. Дедлайн указан в карточке.`,
   ].join('\n'));
   if (chat.review) sections.push([
     'Согласование ответов',

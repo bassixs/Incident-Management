@@ -62,9 +62,14 @@ export async function handleRequesterMessage(
     return;
   }
 
+  if (session.type === SessionType.WAITING_CLARIFICATION_REPLY) {
+    await services.prisma.operatorSession.deleteMany({ where: { id: session.id } });
+    await services.messages.send(target, { text: 'Ответ на уточнение больше не требуется. Статус обращения доступен в разделе «Мои обращения».', keyboard: mainMenuKeyboard() });
+    return;
+  }
+
   if (
-    (session.type === SessionType.WAITING_CLARIFICATION_REPLY ||
-      session.type === SessionType.WAITING_REQUESTER_NAME ||
+    (session.type === SessionType.WAITING_REQUESTER_NAME ||
       session.type === SessionType.WAITING_REQUESTER_PHONE ||
       session.type === SessionType.WAITING_INCIDENT_SELECTION ||
       session.type === SessionType.WAITING_CUSTOM_LOCALITY ||
@@ -89,17 +94,6 @@ export async function handleRequesterMessage(
   const media = classifyAttachments(message.body.attachments);
   const text = message.body.text ?? '';
 
-  if (session.type === SessionType.WAITING_CLARIFICATION_REPLY) {
-    try {
-      if (typeof data.clarificationId !== 'string') throw new ValidationError('Нажмите «Ответить на уточнение» в сообщении с вопросом.');
-      await services.clarifications.reply(data.clarificationId, actor.maxUserId, text, media, message.body.mid, session.id);
-    } catch (error) {
-      await reportActionError(error, () => services.messages.send(target, {
-        text: error instanceof AppError ? error.message : 'Не удалось сохранить уточнение. Попробуйте снова.',
-      }));
-    }
-    return;
-  }
 
   if (
     session.type === SessionType.WAITING_INCIDENT_CONFIRMATION ||

@@ -87,7 +87,7 @@ export function categoryPageCount(total: number): number {
  * Paged сфера picker (§7).
  *
  * With two dozen сферы a single list is a long scroll on a phone, so the page
- * shows a handful at a time with arrows. "Не знаю" stays pinned on top: it is
+ * shows a handful at a time with arrows. "Иное" stays pinned on top: it is
  * the honest answer for most people and the shortest path, and the choice is
  * only a hint for the dispatcher anyway.
  */
@@ -97,7 +97,7 @@ export function requesterCategoryKeyboard(categories: Category[], page = 0): But
   const slice = categories.slice(current * CATEGORY_PAGE_SIZE, (current + 1) * CATEGORY_PAGE_SIZE);
 
   const rows: Button[][] = [
-    [button.callback('Не знаю', userCallback('category', 'none'))],
+    [button.callback('Иное', userCallback('category', 'none'))],
     ...slice.map((category) => [button.callback(category.name, userCallback('category', category.id))]),
   ];
 
@@ -328,7 +328,6 @@ export function sectorKeyboard(incidentId: string, options: { hasTemplate: boole
   const rows: Button[][] = [
     [button.callback('Взять в работу', incidentCallback('take', incidentId), { intent: 'positive' })],
     [button.callback('Подготовить ответ', incidentCallback('answer', incidentId))],
-    [button.callback('💬 Уточнить у жителя', incidentCallback('clarify', incidentId))],
   ];
   if (options.hasTemplate) {
     rows.push([button.callback('Использовать шаблон', incidentCallback('template', incidentId))]);
@@ -346,8 +345,7 @@ export function reviewKeyboard(incidentId: string, answerId: string): Button[][]
 
 /** Button under the "returned for revision" card in the sector chat (§32). */
 export function revisionKeyboard(incidentId: string): Button[][] {
-  return [[button.callback('Исправить ответ', incidentCallback('fix', incidentId), { intent: 'positive' })],
-    [button.callback('💬 Уточнить у жителя', incidentCallback('clarify', incidentId))]];
+  return [[button.callback('Исправить ответ', incidentCallback('fix', incidentId), { intent: 'positive' })]];
 }
 
 /** Period picker shown by a bare `/report` (§40). */
