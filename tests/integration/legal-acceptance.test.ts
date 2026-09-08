@@ -18,6 +18,7 @@ import {
   resetDatabase,
 } from '../helpers/integration';
 import { TEST_USERS } from '../helpers/setup-env';
+import { parseCallbackPayload } from '../../src/max/callback-payload';
 
 describeIntegration('explicit legal acceptance (PostgreSQL)', () => {
   let prisma: PrismaClient;
@@ -51,6 +52,53 @@ describeIntegration('explicit legal acceptance (PostgreSQL)', () => {
 
   beforeEach(async () => {
     await resetDatabase(prisma);
+  });
+
+  it('starts the profile after exactly two explicit confirmations from the first screen', async () => {
+    const user = await ensureUser(prisma, TEST_USERS.requesterA, 'Requester A');
+    const harness = await createHarness(prisma);
+    harness.services.legal = service();
+    const actor = await actorFor(prisma, user.maxUserId, 'Requester A', []);
+    const context = { services: harness.services, actor, chatId: user.maxUserId, messageId: undefined, callbackId: 'agreement-click' };
+    const latestAction = () => {
+      const keyboard = harness.messages.sent.at(-1)?.message.keyboard ?? [];
+      const button = keyboard.flat().find(button => 'payload' in button && button.payload.includes('accept-'));
+      const payload = parseCallbackPayload(button && 'payload' in button ? button.payload : undefined);
+      if (!payload || payload.kind !== 'user') throw new Error('Expected explicit confirmation');
+      return payload;
+    };
+    await handleUserCallback(context, { kind: 'user', action: 'new' });
+    expect(latestAction().action).toBe('accept-agreement');
+    expect(await prisma.legalAcceptance.count()).toBe(0);
+    expect(await harness.services.sessions.find(user.maxUserId, user.maxUserId)).toBeNull();
+    await handleUserCallback(context, latestAction());
+    expect(latestAction().action).toBe('accept-consent');
+    expect(await prisma.legalAcceptance.count()).toBe(1);
+    expect(await harness.services.sessions.find(user.maxUserId, user.maxUserId)).toBeNull();
+    await handleUserCallback({ ...context, callbackId: 'consent-click' }, latestAction());
+    expect(await prisma.legalAcceptance.count()).toBe(2);
+    expect(await harness.services.sessions.find(user.maxUserId, user.maxUserId))
+      .toMatchObject({ type: 'WAITING_REQUESTER_NAME' });
+  });
+
+  it('does not treat an old Continue button as acceptance and resumes at the missing consent', async () => {
+    const user = await ensureUser(prisma, TEST_USERS.requesterA, 'Requester A');
+    const harness = await createHarness(prisma);
+    harness.services.legal = service();
+    const actor = await actorFor(prisma, user.maxUserId, 'Requester A', []);
+    const context = { services: harness.services, actor, chatId: user.maxUserId, messageId: undefined, callbackId: 'old-continue' };
+    await handleUserCallback(context, { kind: 'user', action: 'legal-continue' });
+    expect(await prisma.legalAcceptance.count()).toBe(0);
+    expect(await harness.services.sessions.find(user.maxUserId, user.maxUserId)).toBeNull();
+    await handleUserCallback(context, { kind: 'user', action: 'accept-agreement' });
+    for (const action of ['new', 'documents'] as const) {
+      await handleUserCallback(context, { kind: 'user', action });
+      const text = JSON.stringify(harness.messages.sent.at(-1)?.message.keyboard);
+      expect(text).toContain('accept-consent');
+      expect(text).not.toContain('accept-agreement');
+      expect(text).not.toContain('legal-continue');
+    }
+    expect(await prisma.legalAcceptance.count()).toBe(1);
   });
 
   it('requires two separate confirmations and preserves evidence of the first click', async () => {

@@ -2,7 +2,7 @@ import { Keyboard } from '@maxhub/max-bot-api';
 import type { Button } from '../../max/max-types';
 import type { Category, ResponsibleGroup } from '@prisma/client';
 import type { ProblemMunicipality } from '../../locations/problem-locations';
-import type { LegalDocumentLinks } from '../../legal/legal-acceptance.service';
+import { LEGAL_CONFIRMATION_TEXT, type LegalDocumentLinks } from '../../legal/legal-acceptance.service';
 
 import {
   incidentCallback,
@@ -25,10 +25,10 @@ export function mainMenuKeyboard(): Button[][] {
   ];
 }
 
-/** Permanent document links plus an optional entry into the acceptance flow. */
+/** Permanent document links plus the next explicit, separate confirmation. */
 export function legalDocumentsKeyboard(
   links: LegalDocumentLinks,
-  options: { showContinue?: boolean } = {},
+  options: { acceptance?: 'agreement' | 'consent' } = {},
 ): Button[][] {
   const rows: Button[][] = [];
   if (links.userAgreement) rows.push([button.link('Пользовательское соглашение', links.userAgreement)]);
@@ -36,8 +36,10 @@ export function legalDocumentsKeyboard(
   if (links.personalDataConsent) {
     rows.push([button.link('Согласие на обработку данных', links.personalDataConsent)]);
   }
-  if (options.showContinue) {
-    rows.push([button.callback('Продолжить', userCallback('legal-continue'), { intent: 'positive' })]);
+  if (options.acceptance === 'agreement' && links.userAgreement) {
+    rows.push([button.callback(LEGAL_CONFIRMATION_TEXT.userAgreement, userCallback('accept-agreement'), { intent: 'positive' })]);
+  } else if (options.acceptance === 'consent' && links.personalDataConsent) {
+    rows.push([button.callback(LEGAL_CONFIRMATION_TEXT.personalDataConsent, userCallback('accept-consent'), { intent: 'positive' })]);
   }
   rows.push([button.callback('Главное меню', userCallback('menu'))]);
   return rows;

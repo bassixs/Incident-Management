@@ -27,6 +27,7 @@ import {
   greetingText,
   incidentPromptText,
   legalGateText,
+  personalDataConsentText,
   requesterPhonePromptText,
 } from '../views/cards';
 import type { ResolvedActor } from './helpers';
@@ -82,9 +83,12 @@ export async function handleRequesterMessage(
     await services.sessions.clear(actor.maxUserId, chatId);
     const legalStatus = await services.legal.status(actor.userId);
     await services.messages.send(target, {
-      text: legalGateText(),
+      text: legalStatus.agreementAccepted
+        ? personalDataConsentText(services.config.LEGAL_DOCUMENT_VERSION)
+        : legalGateText(),
       keyboard: legalDocumentsKeyboard(services.legal.links(), {
-        showContinue: legalStatus.required && legalStatus.documentsAvailable,
+        acceptance: legalStatus.required && !legalStatus.ready && legalStatus.documentsAvailable
+          ? (legalStatus.agreementAccepted ? 'consent' : 'agreement') : undefined,
       }),
     });
     return;

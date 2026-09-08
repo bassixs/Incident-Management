@@ -112,7 +112,8 @@ export async function handleUserCallback(
       await services.messages.send(target, {
         text: legalDocumentsText(status),
         keyboard: legalDocumentsKeyboard(services.legal.links(), {
-          showContinue: status.required && !status.ready && status.documentsAvailable,
+          acceptance: status.required && !status.ready && status.documentsAvailable
+            ? (status.agreementAccepted ? 'consent' : 'agreement') : undefined,
         }),
       });
       return undefined;
@@ -673,9 +674,12 @@ async function sendLegalGate(context: UserCallbackContext): Promise<void> {
   await services.messages.send(
     { userId: actor.maxUserId },
     {
-      text: legalGateText(),
+      text: status.agreementAccepted
+        ? personalDataConsentText(services.config.LEGAL_DOCUMENT_VERSION)
+        : legalGateText(),
       keyboard: legalDocumentsKeyboard(services.legal.links(), {
-        showContinue: status.required && status.documentsAvailable,
+        acceptance: status.required && !status.ready && status.documentsAvailable
+          ? (status.agreementAccepted ? 'consent' : 'agreement') : undefined,
       }),
     },
   );
