@@ -36,7 +36,7 @@ describeIntegration('sector card status through durable delivery', () => {
     await seedCategories(prisma);
     sequence = 0; failAnswer = false; failEdit = false; cards.clear();
     edits.mockClear(); sendToChat.mockClear(); sendToUser.mockClear();
-    worker = new MaxMessageService({ editMessage: edits, sendToChat, sendToUser } as never,
+    worker = new MaxMessageService({ editMessage: edits, editCardWithKeyboard: edits, sendToChat, sendToUser } as never,
       { prisma, storage: {} as never });
     services = buildServices(prisma, { messages: worker, media: new FakeMediaService() as never });
   });
@@ -64,13 +64,16 @@ describeIntegration('sector card status through durable delivery', () => {
     expect(await card(incident.id)).toMatch(/^🔴 СВОБОДНОЕ/);
     await services.sector.takeInWork(incident.id, await actor());
     expect(await card(incident.id)).toMatch(/^🟡 В РАБОТЕ/);
+    expect(edits.mock.calls.filter(([id]) => id === original).at(-1)?.[2]).toEqual([[expect.objectContaining({ text: 'Подготовить ответ' })]]);
     expect(await card(incident.id)).toContain('👤 Исполнитель:\nСотрудник');
     await services.answers.submit(incident.id, await actor(), 'Первый ответ');
     await worker.flush();
     expect(await card(incident.id)).toMatch(/^🔵 НА СОГЛАСОВАНИИ/);
+    expect(edits.mock.calls.filter(([id]) => id === original).at(-1)?.[2]).toEqual([]);
     await services.review.requestRevision(incident.id, 'Добавьте сведения', await actor());
     await worker.flush();
     expect(await card(incident.id)).toMatch(/^🟠 НА ДОРАБОТКЕ/);
+    expect(edits.mock.calls.filter(([id]) => id === original).at(-1)?.[2]).toEqual([[expect.objectContaining({ text: 'Исправить ответ' })]]);
     await services.sector.takeInWork(incident.id, await actor());
     expect(await card(incident.id)).toMatch(/^🟡 В РАБОТЕ/);
     await services.answers.submit(incident.id, await actor(), 'Исправленный ответ');
@@ -79,6 +82,7 @@ describeIntegration('sector card status through durable delivery', () => {
     await services.review.approve(incident.id, await actor());
     await worker.flush();
     expect(await card(incident.id)).toMatch(/^🟢 ОТРАБОТАНО/);
+    expect(edits.mock.calls.filter(([id]) => id === original).at(-1)?.[2]).toEqual([]);
     expect((await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).sectorMessageId).toBe(original);
     expect(await prisma.outboundMessage.count({ where: { status: { in: ['PENDING', 'FAILED'] } } })).toBe(0);
   });
@@ -111,7 +115,7 @@ describeIntegration('sector card status through durable delivery', () => {
     await worker.flush();
     expect(await card(incident.id)).toMatch(/^🔵 НА СОГЛАСОВАНИИ/);
     const mid = (await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).sectorMessageId;
-    for (const call of edits.mock.calls.filter(([id]) => id === mid)) expect(call).toHaveLength(2);
+    expect(edits.mock.calls.filter(([id]) => id === mid).at(-1)?.[2]).toEqual([]);
     expect(await prisma.outboundMessage.count({ where: { status: { in: ['PENDING', 'FAILED'] } } })).toBe(0);
   });
 

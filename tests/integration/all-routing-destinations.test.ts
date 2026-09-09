@@ -44,7 +44,7 @@ describeIntegration('all 50 configured routing destinations', () => {
       const mid = randomUUID(); sent.push({ target, text, ...(extra ? { extra } : {}), mid });
       return { body: { mid } };
     };
-    const max = { sendToChat: vi.fn(send), sendToUser: vi.fn(send), editMessage: vi.fn(async () => undefined),
+    const max = { sendToChat: vi.fn(send), sendToUser: vi.fn(send), editCardWithKeyboard: vi.fn(async () => undefined), editMessage: vi.fn(async () => undefined),
       deleteMessage: vi.fn(async () => undefined), answerCallback: vi.fn(async () => undefined),
       api: { getPinnedMessage: vi.fn(async () => ({ message: null })), pinMessage: vi.fn(async () => ({})) } };
     const storage = { load: vi.fn().mockRejectedValue(new Error('Unexpected local photo read')), save: vi.fn(), remove: vi.fn() };

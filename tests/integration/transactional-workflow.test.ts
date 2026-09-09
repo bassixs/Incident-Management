@@ -116,7 +116,7 @@ describeIntegration('transactional workflow and recovery', () => {
     await prisma.incidentAnswer.update({ where: { id: answer.id }, data: { deliveredAt: null } });
     let available = false;
     const uploadFile = vi.fn().mockResolvedValue({ type: 'file', payload: { token: 'test' } });
-    const max = { uploadFile, sendToUser: vi.fn().mockResolvedValue({ body: { mid: 'delivered' } }), sendToChat: async () => ({ body: { mid: 'chat' } }), editMessage: async () => undefined };
+    const max = { uploadFile, sendToUser: vi.fn().mockResolvedValue({ body: { mid: 'delivered' } }), sendToChat: async () => ({ body: { mid: 'chat' } }), editCardWithKeyboard: async () => undefined, editMessage: async () => undefined };
     const storage = { load: async () => { if (!available) throw new Error('file temporarily unavailable'); return Buffer.from('pdf'); }, remove: async () => undefined };
     const worker = new MaxMessageService(max as never, { prisma, storage: storage as never });
     // Isolate the answer from setup notifications.
@@ -240,7 +240,7 @@ describeIntegration('transactional workflow and recovery', () => {
         return { body: { mid: `u-${++sequence}` } };
       },
       sendToChat: async (_id: bigint, text: string) => { chatMessages.push(text); return { body: { mid: `c-${++sequence}` } }; },
-      editMessage: async (_id: string, text: string) => { edits.push(text); },
+      editCardWithKeyboard: async (_id: string, text: string) => { edits.push(text); }, editMessage: async (_id: string, text: string) => { edits.push(text); },
     };
     const storage = {} as never;
     const messages = new MaxMessageService(max as never, { prisma, storage });

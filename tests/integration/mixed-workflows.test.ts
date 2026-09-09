@@ -32,7 +32,7 @@ describeIntegration('mixed resident and employee workflows', () => {
       const max = {
         sendToUser: (id: bigint, text: string, extra?: SendMessageExtra) => send(`user:${id}`, text, extra),
         sendToChat: (id: bigint, text: string, extra?: SendMessageExtra) => send(`chat:${id}`, text, extra),
-        editMessage: async () => ({ success: true }), deleteMessage: async () => ({ success: true }),
+        editCardWithKeyboard: async () => undefined, editMessage: async () => ({ success: true }), deleteMessage: async () => ({ success: true }),
         downloadFromUrl: vi.fn().mockRejectedValue(new Error('No photo downloads allowed')),
         uploadImage: vi.fn().mockRejectedValue(new Error('No photo uploads allowed')),
       };

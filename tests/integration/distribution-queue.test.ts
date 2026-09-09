@@ -36,7 +36,7 @@ describeIntegration('persistent distribution queue', () => {
     const send = async (target: bigint, text: string, extra: any) => {
       sends.push({ target, text, extra }); return { body: { mid: `mid-${sends.length}` } };
     };
-    max = { sendToChat: vi.fn(send), sendToUser: vi.fn(send), editMessage: vi.fn(async () => undefined),
+    max = { sendToChat: vi.fn(send), sendToUser: vi.fn(send), editCardWithKeyboard: vi.fn(async () => undefined), editMessage: vi.fn(async () => undefined),
       api: { getPinnedMessage: vi.fn(async () => ({ message: null })), pinMessage: vi.fn(async () => ({})) } };
     const storage = { load: async () => Buffer.from('photo'), remove: vi.fn(async () => undefined) };
     services = buildServices(prisma, { messages: new MaxMessageService(max, { prisma, storage: storage as never }), storage: storage as never });

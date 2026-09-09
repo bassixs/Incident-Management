@@ -53,6 +53,7 @@ export class SectorService {
         label: codeLabel(incident),
         keyboard: sectorKeyboard(incident.id, {
           hasTemplate: Boolean(incident.assignedGroup.answerTemplate),
+          status: incident.status,
         }),
         attachments: await loadOutboundAttachments(this.media, incident.attachments),
         delivery: {

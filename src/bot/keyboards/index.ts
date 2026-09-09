@@ -326,11 +326,13 @@ export function assignmentGroupKeyboard(
 }
 
 /** Buttons under the sector-chat card (§21). */
-export function sectorKeyboard(incidentId: string, options: { hasTemplate: boolean }): Button[][] {
-  const rows: Button[][] = [
-    [button.callback('Взять в работу', incidentCallback('take', incidentId), { intent: 'positive' })],
-    [button.callback('Подготовить ответ', incidentCallback('answer', incidentId))],
-  ];
+export function sectorKeyboard(incidentId: string, options: { hasTemplate: boolean; status?: string }): Button[][] {
+  const status = options.status ?? 'ASSIGNED';
+  if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(status)) return [];
+  if (status === 'REVISION_REQUIRED') return revisionKeyboard(incidentId);
+  const rows: Button[][] = [];
+  if (status === 'ASSIGNED') rows.push([button.callback('Взять в работу', incidentCallback('take', incidentId), { intent: 'positive' })]);
+  rows.push([button.callback('Подготовить ответ', incidentCallback('answer', incidentId))]);
   if (options.hasTemplate) {
     rows.push([button.callback('Использовать шаблон', incidentCallback('template', incidentId))]);
   }

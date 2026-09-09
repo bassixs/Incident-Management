@@ -88,7 +88,7 @@ export async function queueSector(tx: Tx, incidentId: string): Promise<void> {
   if (!group) throw new Error('Incident has no responsible group');
   await queueMessage(tx, { chatId: requiredChat(group.maxChatId) }, {
     text: sectorCard(incident, group), label: codeLabel(incident),
-    keyboard: sectorKeyboard(incidentId, { hasTemplate: Boolean(group.answerTemplate) }),
+    keyboard: sectorKeyboard(incidentId, { hasTemplate: Boolean(group.answerTemplate), status: incident.status }),
     delivery: { dedupeKey: `sector-card:${incidentId}`, tracking: { type: 'SECTOR_CARD', incidentId } },
   }, incidentId, incident.attachments);
 }

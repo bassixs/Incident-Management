@@ -639,12 +639,12 @@ export class MaxMessageService {
     const incident = await this.durable!.prisma.incident.findUnique({ where: { id: incidentId }, include: INCIDENT_INCLUDE });
     if (!incident?.sectorMessageId || !incident.assignedGroup) return {};
     if (textOnly) {
-      // Preserve existing photos and buttons without fetching or uploading media.
-      // Render at execution time so a delayed retry cannot restore an old status.
-      await this.max.editMessage(incident.sectorMessageId, sectorCard(incident, incident.assignedGroup));
+      // Existing status jobs also refresh controls after this upgrade. MAX media
+      // is retained from the actual message, without downloading or re-uploading.
+      await this.max.editCardWithKeyboard(incident.sectorMessageId, sectorCard(incident, incident.assignedGroup),
+        sectorKeyboard(incident.id, { hasTemplate: Boolean(incident.assignedGroup.answerTemplate), status: incident.status }));
       return {};
     }
-    if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)) return {};
     const attachments: OutboundAttachment[] = [];
     for (const item of incident.attachments.slice(0, ATTACHMENTS_PER_MESSAGE)) {
       const token = photoToken(item.storageKey);
@@ -656,7 +656,8 @@ export class MaxMessageService {
     }
     await this.max.editMessage(incident.sectorMessageId, sectorCard(incident, incident.assignedGroup), [
       ...await this.upload(attachments, true),
-      { type: 'inline_keyboard', payload: { buttons: sectorKeyboard(incident.id, { hasTemplate: Boolean(incident.assignedGroup.answerTemplate) }) } },
+      ...(['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)
+        ? [{ type: 'inline_keyboard' as const, payload: { buttons: sectorKeyboard(incident.id, { hasTemplate: Boolean(incident.assignedGroup.answerTemplate), status: incident.status }) } }] : []),
     ]);
     return {};
   }

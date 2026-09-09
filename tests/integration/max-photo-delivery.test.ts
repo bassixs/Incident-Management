@@ -30,7 +30,7 @@ describeIntegration('MAX photo references in persistent delivery', () => {
     };
     const max = { sendToChat: (id: bigint, text: string, extra?: Parameters<typeof send>[2]) => send('chat', text, extra),
       sendToUser: (id: bigint, text: string, extra?: Parameters<typeof send>[2]) => send('user', text, extra),
-      editMessage: async () => undefined };
+      editCardWithKeyboard: async () => undefined, editMessage: async () => undefined };
     const messages = new MaxMessageService(max as never, { prisma, storage: files as never });
     const services = buildServices(prisma, { messages, media: new MediaService(files as never, max as never) });
     const actor = await actorFor(prisma, TEST_USERS.admin, 'Администратор', [UserRole.ADMIN]);
@@ -85,7 +85,7 @@ describeIntegration('MAX photo references in persistent delivery', () => {
     const max = { sendToChat: async (_id: bigint, text: string, extra: { attachments?: Array<{ type: string }> }) => {
       if (extra.attachments?.some(a => a.type === 'image')) throw new MaxError(400, { code: 'attachment.invalid', message: 'Invalid photo token' });
       sent.push({ text, extra }); return { body: { mid: 'fallback-card' } };
-    }, sendToUser: async () => ({ body: { mid: 'thanks' } }), editMessage: async () => undefined };
+    }, sendToUser: async () => ({ body: { mid: 'thanks' } }), editCardWithKeyboard: async () => undefined, editMessage: async () => undefined };
     const messages = new MaxMessageService(max as never, { prisma, storage: files as never });
     const media = new MediaService(files as never, max as never);
     const services = buildServices(prisma, { messages, media });

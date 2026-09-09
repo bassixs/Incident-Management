@@ -7,6 +7,41 @@ import { ValidationError } from '../../src/utils/errors';
 
 afterEach(() => vi.unstubAllGlobals());
 
+describe('updating card controls without losing photos', () => {
+  it('keeps every existing photo token and removes only the keyboard on completion', async () => {
+    const bot = new Bot('test-token');
+    vi.spyOn(bot.api, 'getMessage').mockResolvedValue({ body: { attachments: [
+      { type: 'image', payload: { token: 'photo-one', url: 'https://unused.test/one' } },
+      { type: 'image', payload: { token: 'photo-two', url: 'https://unused.test/two' } },
+      { type: 'inline_keyboard', payload: { buttons: [[{ type: 'callback', text: 'Старая', payload: 'old' }]] } },
+    ] } } as never);
+    const edit = vi.spyOn(bot.api, 'editMessage').mockResolvedValue({ success: true });
+    await new MaxClient(bot).editCardWithKeyboard('card', 'Отработано', []);
+    expect(edit).toHaveBeenCalledWith('card', { text: 'Отработано', attachments: [
+      { type: 'image', payload: { token: 'photo-one' } }, { type: 'image', payload: { token: 'photo-two' } },
+    ] });
+  });
+
+  it('restores the current controls and retains a legacy file', async () => {
+    const bot = new Bot('test-token');
+    vi.spyOn(bot.api, 'getMessage').mockResolvedValue({ body: { attachments: [{ type: 'file', payload: { token: 'file-token' } }] } } as never);
+    const edit = vi.spyOn(bot.api, 'editMessage').mockResolvedValue({ success: true });
+    const buttons = [[{ type: 'callback' as const, text: 'Исправить ответ', payload: 'fix' }]];
+    await new MaxClient(bot).editCardWithKeyboard('card', 'На доработке', buttons);
+    expect(edit).toHaveBeenCalledWith('card', { text: 'На доработке', attachments: [
+      { type: 'file', payload: { token: 'file-token' } }, { type: 'inline_keyboard', payload: { buttons } },
+    ] });
+  });
+
+  it('does not erase attachments if MAX cannot provide a reusable token', async () => {
+    const bot = new Bot('test-token');
+    vi.spyOn(bot.api, 'getMessage').mockResolvedValue({ body: { attachments: [{ type: 'image', payload: { url: 'https://unused.test' } }] } } as never);
+    const edit = vi.spyOn(bot.api, 'editMessage').mockResolvedValue({ success: true });
+    await expect(new MaxClient(bot).editCardWithKeyboard('card', 'Отработано', [])).rejects.toThrow('сохранить вложения');
+    expect(edit).not.toHaveBeenCalled();
+  });
+});
+
 describe('callback acknowledgement', () => {
   it.each([undefined, '', '   '])('sends a nonempty notification for %j', async (notice) => {
     const bot = new Bot('test-token');

@@ -125,6 +125,23 @@ export class MaxClient {
     await this.call('deleteMessage', () => this.api.deleteMessage(messageId));
   }
 
+  /** Replace only a card's controls while retaining its existing MAX media tokens. */
+  async editCardWithKeyboard(messageId: string, text: string, buttons: import('./max-types').Button[][]): Promise<void> {
+    const current = await this.call('getMessage', () => this.api.getMessage(messageId));
+    const attachments: AttachmentRequest[] = [];
+    for (const item of current.body.attachments ?? []) {
+      if (item.type === 'inline_keyboard') continue;
+      if (['image', 'file', 'video', 'audio'].includes(item.type) && 'payload' in item && 'token' in item.payload && item.payload.token) {
+        attachments.push({ type: item.type as 'image' | 'file' | 'video' | 'audio', payload: { token: item.payload.token } });
+      } else {
+        // Never silently drop an unrecognised attachment while replacing buttons.
+        throw new ValidationError('Не удалось сохранить вложения карточки при обновлении кнопок.');
+      }
+    }
+    if (buttons.length) attachments.push({ type: 'inline_keyboard', payload: { buttons } });
+    await this.editMessage(messageId, text, attachments);
+  }
+
   async answerCallback(callbackId: string, notification?: string): Promise<void> {
     // MAX rejects an empty acknowledgement. This only acknowledges the click;
     // it must not imply successful delivery of a queued message.
