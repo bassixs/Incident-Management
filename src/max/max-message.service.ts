@@ -24,7 +24,7 @@ import { MaxClient } from './max-client';
 import { queueDeliveryStatus, reviewDeliveryNotice } from '../delivery/delivery-status';
 import { INCIDENT_INCLUDE } from '../incidents/incident.repository';
 import { distributionResolvedNotice, distributionWorkedNotice, sectorCard } from '../bot/views/cards';
-import { queueDistributionRefresh } from '../delivery/workflow-outbox';
+import { queueDistributionRefresh, queueSectorRefresh } from '../delivery/workflow-outbox';
 import { sectorKeyboard } from '../bot/keyboards';
 import { slaNotification, slaStage, type SlaStage } from '../sla/sla-notification';
 import { incidentCallback } from './callback-payload';
@@ -51,7 +51,7 @@ export type CompositeMessage = {
     | { type: 'superseded-answer' }
     | { type: 'sla-reminder'; incidentId: string; stage: SlaStage }
     | { type: 'clarification-question' | 'clarification-reply'; incidentId: string; clarificationId: string }
-    | { type: 'sector-refresh'; incidentId: string }
+    | { type: 'sector-refresh'; incidentId: string; textOnly?: boolean }
     | { type: 'distribution-panel' }
     | { type: 'distribution-refresh'; incidentId: string }
     | { type: 'distribution-alert'; level: 'normal' | 'escalation'; hour: number };
@@ -444,7 +444,7 @@ export class MaxMessageService {
         : payload.operation?.type === 'sla-reminder'
         ? await this.deliverSlaReminder(payload.operation)
         : payload.operation?.type === 'sector-refresh'
-        ? await this.refreshSectorCard(payload.operation.incidentId)
+        ? await this.refreshSectorCard(payload.operation.incidentId, payload.operation.textOnly)
         : payload.operation?.type === 'delivery-card'
         ? await this.refreshDeliveryCard(payload.operation)
         : await this.deliverLogical(target, { ...payload, attachments }, true);
@@ -554,6 +554,8 @@ export class MaxMessageService {
           },
         });
       } else if (row.trackingType === DeliveryTrackingType.SECTOR_CARD) {
+        // A status can change while the original card is still being delivered.
+        await queueSectorRefresh(tx, row.incidentId, `sector-status:${row.id}:published:${firstMessageId}`, true);
         await tx.incidentHistory.create({
           data: {
             incidentId: row.incidentId,
@@ -633,9 +635,15 @@ export class MaxMessageService {
     });
   }
 
-  private async refreshSectorCard(incidentId: string): Promise<{ firstMessageId?: string }> {
+  private async refreshSectorCard(incidentId: string, textOnly = false): Promise<{ firstMessageId?: string }> {
     const incident = await this.durable!.prisma.incident.findUnique({ where: { id: incidentId }, include: INCIDENT_INCLUDE });
     if (!incident?.sectorMessageId || !incident.assignedGroup) return {};
+    if (textOnly) {
+      // Preserve existing photos and buttons without fetching or uploading media.
+      // Render at execution time so a delayed retry cannot restore an old status.
+      await this.max.editMessage(incident.sectorMessageId, sectorCard(incident, incident.assignedGroup));
+      return {};
+    }
     if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)) return {};
     const attachments: OutboundAttachment[] = [];
     for (const item of incident.attachments.slice(0, ATTACHMENTS_PER_MESSAGE)) {

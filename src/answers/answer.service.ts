@@ -1,6 +1,6 @@
 import { queueDeliveryStatus } from '../delivery/delivery-status';
 import { randomUUID } from 'node:crypto';
-import { queueAnswer, queueRevision } from '../delivery/workflow-outbox';
+import { queueAnswer, queueRevision, queueSectorRefresh } from '../delivery/workflow-outbox';
 import type { Tx } from '../database/prisma';
 import {
   AnswerStatus,
@@ -218,6 +218,7 @@ export class AnswerService {
 
       await this.attachMedia(tx, created.id, stored);
       await queueAnswer(tx, incidentId, created.id, direct);
+      if (!direct) await queueSectorRefresh(tx, incidentId, `sector-status:${created.id}:review`, true);
       if (direct) await queueDeliveryStatus(tx, incidentId, created.id, false);
       transactionBodyCompleted = true;
       return created;

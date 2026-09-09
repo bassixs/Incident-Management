@@ -45,10 +45,38 @@ describe('staff card status markers', () => {
     expect(distributionResolvedNotice(incident, group, 'Диспетчер').startsWith('🟡 РАСПРЕДЕЛЕНО')).toBe(true);
   });
 
-  it('does not show distribution markers in the receiving group card', () => {
-    const text = sectorCard(incident, group);
-    expect(text.startsWith('📥 НОВОЕ ОБРАЩЕНИЕ')).toBe(true);
+  it('marks a newly assigned sector card as available', () => {
+    const text = sectorCard({ ...incident, status: IncidentStatus.ASSIGNED }, group);
+    expect(text.startsWith('🔴 СВОБОДНОЕ')).toBe(true);
     expect(text).not.toContain('РАСПРЕДЕЛЕНО');
+  });
+
+  it.each([
+    [IncidentStatus.IN_PROGRESS, '🟡 В РАБОТЕ'],
+    [IncidentStatus.WAITING_REVIEW, '🔵 НА СОГЛАСОВАНИИ'],
+    [IncidentStatus.REVISION_REQUIRED, '🟠 НА ДОРАБОТКЕ'],
+    [IncidentStatus.RESOLVED, '⏳ ОЖИДАЕТ ДОСТАВКИ'],
+  ])('shows the sector workflow stage %s', (status, marker) => {
+    const text = sectorCard({ ...incident, status }, group);
+    expect(text.startsWith(marker)).toBe(true);
+    expect(text).not.toContain('НОВОЕ ОБРАЩЕНИЕ');
+    expect(text).toContain(incident.text);
+  });
+
+  it('only marks the latest delivered answer as worked', () => {
+    const answered = { ...incident, status: IncidentStatus.RESOLVED,
+      answers: [{ deliveredAt: new Date() }] } as IncidentWithRelations;
+    expect(sectorCard(answered, group).startsWith('🟢 ОТРАБОТАНО')).toBe(true);
+    answered.answers.push({ deliveredAt: null } as IncidentWithRelations['answers'][number]);
+    expect(sectorCard(answered, group).startsWith('⏳ ОЖИДАЕТ ДОСТАВКИ')).toBe(true);
+  });
+
+  it('keeps the responder name without calling a closed incident in progress', () => {
+    const closed = { ...incident, status: IncidentStatus.RESOLVED,
+      currentResponder: { displayName: 'Исполнитель' }, answers: [{ deliveredAt: new Date() }] } as IncidentWithRelations;
+    const text = sectorCard(closed, group);
+    expect(text).toContain('👤 Исполнитель:\nИсполнитель');
+    expect(text).not.toContain('В работе:');
   });
 
   it('marks the final distribution card as worked', () => {

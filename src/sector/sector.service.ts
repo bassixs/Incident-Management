@@ -1,4 +1,5 @@
 import { TRANSACTION_OPTIONS } from '../database/prisma';
+import { queueSectorRefresh } from '../delivery/workflow-outbox';
 import {
   type Incident,
   IncidentStatus,
@@ -84,12 +85,9 @@ export class SectorService {
   async refreshCard(incidentId: string): Promise<void> {
     const incident = await this.repository.findById(incidentId);
     if (!incident?.sectorMessageId || !incident.assignedGroup) return;
-    // Text only: the incident photo and the action buttons already on the
-    // card are preserved, which is what §22 asks for.
-    await this.messages.editCardText(
-      incident.sectorMessageId,
-      sectorCard(incident, incident.assignedGroup),
-    );
+    await this.prisma.$transaction(tx => queueSectorRefresh(tx, incidentId,
+      `sector-status:${incidentId}:refresh:${incident.updatedAt.getTime()}`, true), TRANSACTION_OPTIONS);
+    await this.messages.flush();
   }
 
   /**
@@ -137,9 +135,10 @@ export class SectorService {
         actorRole: actor.role,
         metadata: { responder: actor.displayName },
       }, tx);
+      await queueSectorRefresh(tx, incidentId, `sector-status:${incidentId}:taken:${incident.revisionCount}`, true);
     }, TRANSACTION_OPTIONS);
 
-    await this.refreshCard(incidentId);
+    await this.messages.flush();
     log.info(
       incidentLogFields({
         incidentId,

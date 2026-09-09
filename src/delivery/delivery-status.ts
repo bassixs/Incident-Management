@@ -2,7 +2,7 @@ import type { IncidentAnswer } from '@prisma/client';
 import type { Tx } from '../database/prisma';
 import { INCIDENT_INCLUDE, type IncidentWithRelations } from '../incidents/incident.repository';
 import { getConfig } from '../config';
-import { queueMessage } from './workflow-outbox';
+import { queueMessage, queueSectorRefresh } from './workflow-outbox';
 
 export function answerDeliveredNotice(incident: Pick<IncidentWithRelations, 'publicCode'>, answer: Pick<IncidentAnswer, 'version'>): string {
   return `✅ ${incident.publicCode}: ответ (версия ${answer.version}) доставлен пользователю.`;
@@ -21,6 +21,7 @@ export async function queueDeliveryStatus(tx: Tx, incidentId: string, answerId: 
   const answer = incident.answers.find(a => a.id === answerId);
   if (!answer || (delivered && !answer.deliveredAt)) return;
   const stage = delivered ? 'delivered' : 'pending';
+  await queueSectorRefresh(tx, incidentId, `sector-status:${answerId}:${stage}`, true);
   for (const card of ['review', 'distribution'] as const) {
     const messageId = card === 'review' ? incident.reviewMessageId : incident.distributionMessageId;
     const chatId = card === 'review' ? getConfig().REVIEW_CHAT_ID : getConfig().DISTRIBUTION_CHAT_ID;

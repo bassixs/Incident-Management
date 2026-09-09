@@ -103,10 +103,25 @@ export function distributionResolvedNotice(
 }
 
 /** §21 — the card published in the sector chat after distribution. */
+function sectorStatus(incident: IncidentWithRelations): string {
+  switch (incident.status) {
+    case 'ASSIGNED': return '🔴 СВОБОДНОЕ';
+    case 'IN_PROGRESS': return '🟡 В РАБОТЕ';
+    case 'WAITING_REVIEW': return '🔵 НА СОГЛАСОВАНИИ';
+    case 'REVISION_REQUIRED': return '🟠 НА ДОРАБОТКЕ';
+    case 'RESOLVED': return incident.answers.at(-1)?.deliveredAt
+      ? '🟢 ОТРАБОТАНО' : '⏳ ОЖИДАЕТ ДОСТАВКИ';
+    case 'REJECTED': return '⛔ ОТКЛОНЕНО';
+    default: return '⚪ НА РАСПРЕДЕЛЕНИИ';
+  }
+}
+
 export function sectorCard(incident: IncidentWithRelations, group: ResponsibleGroup): string {
   const photoCount = incident.attachments.filter((item) => item.type === 'IMAGE').length;
   return [
-    '📥 НОВОЕ ОБРАЩЕНИЕ',
+    sectorStatus(incident),
+    '',
+    '📥 ОБРАЩЕНИЕ',
     '',
     codeLabel(incident),
     '',
@@ -131,7 +146,7 @@ export function sectorCard(incident: IncidentWithRelations, group: ResponsibleGr
     'Срок:',
     incident.slaPausedAt ? 'Приостановлен до получения уточнения' : formatDateTime(incident.deadlineAt),
     ...(photoCount > 0 ? ['', ...attachmentLine(photoCount)] : []),
-    ...(incident.currentResponder ? ['', '👤 В работе:', incident.currentResponder.displayName] : []),
+    ...(incident.currentResponder ? ['', '👤 Исполнитель:', incident.currentResponder.displayName] : []),
   ].join('\n');
 }
 
