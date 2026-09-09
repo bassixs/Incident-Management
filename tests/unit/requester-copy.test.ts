@@ -51,7 +51,8 @@ describe('requester-facing copy', () => {
       expect(text).toContain('59-ФЗ');
     }
     expect(rulesText()).toContain('Подача сообщения через бот означает согласие с данными правилами');
-    expect(rulesText()).toContain('5. Текст сообщения не позволяет определить суть вопроса, отсутствует адрес проблемы.');
+    expect(rulesText()).toContain('5. Текст обращения или сообщения не позволяет определить суть предложения, заявления или жалобы.');
+    expect(rulesText()).toContain('8. В сообщении отсутствует адрес проблемы.');
     expect(rulesText()).toContain('при этом в сообщении не приводятся новые обстоятельства.');
     expect(rulesText()).toContain('7. Сообщения, несущие урон чести и достоинству других граждан.');
     expect(incidentPromptText()).toContain('адрес проблемы');
