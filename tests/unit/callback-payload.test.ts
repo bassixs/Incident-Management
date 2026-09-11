@@ -12,6 +12,12 @@ const INCIDENT_ID = '550e8400-e29b-41d4-a716-446655440000';
 const CATEGORY_ID = '11111111-2222-3333-4444-555555555555';
 
 describe('callback payloads', () => {
+  it('accepts only bounded work queue actions and incident identifiers', () => {
+    expect(parseCallbackPayload('work:next')).toMatchObject({ kind: 'work', action: 'next' });
+    expect(parseCallbackPayload('work:today:2')).toMatchObject({ kind: 'work', action: 'today', argument: '2' });
+    expect(parseCallbackPayload(`work:open:${INCIDENT_ID}`)).toMatchObject({ kind: 'work', action: 'open', argument: INCIDENT_ID });
+    for (const raw of ['work:next:extra', 'work:list:-1', 'work:today:NaN', 'work:today:1000000', 'work:open:bad', 'work:release:all', 'work:unknown']) expect(parseCallbackPayload(raw)).toBeNull();
+  });
   it('accepts only fixed guide callbacks without file names or extra arguments', () => {
     expect(parseCallbackPayload('help:guide')).toEqual({ kind: 'help', action: 'guide' });
     expect(parseCallbackPayload('help:admin')).toEqual({ kind: 'help', action: 'admin' });

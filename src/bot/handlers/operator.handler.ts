@@ -13,6 +13,7 @@ import { assertApprover, assertDispatcher, assertResponder, assertWorkingChat, r
 import { sendReport } from '../views/report';
 import { codeLabel } from '../views/cards';
 import type { ResolvedActor } from './helpers';
+import { discardObsoleteSession } from './session-guard';
 
 const log = moduleLogger('bot-operator');
 
@@ -36,6 +37,7 @@ export async function handleOperatorMessage(
 
   try {
     await assertWorkingChat(services, chatId);
+    if (await discardObsoleteSession(services, session)) throw new ValidationError('Обращение уже перешло на другой этап. Незавершённое действие сброшено. Откройте актуальную карточку через /queue или проверьте статус через /today.');
     switch (session.type) {
       case SessionType.WAITING_CLARIFICATION_QUESTION:
       case SessionType.WAITING_CLARIFICATION_REPLY:

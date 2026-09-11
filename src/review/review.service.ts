@@ -1,6 +1,7 @@
 import { queueDeliveryStatus, reviewDeliveryNotice, answerDeliveredNotice } from '../delivery/delivery-status';
 import type { DeliveryOutcome } from '../delivery/requester-delivery.service';
 import { TRANSACTION_OPTIONS } from '../database/prisma';
+import { assertReviewReservation } from '../work-queues/state';
 import { queueAnswer, queueRevision } from '../delivery/workflow-outbox';
 import { AnswerStatus, type IncidentAnswer, IncidentStatus, type PrismaClient } from '@prisma/client';
 
@@ -121,6 +122,7 @@ export class ReviewService {
 
     const answeredAt = new Date();
     await this.prisma.$transaction(async (tx) => {
+      await assertReviewReservation(tx, incidentId, actor.maxUserId);
       const claimed = await this.repository.transition(tx, incidentId, IncidentStatus.WAITING_REVIEW, {
         status: IncidentStatus.RESOLVED,
         answeredAt,
@@ -177,7 +179,7 @@ export class ReviewService {
     const fresh = (await this.repository.findById(incidentId))!;
     const deliveredAnswer = fresh.answers.find(a => a.id === answer.id)!;
     if (outcome !== 'queued') {
-      if (fresh.reviewMessageId) await this.messages.finalizeCard(fresh.reviewMessageId, reviewDeliveryNotice(fresh, deliveredAnswer));
+      if (fresh.reviewMessageId) await this.messages.finalizeStaffCard(fresh.reviewMessageId, `${reviewDeliveryNotice(fresh, deliveredAnswer)}\n\n${deliveredAnswer.text}`);
       await this.distribution.markWorked(fresh);
       await this.sector.notify(fresh, answerDeliveredNotice(fresh, deliveredAnswer), `answer-delivered:${answer.id}:sector`);
     } else {
@@ -213,6 +215,7 @@ export class ReviewService {
     }
 
     await this.prisma.$transaction(async (tx) => {
+      await assertReviewReservation(tx, incidentId, actor.maxUserId);
       const claimed = await this.repository.transition(tx, incidentId, IncidentStatus.WAITING_REVIEW, {
         status: IncidentStatus.REVISION_REQUIRED,
         revisionReason: reason,
@@ -249,7 +252,7 @@ export class ReviewService {
       await this.sector.publishRevision(updated, updated.assignedGroup, answer.version, reason);
     }
     if (incident.reviewMessageId) {
-      await this.messages.finalizeCard(
+      await this.messages.finalizeStaffCard(
         incident.reviewMessageId,
         [
           `↩️ ${incident.publicCode} возвращено на доработку.`,

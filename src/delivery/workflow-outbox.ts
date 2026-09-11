@@ -103,12 +103,27 @@ export async function queueDistributionRefresh(tx: Tx, incidentId: string, event
 }
 
 export async function queueSectorRefresh(tx: Tx, incidentId: string, key: string, textOnly = false): Promise<void> {
+  await queueStaffRefresh(tx, incidentId, key);
   const incident = await tx.incident.findUniqueOrThrow({ where: { id: incidentId }, include: { assignedGroup: true } });
   if (!incident.assignedGroup?.maxChatId || !incident.sectorMessageId) return;
   await queueMessage(tx, { chatId: incident.assignedGroup.maxChatId }, {
     text: `Обновление карточки ${incident.publicCode}`, operation: { type: 'sector-refresh', incidentId, textOnly },
     delivery: { dedupeKey: key },
   }, incidentId);
+}
+
+/** Retire actions on all durable review/revision cards and queue copies. */
+export async function queueStaffRefresh(tx: Tx, incidentId: string, event: string = randomUUID()): Promise<void> {
+  const incident = await tx.incident.findUniqueOrThrow({ where: { id: incidentId }, include: { assignedGroup: true } });
+  const chatId = getConfig().REVIEW_CHAT_ID ?? incident.assignedGroup?.maxChatId;
+  if (chatId == null) return;
+  await queueMessage(tx, { chatId }, { text: 'Обновление действий в рабочих карточках',
+    operation: { type: 'staff-refresh', incidentId }, delivery: { dedupeKey: `staff-refresh:${incidentId}:${event}` } }, incidentId);
+  if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)) await tx.operatorSession.deleteMany({ where: { incidentId, type: 'WAITING_FOR_ANSWER' } });
+  if (incident.status !== 'WAITING_REVIEW') {
+    await tx.operatorSession.deleteMany({ where: { incidentId, type: 'WAITING_REVISION_REASON' } });
+    await tx.actionLock.deleteMany({ where: { incidentId, action: 'review-queue' } });
+  }
 }
 
 export async function queueAnswer(tx: Tx, incidentId: string, answerId: string, direct: boolean): Promise<void> {

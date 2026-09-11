@@ -12,6 +12,7 @@ export const queueKeyboard = (): Button[][] => [
   [{ type: 'callback', text: 'Следующее обращение', payload: 'queue:next' }],
   [{ type: 'callback', text: 'Посмотреть список', payload: 'queue:list:0' },
     { type: 'callback', text: 'Обновить', payload: 'queue:refresh' }],
+  [{ type: 'callback', text: 'За сегодня', payload: 'work:today:0' }],
 ];
 
 export function assertClaimOwner(incident: Incident, userId: bigint, now = new Date()): void {

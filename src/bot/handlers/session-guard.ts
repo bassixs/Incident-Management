@@ -1,4 +1,4 @@
-import { SessionType } from '@prisma/client';
+import { SessionType, type OperatorSession } from '@prisma/client';
 
 import type { AppServices } from '../../app/container';
 import { sessionConflictKeyboard } from '../keyboards';
@@ -22,6 +22,20 @@ export const SESSION_PROMPTS: Record<SessionType, string> = {
   [SessionType.WAITING_REPORT_PERIOD]: 'Ожидается период для отчёта.',
 };
 
+export async function discardObsoleteSession(services: AppServices, session: OperatorSession): Promise<boolean> {
+  if (!session.incidentId || ![SessionType.WAITING_FOR_ANSWER, SessionType.WAITING_REVISION_REASON, SessionType.WAITING_REJECTION_REASON].some(type => type === session.type)) return false;
+  const incident = await services.repository.findById(session.incidentId);
+  const data = session.data as { reviewAnswerId?: string } | null;
+  const valid = incident && (session.type === SessionType.WAITING_FOR_ANSWER
+    ? ['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)
+    : session.type === SessionType.WAITING_REVISION_REASON
+      ? incident.status === 'WAITING_REVIEW' && incident.answers.at(-1)?.id === data?.reviewAnswerId
+      : incident.status === 'DISTRIBUTION');
+  if (valid) return false;
+  await services.prisma.operatorSession.deleteMany({ where: { id: session.id, expiresAt: session.expiresAt } });
+  return true;
+}
+
 /**
  * §37 — one pending text-action per (operator, chat).
  *
@@ -38,6 +52,7 @@ export async function ensureFreeSession(
 ): Promise<boolean> {
   const existing = await services.sessions.find(actor.maxUserId, chatId);
   if (!existing) return true;
+  if (await discardObsoleteSession(services, existing)) return true;
   if (incidentId && existing.incidentId === incidentId) return true;
 
   const pending = existing.incidentId ? await services.repository.findById(existing.incidentId) : null;

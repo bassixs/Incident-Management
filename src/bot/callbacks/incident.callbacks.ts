@@ -14,6 +14,8 @@ import {
 import { codeLabel } from '../views/cards';
 import type { ResolvedActor } from '../handlers/helpers';
 import { ensureFreeSession } from '../handlers/session-guard';
+import { assertReviewReservation } from '../../work-queues/state';
+import { TRANSACTION_OPTIONS } from '../../database/prisma';
 
 const log = moduleLogger('bot-incident');
 
@@ -308,6 +310,11 @@ async function startAnswer(
 ): Promise<string | undefined> {
   assertResponder(actor, incident, chatId);
   if (incident.activeClarificationId) throw new ConflictError('Сначала дождитесь уточнения от жителя.');
+  if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)) {
+    throw new ConflictError(incident.status === 'RESOLVED'
+      ? `${incident.publicCode}: ответ уже утверждён. Повторная подготовка не требуется.`
+      : `${incident.publicCode}: подготовка ответа на текущем этапе недоступна. Проверьте статус через /today.`);
+  }
   if (!(await ensureFreeSession(services, actor, chatId, incident.id))) return undefined;
 
   await services.sessions.start({
@@ -382,6 +389,7 @@ async function startRevision(
   if (incident.status !== IncidentStatus.WAITING_REVIEW) {
     return `${incident.publicCode} сейчас не на согласовании.`;
   }
+  await services.prisma.$transaction(tx => assertReviewReservation(tx, incident.id, actor.maxUserId), TRANSACTION_OPTIONS);
   if (!(await ensureFreeSession(services, actor, chatId, incident.id))) return undefined;
 
   await services.sessions.start({

@@ -68,7 +68,7 @@ describeIntegration('transactional workflow and recovery', () => {
     await h.services.review.requestRevision(incident.id, 'Уточните', reviewer, first.id);
     const { answer: second } = await h.services.answers.submit(incident.id, reviewer, 'Новый ответ');
     let counter = 0;
-    const max = { sendToChat: async () => ({ body: { mid: `tracked-${++counter}` } }), sendToUser: async () => ({ body: { mid: `tracked-${++counter}` } }) };
+    const max = { sendToChat: async () => ({ body: { mid: `tracked-${++counter}` } }), sendToUser: async () => ({ body: { mid: `tracked-${++counter}` } }), editMessage: async () => undefined, editCardWithKeyboard: async () => undefined };
     const worker = new MaxMessageService(max as never, { prisma, storage: {} as never });
     await worker.flush();
     const delivery = await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: `review-card:${second.id}` } });

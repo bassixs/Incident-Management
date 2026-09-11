@@ -103,7 +103,7 @@ describeIntegration('automatic access in configured work chats', () => {
     await command(TEST_CHATS.distribution, '/report');
     expect(lastText()).toContain('За какой период');
     await command(TEST_CHATS.review, '/info');
-    expect(lastText()).toContain('Согласование ответов'); expect(lastText()).not.toContain('/queue');
+    expect(lastText()).toContain('Согласование ответов'); expect(lastText()).toContain('/queue'); expect(lastText()).toContain('/today');
     expect(lastText()).not.toContain('/report');
     await command(TEST_CHATS.sector, '/help');
     expect(lastText()).toContain('Хозяйственная группа'); expect(lastText()).toContain('Дедлайн указан в карточке');

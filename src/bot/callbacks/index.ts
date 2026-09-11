@@ -8,7 +8,7 @@ import { parseCallbackPayload } from '../../max/callback-payload';
 import type { MessageCallbackUpdate } from '../../max/max-types';
 import { incidentLogFields, moduleLogger } from '../../utils/logger';
 import { answerCallback, chatIdOf, errorNotice, resolveActor } from '../handlers/helpers';
-import { SESSION_PROMPTS } from '../handlers/session-guard';
+import { SESSION_PROMPTS, discardObsoleteSession } from '../handlers/session-guard';
 import { handleIncidentCallback } from './incident.callbacks';
 import { handleReportCallback } from './report.callbacks';
 import { handleUserCallback } from './user.callbacks';
@@ -104,6 +104,14 @@ async function dispatchCallback(
   isDialog: boolean,
 ): Promise<string | undefined> {
   switch (payload.kind) {
+    case 'work':
+      await assertWorkingChat(services, chatId, isDialog);
+      if (payload.action === 'next') return services.workQueues.claim(actor, chatId!);
+      if (payload.action === 'refresh') await services.workQueues.refresh(actor, chatId!);
+      else if (payload.action === 'open') await services.workQueues.open(actor, chatId!, payload.argument!);
+      else if (payload.action === 'release') await services.workQueues.release(actor, chatId!, payload.argument!);
+      else await services.workQueues.list(actor, chatId!, Number(payload.argument), payload.action === 'mine', payload.action === 'today');
+      return 'Готово';
     case 'cleanup':
       await services.cleanup.authorize(actor, chatId, isDialog);
       if (payload.action === 'custom') {
@@ -185,6 +193,7 @@ async function handleSessionCallback(
 
   const session = await services.sessions.find(maxUserId, chatId);
   if (!session) return 'Активных действий нет.';
+  if (await discardObsoleteSession(services, session)) return 'Обращение уже перешло на другой этап. Незавершённое действие сброшено.';
   await services.sessions.extend(session.id);
   const incident = session.incidentId ? await services.repository.findById(session.incidentId) : null;
   return `${incident ? `${incident.publicCode}: ` : ''}${SESSION_PROMPTS[session.type]}`;

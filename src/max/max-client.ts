@@ -91,6 +91,18 @@ export class MaxClient {
     return this.call('getMyInfo', () => this.api.getMyInfo());
   }
 
+  async getMessage(messageId: string) {
+    return this.call('getMessage', () => this.api.getMessage(messageId));
+  }
+
+  async getPinnedMessage(chatId: bigint | number) {
+    return this.call('getPinnedMessage', () => this.api.getPinnedMessage(toApiId(chatId)));
+  }
+
+  async pinMessage(chatId: bigint | number, messageId: string) {
+    return this.call('pinMessage', () => this.api.pinMessage(toApiId(chatId), messageId, { notify: false }), `chat:${chatId}`);
+  }
+
   async sendToChat(chatId: bigint | number, text: string, extra?: SendMessageExtra): Promise<Message> {
     return this.call('sendMessageToChat', () => this.api.sendMessageToChat(toApiId(chatId), text, extra), `chat:${chatId}`);
   }

@@ -61,6 +61,7 @@ export const REPORT_ACTIONS = ['today', '7d', '30d', 'month', 'all', 'custom'] a
 export type ReportAction = (typeof REPORT_ACTIONS)[number];
 
 export type CallbackPayload =
+  | { kind: 'work'; action: 'next' | 'list' | 'mine' | 'today' | 'refresh' | 'open' | 'release'; argument?: string }
   | { kind: 'cleanup'; action: 'today' | '7d' | '30d' | '90d' | 'all' | 'custom' }
   | { kind: 'help'; action: 'guide' | 'admin' }
   | { kind: 'queue'; action: 'next' | 'list' | 'refresh' | 'open' | 'release'; argument?: string }
@@ -103,6 +104,14 @@ export function parseCallbackPayload(raw: string | undefined | null): CallbackPa
 
   const parts = raw.split(':');
   const [namespace, action, ...rest] = parts;
+  if (namespace === 'work') {
+    if (rest.length > 1) return null;
+    const argument = rest[0];
+    if ((action === 'next' || action === 'refresh') && argument === undefined) return { kind: 'work', action };
+    if (action && ['list', 'mine', 'today'].includes(action) && argument !== undefined && /^\d{1,6}$/.test(argument)) return { kind: 'work', action: action as 'list' | 'mine' | 'today', argument };
+    if ((action === 'open' || action === 'release') && argument && isUuid(argument)) return { kind: 'work', action, argument };
+    return null;
+  }
 
   if (namespace === 'cleanup') {
     return rest.length === 0 && action && ['today', '7d', '30d', '90d', 'all', 'custom'].includes(action)

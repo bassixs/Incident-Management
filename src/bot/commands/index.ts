@@ -32,11 +32,20 @@ export const COMMANDS: Record<string, CommandHandler> = {
   clear_data: context => cleanupCommand(context, 'data'),
   clear_users: context => cleanupCommand(context, 'users'),
   queue: async ({ services, actor, chatId, isDialog }) => {
-    if (isDialog) throw new ForbiddenError('Очередь доступна в чате распределения.');
+    await assertWorkingChat(services, chatId, isDialog);
+    if (chatId !== services.config.DISTRIBUTION_CHAT_ID) {
+      await services.workQueues.refresh(actor, chatId);
+      await services.workQueues.list(actor, chatId);
+      return;
+    }
     services.distributionQueue.authorize(actor, chatId);
     await services.distributionQueue.refresh();
     await services.messages.flush();
     await services.distributionQueue.list(actor, chatId, 0);
+  },
+  today: async ({ services, actor, chatId, isDialog }) => {
+    await assertWorkingChat(services, chatId, isDialog);
+    await services.workQueues.list(actor, chatId, 0, false, true);
   },
   start: async ({ services, actor, isDialog }) => {
     if (!isDialog) return;

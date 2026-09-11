@@ -26,6 +26,11 @@ export class FakeMessageService {
     return true;
   }
 
+  async finalizeStaffCard(messageId: string, text: string): Promise<boolean> {
+    this.edits.push({ messageId, text, mode: 'keyboard' });
+    return true;
+  }
+
   async editCardKeyboard(messageId: string, text: string, _keyboard: Button[][]): Promise<boolean> {
     this.edits.push({ messageId, text, mode: 'keyboard' });
     return true;

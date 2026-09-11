@@ -37,7 +37,9 @@ describeIntegration('persistent distribution queue', () => {
       sends.push({ target, text, extra }); return { body: { mid: `mid-${sends.length}` } };
     };
     max = { sendToChat: vi.fn(send), sendToUser: vi.fn(send), editCardWithKeyboard: vi.fn(async () => undefined), editMessage: vi.fn(async () => undefined),
-      api: { getPinnedMessage: vi.fn(async () => ({ message: null })), pinMessage: vi.fn(async () => ({})) } };
+      api: { getMessage: vi.fn(async () => ({ recipient: { chat_id: Number(TEST_CHATS.distribution) } })), getPinnedMessage: vi.fn(async () => ({ message: null })), pinMessage: vi.fn(async () => ({ success: true })) } };
+    max.getMessage = max.api.getMessage; max.getPinnedMessage = max.api.getPinnedMessage;
+    max.pinMessage = (chat: bigint, mid: string) => max.api.pinMessage(Number(chat), mid, { notify: false });
     const storage = { load: async () => Buffer.from('photo'), remove: vi.fn(async () => undefined) };
     services = buildServices(prisma, { messages: new MaxMessageService(max, { prisma, storage: storage as never }), storage: storage as never });
     actor = await actorFor(prisma, TEST_USERS.admin, 'Диспетчер 1', [UserRole.ADMIN]);

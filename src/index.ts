@@ -54,10 +54,11 @@ async function main(): Promise<void> {
 
   services.sla.start();
   services.distributionQueue.start();
+  services.workQueues.start();
 
   let shuttingDown = false;
   services.cleanup.start(work => withRuntimePaused(dispatcher, services.messages,
-    [services.sla, services.distributionQueue, services.deliveryAlerts], work, () => shuttingDown));
+    [services.sla, services.distributionQueue, services.workQueues, services.deliveryAlerts], work, () => shuttingDown));
 
   let shutdownPromise: Promise<void> | undefined;
   const shutdown = (signal: string): Promise<void> => {
@@ -70,6 +71,7 @@ async function main(): Promise<void> {
       polling?.stop();
       services.sla.stop();
       services.distributionQueue.stop();
+      services.workQueues.stop();
       services.deliveryAlerts.stop();
       services.messages.stop();
       await completeShutdown({
@@ -78,6 +80,7 @@ async function main(): Promise<void> {
           dispatcher.waitForIdle(), polling?.waitForIdle(),
           services.sla.waitForIdle(), services.deliveryAlerts.waitForIdle(),
           services.distributionQueue.waitForIdle(),
+          services.workQueues.waitForIdle(),
           services.cleanup.waitForIdle(),
         ]),
         waitForMessages: () => services.messages.waitForIdle(),

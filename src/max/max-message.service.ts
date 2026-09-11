@@ -24,7 +24,10 @@ import { MaxClient } from './max-client';
 import { queueDeliveryStatus, reviewDeliveryNotice } from '../delivery/delivery-status';
 import { INCIDENT_INCLUDE } from '../incidents/incident.repository';
 import { distributionResolvedNotice, distributionWorkedNotice, sectorCard } from '../bot/views/cards';
-import { queueDistributionRefresh, queueSectorRefresh } from '../delivery/workflow-outbox';
+import { queueDistributionRefresh, queueSectorRefresh, queueStaffRefresh } from '../delivery/workflow-outbox';
+import { workPanelKey, workPanelText, workButtons } from '../work-queues/state';
+import { reviewCard } from '../bot/views/cards';
+import { reviewKeyboard, revisionKeyboard } from '../bot/keyboards';
 import { sectorKeyboard } from '../bot/keyboards';
 import { slaNotification, slaStage, type SlaStage } from '../sla/sla-notification';
 import { incidentCallback } from './callback-payload';
@@ -53,6 +56,8 @@ export type CompositeMessage = {
     | { type: 'clarification-question' | 'clarification-reply'; incidentId: string; clarificationId: string }
     | { type: 'sector-refresh'; incidentId: string; textOnly?: boolean }
     | { type: 'distribution-panel' }
+    | { type: 'work-panel' }
+    | { type: 'staff-refresh'; incidentId: string }
     | { type: 'distribution-refresh'; incidentId: string }
     | { type: 'distribution-alert'; level: 'normal' | 'escalation'; hour: number };
   replyToMessageId?: string;
@@ -80,6 +85,7 @@ type DurableMessageDependencies = { prisma: PrismaClient; storage: MediaStorage 
 
 type StoredPayload = {
   text: string;
+  keyboardMessageId?: string;
   operation?: CompositeMessage['operation'];
   replyToMessageId?: string;
   label?: string | undefined;
@@ -192,7 +198,7 @@ export class MaxMessageService {
     target: SendTarget,
     message: Omit<CompositeMessage, 'delivery'>,
     strictAttachments = true,
-  ): Promise<{ firstMessageId?: string }> {
+  ): Promise<{ firstMessageId?: string; keyboardMessageId?: string }> {
     const parts = splitText(message.text, message.label);
     const keyboardAttachment: AttachmentRequest | undefined = message.keyboard?.length
       ? { type: 'inline_keyboard', payload: { buttons: message.keyboard } }
@@ -203,6 +209,7 @@ export class MaxMessageService {
     const inlineAttachments = inlineGroup ? await this.upload(inlineGroup, strictAttachments) : [];
 
     let firstMessageId: string | undefined;
+    let keyboardMessageId: string | undefined;
 
     for (let index = 0; index < parts.length; index += 1) {
       const isLast = index === parts.length - 1;
@@ -218,6 +225,7 @@ export class MaxMessageService {
         index === 0 ? message.replyToMessageId : undefined,
       );
       firstMessageId ??= sent?.body?.mid;
+      if (isLast && keyboardAttachment) keyboardMessageId = sent?.body?.mid;
     }
 
     // Anything that could not share the first message (a file next to photos,
@@ -229,7 +237,7 @@ export class MaxMessageService {
       await this.deliver(target, message.label ?? '', uploaded, true);
     }
 
-    return { firstMessageId: firstMessageId ?? undefined };
+    return { firstMessageId: firstMessageId ?? undefined, ...(keyboardMessageId ? { keyboardMessageId } : {}) };
   }
 
   /** Start the persistent outbox worker. Immediate delivery still happens in send(). */
@@ -437,6 +445,10 @@ export class MaxMessageService {
       }
       const result = payload.operation?.type === 'distribution-panel'
         ? await this.refreshDistributionPanel(row.targetId)
+        : payload.operation?.type === 'work-panel'
+        ? await this.refreshWorkPanel(row.targetId)
+        : payload.operation?.type === 'staff-refresh'
+        ? await this.refreshStaffCards(payload.operation.incidentId)
         : payload.operation?.type === 'distribution-refresh'
         ? await this.refreshDistributionCards(payload.operation.incidentId)
         : payload.operation?.type === 'distribution-alert'
@@ -448,7 +460,7 @@ export class MaxMessageService {
         : payload.operation?.type === 'delivery-card'
         ? await this.refreshDeliveryCard(payload.operation)
         : await this.deliverLogical(target, { ...payload, attachments }, true);
-      await this.complete(row, result.firstMessageId);
+      await this.complete(row, result.firstMessageId, 'keyboardMessageId' in result ? result.keyboardMessageId as string | undefined : undefined);
       await this.cleanupAttachments(staged);
       return { firstMessageId: result.firstMessageId, state: 'sent', trackingApplied: true };
     } catch (error) {
@@ -475,7 +487,7 @@ export class MaxMessageService {
     }
   }
 
-  private async complete(row: OutboundMessage, firstMessageId: string | undefined): Promise<void> {
+  private async complete(row: OutboundMessage, firstMessageId: string | undefined, keyboardMessageId?: string): Promise<void> {
     const prisma = this.durable!.prisma;
     await prisma.$transaction(async (tx) => {
       const marked = await tx.outboundMessage.updateMany({
@@ -486,6 +498,7 @@ export class MaxMessageService {
           lockedAt: null,
           lastError: null,
           firstMessageId: firstMessageId ?? null,
+          ...(keyboardMessageId ? { payload: { ...(row.payload as Prisma.JsonObject), keyboardMessageId } } : {}),
           trackingApplied: true,
         },
       });
@@ -494,6 +507,13 @@ export class MaxMessageService {
       if (operation?.type === 'distribution-panel' && firstMessageId) {
         const key = panelSettingKey(row.targetId);
         await tx.systemSetting.upsert({ where: { key }, create: { key, value: firstMessageId }, update: { value: firstMessageId } });
+      }
+      if (operation?.type === 'work-panel' && firstMessageId) {
+        const key = workPanelKey(row.targetId);
+        await tx.systemSetting.upsert({ where: { key }, create: { key, value: firstMessageId }, update: { value: firstMessageId } });
+      }
+      if (row.incidentId && firstMessageId && (row.trackingType === 'REVIEW_CARD' || row.dedupeKey?.startsWith('work-copy:') || row.dedupeKey?.startsWith('revision:'))) {
+        await queueStaffRefresh(tx, row.incidentId, `published:${firstMessageId}`);
       }
       if (row.incidentId && firstMessageId && row.dedupeKey?.startsWith('distribution-claim:')) {
         // The assignment may have happened while MAX was delivering this copy.
@@ -587,15 +607,23 @@ export class MaxMessageService {
   }
 
   private async refreshDistributionPanel(chatId: bigint): Promise<{ firstMessageId?: string }> {
-    const db = this.durable!.prisma;
     const config = getConfig();
     if (chatId !== config.DISTRIBUTION_CHAT_ID) return {};
-    const text = queuePanelText(await queueSnapshot(db, new Date()));
-    const keyboard = queueKeyboard();
-    const setting = await db.systemSetting.findUnique({ where: { key: panelSettingKey(chatId) } });
+    return this.refreshPinnedPanel(chatId, panelSettingKey(chatId), queuePanelText(await queueSnapshot(this.durable!.prisma, new Date())), queueKeyboard());
+  }
+
+  private async refreshWorkPanel(chatId: bigint): Promise<{ firstMessageId?: string }> {
+    return this.refreshPinnedPanel(chatId, workPanelKey(chatId), await workPanelText(this.durable!.prisma, chatId), workButtons());
+  }
+
+  private async refreshPinnedPanel(chatId: bigint, key: string, text: string, keyboard: Button[][]): Promise<{ firstMessageId?: string }> {
+    const setting = await this.durable!.prisma.systemSetting.findUnique({ where: { key } });
     let firstMessageId = setting?.value;
     if (firstMessageId) {
       try {
+        // MAX can acknowledge editing a deleted id; verify existence first.
+        const current = await this.max.getMessage(firstMessageId);
+        if (String(current.recipient.chat_id) !== String(chatId)) throw new Error('Queue panel belongs to another chat');
         await this.max.editMessage(firstMessageId, text, [{ type: 'inline_keyboard', payload: { buttons: keyboard } }]);
       } catch (error) {
         // Recreate only a confirmed missing message, never on transient MAX failures.
@@ -609,12 +637,72 @@ export class MaxMessageService {
       if (!firstMessageId) throw new Error('MAX did not return a queue panel message id');
     }
     try {
-      const pinned = await this.max.api.getPinnedMessage(Number(chatId));
-      if (!pinned.message) await this.max.api.pinMessage(Number(chatId), firstMessageId, { notify: false });
+      const pinned = await this.max.getPinnedMessage(chatId).catch(error => {
+        if (error instanceof MaxError && error.status === 404) return { message: null };
+        throw error;
+      });
+      if (pinned.message?.body.mid !== firstMessageId) {
+        const result = await this.max.pinMessage(chatId, firstMessageId);
+        if (!result.success) throw new Error('Queue panel pin was not confirmed');
+      }
     } catch (error) {
       log.warn({ err: String(error) }, 'queue panel is available but automatic pin failed');
     }
     return { firstMessageId };
+  }
+
+  private async refreshStaffCards(incidentId: string): Promise<{ firstMessageId?: string }> {
+    const db = this.durable!.prisma;
+    const incident = await db.incident.findUnique({ where: { id: incidentId }, include: INCIDENT_INCLUDE });
+    if (!incident) return {};
+    const latest = incident.answers.at(-1);
+    const rows = await db.outboundMessage.findMany({ where: { incidentId, targetType: 'chat', firstMessageId: { not: null }, OR: [
+      { trackingType: 'REVIEW_CARD' }, { dedupeKey: { startsWith: 'work-copy:' } }, { dedupeKey: { startsWith: `revision:${incidentId}:` } },
+    ] } });
+    if (incident.reviewMessageId && !rows.some(r => r.firstMessageId === incident.reviewMessageId)) {
+      // Legacy original card not linked to a durable publication.
+      rows.push({ firstMessageId: incident.reviewMessageId, answerId: latest?.id ?? null, targetId: getConfig().REVIEW_CHAT_ID!, trackingType: 'REVIEW_CARD', dedupeKey: null } as OutboundMessage);
+    }
+    const lock = await db.actionLock.findFirst({ where: { incidentId, action: 'review-queue', lockedUntil: { gt: new Date() } } });
+    const owner = lock ? await db.user.findUnique({ where: { maxUserId: lock.maxUserId }, select: { displayName: true } }) : null;
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const stored = row.payload as unknown as StoredPayload | undefined;
+      const messageId = stored?.keyboardMessageId ?? row.firstMessageId;
+      if (!messageId || seen.has(messageId)) continue;
+      seen.add(messageId);
+      const review = row.trackingType === 'REVIEW_CARD' || row.dedupeKey?.startsWith('work-copy:review:');
+      if (row.targetId !== (review ? getConfig().REVIEW_CHAT_ID : incident.assignedGroup?.maxChatId)) continue;
+      let text: string; let buttons: Button[][] = [];
+      if (review) {
+        const answer = incident.answers.find(a => a.id === row.answerId);
+        if (!answer) continue;
+        const active = incident.status === 'WAITING_REVIEW' && latest?.id === answer.id && answer.status === 'WAITING_REVIEW';
+        text = active ? reviewCard(incident, answer, incident.assignedGroup)
+          : latest?.id === answer.id && answer.status === 'APPROVED' ? `${reviewDeliveryNotice(incident, answer)}\n\n${answer.text}`
+          : `ℹ️ ${incident.publicCode}: ${answer.status === 'REVISION_REQUIRED' ? 'ответ возвращён на доработку' : 'архивная версия ответа'}.\n\n${answer.text}`;
+        if (active) {
+          buttons = reviewKeyboard(incidentId, answer.id);
+          if (lock) text += `\n\nПроверяет: ${owner?.displayName ?? 'сотрудник'}.`;
+          if (lock && row.dedupeKey?.includes(`:${lock.maxUserId}:`)) buttons.push([{ type: 'callback', text: 'Освободить обращение', payload: `work:release:${incidentId}` }]);
+        }
+      } else if (row.dedupeKey?.startsWith('revision:')) {
+        text = `↩️ ${incident.publicCode}: ${incident.status === 'REVISION_REQUIRED' ? 'на доработке' : 'доработка по этой карточке завершена'}.\n\n${incident.revisionReason ?? ''}`;
+        if (incident.status === 'REVISION_REQUIRED' && row.dedupeKey === `revision:${incidentId}:${latest?.version}`) buttons = revisionKeyboard(incidentId);
+      } else {
+        text = sectorCard(incident, incident.assignedGroup!);
+        buttons = sectorKeyboard(incidentId, { status: incident.status, hasTemplate: !!incident.assignedGroup?.answerTemplate });
+      }
+      if (stored?.keyboardMessageId && stored.keyboardMessageId !== row.firstMessageId) {
+        // Keep every original text fragment; only the final fragment carries actions.
+        const tail = splitText(stored.text, stored.label).at(-1)!;
+        const notice = `ℹ️ ${incident.publicCode}: ${buttons.length ? 'действия доступны ниже' : 'действия по этой карточке завершены'}.\n\n`;
+        text = Array.from(notice + tail).length <= MAX_TEXT_LENGTH ? notice + tail : tail;
+      }
+      try { await this.max.editCardWithKeyboard(messageId, text, buttons); }
+      catch (error) { if (!(error instanceof MaxError) || error.status !== 404) throw error; }
+    }
+    return {};
   }
 
   private async deliverDistributionAlert(chatId: bigint, operation: Extract<CompositeMessage['operation'], { type: 'distribution-alert' }>): Promise<{ firstMessageId?: string }> {
@@ -707,7 +795,7 @@ export class MaxMessageService {
     if (operation.card === 'distribution') {
       if (answer.deliveredAt) await this.refreshDistributionCards(incident.id);
     } else if (incident.reviewMessageId) {
-      await this.max.editMessage(incident.reviewMessageId, reviewDeliveryNotice(incident, answer), []);
+      await this.refreshStaffCards(incident.id);
     }
     return {};
   }
@@ -808,6 +896,16 @@ export class MaxMessageService {
    */
   async editCardKeyboard(messageId: string, text: string, keyboard: Button[][]): Promise<boolean> {
     return this.edit(messageId, text, [{ type: 'inline_keyboard', payload: { buttons: keyboard } }]);
+  }
+
+  /** Final staff notices retain the answer's photos and files. Durable refresh retries failures. */
+  async finalizeStaffCard(messageId: string, text: string): Promise<boolean> {
+    if (Array.from(text).length > MAX_TEXT_LENGTH) return false;
+    const publication = await this.durable?.prisma.outboundMessage.findFirst({ where: { firstMessageId: messageId } });
+    const payload = publication?.payload as unknown as StoredPayload | undefined;
+    if (payload?.keyboardMessageId && payload.keyboardMessageId !== messageId) return false;
+    try { await this.max.editCardWithKeyboard(messageId, text, []); return true; }
+    catch (error) { log.warn({ err: String(error), messageId }, 'staff card finalization deferred'); return false; }
   }
 
   /** Editing is best-effort: a refused edit must never abort the action. */
