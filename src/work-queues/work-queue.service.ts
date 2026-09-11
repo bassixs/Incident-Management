@@ -20,6 +20,7 @@ import { queueWorkPanel, REVIEW_LEASE_ACTION, REVIEW_LOCK, workScope } from './s
 
 const log = moduleLogger('work-queues');
 export class WorkQueueService {
+  personalSweep?: () => Promise<void>;
   private timer?: NodeJS.Timeout;
   private running?: Promise<void>;
   private activity = new AsyncActivity();
@@ -156,6 +157,7 @@ export class WorkQueueService {
   sweep(): Promise<void> {
     if (this.running) return this.running;
     this.running = this.activity.run(async () => {
+      await this.personalSweep?.();
       await this.prisma.$transaction(async tx => {
         await acquireAdvisoryLock(tx, ...REVIEW_LOCK);
         const expired = await tx.actionLock.findMany({ where: { action: REVIEW_LEASE_ACTION, lockedUntil: { lte: new Date() } } });

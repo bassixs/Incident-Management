@@ -1,4 +1,5 @@
 import { completeShutdown } from './server/shutdown';
+import { sweepPersonalWork } from './work-queues/private-workspace';
 import { retireClarifications } from './maintenance/retire-clarifications';
 import type { FastifyInstance } from 'fastify';
 
@@ -55,6 +56,7 @@ async function main(): Promise<void> {
   services.sla.start();
   services.distributionQueue.start();
   services.workQueues.start();
+  services.workQueues.personalSweep = () => sweepPersonalWork(services);
 
   let shuttingDown = false;
   services.cleanup.start(work => withRuntimePaused(dispatcher, services.messages,

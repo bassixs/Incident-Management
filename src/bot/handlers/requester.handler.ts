@@ -319,6 +319,6 @@ export async function sendMainMenu(services: AppServices, actor: ResolvedActor):
   }
   await services.messages.send(
     { userId: actor.maxUserId },
-    { text: greetingText(), keyboard: mainMenuKeyboard() },
+    { text: greetingText(), keyboard: [...mainMenuKeyboard(), ...(await services.prisma.privateWorkItem.count({ where: { maxUserId: actor.maxUserId } }) ? [[{ type: 'callback' as const, text: 'Моя работа', payload: 'personal:home' }]] : [])] },
   );
 }

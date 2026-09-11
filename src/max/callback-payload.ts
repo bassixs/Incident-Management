@@ -8,6 +8,7 @@
  */
 
 export const INCIDENT_ACTIONS = [
+  'personal',
   'redistribute',
   'review-take',
   'topic',
@@ -70,6 +71,7 @@ export const REPORT_ACTIONS = ['today', '7d', '30d', 'month', 'all', 'custom'] a
 export type ReportAction = (typeof REPORT_ACTIONS)[number];
 
 export type CallbackPayload =
+  | { kind: 'personal'; action: 'home' | 'resident' | 'open' | 'show' | 'details' | 'resume' | 'cancel' | 'release' | 'back' | 'confirm' | 'run'; itemId?: string; argument?: string }
   | { kind: 'work'; action: 'next' | 'list' | 'mine' | 'today' | 'refresh' | 'open' | 'release'; argument?: string }
   | { kind: 'cleanup'; action: 'today' | '7d' | '30d' | '90d' | 'all' | 'custom' }
   | { kind: 'help'; action: 'guide' | 'admin' }
@@ -113,6 +115,20 @@ export function parseCallbackPayload(raw: string | undefined | null): CallbackPa
 
   const parts = raw.split(':');
   const [namespace, action, ...rest] = parts;
+  if (namespace === 'personal') {
+    if (action === 'home') return rest.length <= 1 && (!rest[0] || /^\d{1,6}$/.test(rest[0])) ? { kind: 'personal', action, argument: rest[0] } : null;
+    if (action === 'resident') return rest.length === 0 ? { kind: 'personal', action } : null;
+    if (!rest[0] || !isUuid(rest[0])) return null;
+    if (action === 'run') {
+      const raw = rest.slice(1).join(':');
+      return raw.startsWith('incident:') && raw.length <= 180 && parseCallbackPayload(raw)?.kind === 'incident'
+        ? { kind: 'personal', action, itemId: rest[0], argument: raw } : null;
+    }
+    if (action === 'confirm') return rest.length === 2 && isUuid(rest[1] ?? '') ? { kind: 'personal', action, itemId: rest[0], argument: rest[1] } : null;
+    if (action && ['open', 'show', 'details', 'resume', 'cancel', 'release', 'back'].includes(action) && rest.length === 1)
+      return { kind: 'personal', action: action as 'open', itemId: rest[0] };
+    return null;
+  }
   if (namespace === 'work') {
     if (rest.length > 1) return null;
     const argument = rest[0];

@@ -17,6 +17,7 @@ import { codeLabel } from '../views/cards';
 import type { ResolvedActor } from '../handlers/helpers';
 import { ensureFreeSession } from '../handlers/session-guard';
 import { startRejectionFlow, handleRejectionAction } from './rejection-flow';
+import { invitePersonalWork, withPersonalWorkLock } from '../../work-queues/private-workspace';
 
 const log = moduleLogger('bot-incident');
 
@@ -58,6 +59,8 @@ export async function handleIncidentCallback(
   );
 
   switch (payload.action) {
+    case 'personal':
+      return withPersonalWorkLock(services, actor.maxUserId, () => invitePersonalWork(services, actor, chatId, incident.id));
     case 'review-take': {
       await reviewAnswerId(context, incident, payload.argument);
       await services.workQueues.claimReview(actor, chatId, incident.id);

@@ -9,6 +9,7 @@ import { findCommand } from '../commands';
 import { handleOperatorMessage } from './operator.handler';
 import { handleRequesterMessage, sendMainMenu } from './requester.handler';
 import { chatIdOf, isDialog, parseCommand, resolveActor, userFacingError } from './helpers';
+import { receivePersonalText, withPersonalWorkLock, enterPersonalWork, personalHome, exitPersonalWork } from '../../work-queues/private-workspace';
 
 const log = moduleLogger('bot-messages');
 
@@ -38,14 +39,26 @@ export async function handleMessageUpdate(services: AppServices, ctx: Context): 
 
   const actor = await resolveActor(services, sender, message.recipient.chat_type === 'chat' ? chatId : undefined);
 
+  const command = parseCommand(message.body.text);
+  const hasFile = message.body.attachments?.some(attachment => attachment.type === 'file');
+  // Staff drafts may contain files. Resolve the selected private workspace before
+  // applying the resident-only file restriction, including command captions.
+  if (dialog && (!command || hasFile)) {
+    try {
+      if (await withPersonalWorkLock(services, actor.maxUserId, () => receivePersonalText(services, actor, message))) return;
+    } catch (error) {
+      await services.messages.send({ userId: actor.maxUserId }, { text: userFacingError(error), keyboard: [[{ type: 'callback', text: 'Моя работа', payload: 'personal:home' }, { type: 'callback', text: 'Меню жителя', payload: 'personal:resident' }]] });
+      return;
+    }
+  }
+
   // Reject documents at every requester step, including command captions and
   // photos sent as files. Do not download them or change the current session.
-  if (dialog && message.body.attachments?.some(attachment => attachment.type === 'file')) {
+  if (dialog && hasFile) {
     await services.messages.send({ userId: actor.maxUserId }, { text: REJECTION_MESSAGES.file });
     return;
   }
 
-  const command = parseCommand(message.body.text);
   if (command) {
     const handler = findCommand(command.name);
     if (!handler) {
@@ -81,6 +94,10 @@ export async function handleMessageUpdate(services: AppServices, ctx: Context): 
 
   const session = await services.sessions.find(actor.maxUserId, chatId);
   if (!session) return;
+  if ((session.data as { privateWorkspaceId?: string } | null)?.privateWorkspaceId) {
+    await services.messages.send({ chatId }, { text: `${actor.displayName}, это действие открыто в личном диалоге. Ответ здесь не отправлен. Продолжите в боте через /work.`, keyboard: [[{ type: 'callback', text: 'Моя работа в личном диалоге', payload: 'personal:home' }]] });
+    return;
+  }
   await handleOperatorMessage(services, actor, chatId, message, session);
 }
 
@@ -89,6 +106,14 @@ export async function handleBotStarted(services: AppServices, ctx: Context): Pro
   const user = ctx.user;
   if (!user) return;
   const actor = await resolveActor(services, user);
+  const payload = (ctx.update as { payload?: string }).payload;
+  if (payload === 'staff_home' || (payload?.startsWith('staff_') && /^[0-9a-f-]{36}$/i.test(payload.slice(6)))) {
+    try {
+      await withPersonalWorkLock(services, actor.maxUserId, () => payload === 'staff_home' ? personalHome(services, actor) : enterPersonalWork(services, actor, payload!.slice(6)));
+    } catch (error) { await services.messages.send({ userId: actor.maxUserId }, { text: userFacingError(error), keyboard: [[{ type: 'callback', text: 'Моя работа', payload: 'personal:home' }]] }); }
+    return;
+  }
+  await exitPersonalWork(services, actor.maxUserId);
   await sendMainMenu(services, actor);
 }
 

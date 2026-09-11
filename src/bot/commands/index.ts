@@ -16,6 +16,7 @@ import { sendMainMenu } from '../handlers/requester.handler';
 import type { ResolvedActor } from '../handlers/helpers';
 import { adminAuditText, incidentHistoryText } from '../views/history';
 import { cleanupCommand } from './cleanup';
+import { personalHome, invitePersonalWork, exitPersonalWork, withPersonalWorkLock, enterPersonalWork, showPersonalWork } from '../../work-queues/private-workspace';
 
 const log = moduleLogger('bot-commands');
 
@@ -30,6 +31,9 @@ export type CommandContext = {
 type CommandHandler = (context: CommandContext) => Promise<void>;
 
 export const COMMANDS: Record<string, CommandHandler> = {
+  work: async ({ services, actor, chatId, isDialog }) => {
+    await withPersonalWorkLock(services, actor.maxUserId, async () => { if (isDialog) await personalHome(services, actor); else await invitePersonalWork(services, actor, chatId); });
+  },
   clear_data: context => cleanupCommand(context, 'data'),
   clear_users: context => cleanupCommand(context, 'users'),
   queue: async ({ services, actor, chatId, isDialog }) => {
@@ -48,12 +52,20 @@ export const COMMANDS: Record<string, CommandHandler> = {
     await assertWorkingChat(services, chatId, isDialog);
     await services.workQueues.list(actor, chatId, 0, false, true);
   },
-  start: async ({ services, actor, isDialog }) => {
+  start: async ({ services, actor, isDialog, args }) => {
     if (!isDialog) return;
+    if (args[0] === 'staff_home' || (args[0]?.startsWith('staff_') && /^[0-9a-f-]{36}$/i.test(args[0].slice(6)))) {
+      await withPersonalWorkLock(services, actor.maxUserId, () => args[0] === 'staff_home' ? personalHome(services, actor) : enterPersonalWork(services, actor, args[0]!.slice(6))); return;
+    }
+    await exitPersonalWork(services, actor.maxUserId);
     await sendMainMenu(services, actor);
   },
 
   info: async ({ services, actor, chatId, isDialog }) => {
+    if (isDialog) {
+      const current = await services.prisma.privateWorkItem.findFirst({ where: { maxUserId: actor.maxUserId, selected: true } });
+      if (current) { await withPersonalWorkLock(services, actor.maxUserId, () => showPersonalWork(services, actor, current.id)); return; }
+    }
     await sendChatInfo(services, actor, chatId, isDialog);
   },
 
@@ -65,6 +77,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
 
   my: async ({ services, actor, chatId, isDialog }) => {
     if (!isDialog) throw new ForbiddenError('Эта команда доступна только в личном чате с ботом.');
+    await exitPersonalWork(services, actor.maxUserId);
     const incidents = await services.incidents.listForRequester(actor.maxUserId);
     await reply(services, chatId, isDialog, actor, myIncidentsText(incidents));
   },

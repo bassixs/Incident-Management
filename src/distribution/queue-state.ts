@@ -9,6 +9,7 @@ export const CLAIM_MINUTES = 15;
 export const CLAIM_LOCK = ['distribution-queue', 'claims'] as const;
 export const panelSettingKey = (chatId: bigint) => `distribution-panel:${chatId}`;
 export const queueKeyboard = (): Button[][] => [
+  [{ type: 'callback', text: 'Моя работа в личном диалоге', payload: 'personal:home' }],
   [{ type: 'callback', text: 'Следующее обращение', payload: 'queue:next' }],
   [{ type: 'callback', text: 'Посмотреть список', payload: 'queue:list:0' },
     { type: 'callback', text: 'Обновить', payload: 'queue:refresh' }],

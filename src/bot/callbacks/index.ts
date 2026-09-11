@@ -17,6 +17,8 @@ import { assertWorkingChat } from '../middleware/authorize';
 import { sendChatGuide } from '../views/chat-guide';
 import { cleanupCommand } from '../commands/cleanup';
 import { resumeRejection } from './rejection-flow';
+import { invitePersonalWork, personalAction, personalHome, exitPersonalWork, withPersonalWorkLock } from '../../work-queues/private-workspace';
+import { sendMainMenu } from '../handlers/requester.handler';
 
 const log = moduleLogger('bot-callbacks');
 
@@ -96,7 +98,7 @@ export async function handleCallbackUpdate(services: AppServices, ctx: Context):
     });
   } finally {
     // Reopening a cancelled rejection is a new draft, not a duplicate submission.
-    if (leaseAcquired && lease && payload.kind === 'incident' && payload.action === 'reject') {
+    if (leaseAcquired && lease && payload.kind === 'incident' && ['reject', 'personal'].includes(payload.action)) {
       await services.actionGuard.release(lease.key).catch(() => undefined);
     }
   }
@@ -112,6 +114,17 @@ async function dispatchCallback(
   isDialog: boolean,
 ): Promise<string | undefined> {
   switch (payload.kind) {
+    case 'personal':
+      return withPersonalWorkLock(services, actor.maxUserId, async () => {
+        if (!isDialog) {
+          if (payload.action !== 'home' || chatId === undefined) throw new Error('Откройте личный диалог с ботом.');
+          return invitePersonalWork(services, actor, chatId);
+        }
+        if (payload.action === 'resident') { await exitPersonalWork(services, actor.maxUserId); await sendMainMenu(services, actor); }
+        else if (payload.action === 'home') await personalHome(services, actor, Number(payload.argument ?? 0));
+        else await personalAction(services, actor, payload.itemId!, payload.action, payload.argument, messageId);
+        return undefined;
+      });
     case 'work':
       await assertWorkingChat(services, chatId, isDialog);
       if (payload.action === 'next') return services.workQueues.claim(actor, chatId!);
@@ -133,6 +146,7 @@ async function dispatchCallback(
       await assertWorkingChat(services, chatId, isDialog);
       return handleQueueCallback(services, actor, chatId, payload);
     case 'user':
+      if (isDialog) await exitPersonalWork(services, actor.maxUserId);
       return handleUserCallback({ services, actor, chatId, messageId, callbackId }, payload);
     case 'incident':
       await assertWorkingChat(services, chatId, isDialog);
@@ -153,6 +167,7 @@ function actionLease(
   messageId: string | undefined,
 ) {
   if (payload.kind === 'noop') return undefined;
+  if (payload.kind === 'personal') return undefined;
 
   if (payload.kind === 'incident') {
     const globallyExclusive = ['assign-category', 'assign-group', 'take', 'approve'].includes(payload.action);

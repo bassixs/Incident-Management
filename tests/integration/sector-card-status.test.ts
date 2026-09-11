@@ -64,7 +64,7 @@ describeIntegration('sector card status through durable delivery', () => {
     expect(await card(incident.id)).toMatch(/^🔴 СВОБОДНОЕ/);
     await services.sector.takeInWork(incident.id, await actor());
     expect(await card(incident.id)).toMatch(/^🟡 В РАБОТЕ/);
-    expect(edits.mock.calls.filter(([id]) => id === original).at(-1)?.[2]).toEqual([[expect.objectContaining({ text: 'Подготовить ответ' })], [expect.objectContaining({ text: 'Вернуть на перераспределение' })], [expect.objectContaining({ text: 'Освободить обращение' })]]);
+    expect(edits.mock.calls.filter(([id]) => id === original).at(-1)?.[2]).toEqual([[expect.objectContaining({ text: 'Подготовить ответ' })], [expect.objectContaining({ text: 'Вернуть на перераспределение' })], [expect.objectContaining({ text: 'Освободить обращение' })], [expect.objectContaining({ text: 'Работать лично' })]]);
     expect(await card(incident.id)).toContain('👤 Исполнитель:\nСотрудник');
     await services.answers.submit(incident.id, await actor(), 'Первый ответ');
     await worker.flush();
@@ -73,7 +73,7 @@ describeIntegration('sector card status through durable delivery', () => {
     await services.review.requestRevision(incident.id, 'Добавьте сведения', await actor());
     await worker.flush();
     expect(await card(incident.id)).toMatch(/^🟠 НА ДОРАБОТКЕ/);
-    expect(edits.mock.calls.filter(([id]) => id === original).at(-1)?.[2]).toEqual([[expect.objectContaining({ text: 'Исправить ответ' })], [expect.objectContaining({ text: 'Вернуть на перераспределение' })], [expect.objectContaining({ text: 'Освободить обращение' })]]);
+    expect(edits.mock.calls.filter(([id]) => id === original).at(-1)?.[2]).toEqual([[expect.objectContaining({ text: 'Исправить ответ' })], [expect.objectContaining({ text: 'Вернуть на перераспределение' })], [expect.objectContaining({ text: 'Освободить обращение' })], [expect.objectContaining({ text: 'Работать лично' })]]);
     await services.sector.takeInWork(incident.id, await actor());
     expect(await card(incident.id)).toMatch(/^🟡 В РАБОТЕ/);
     await services.answers.submit(incident.id, await actor(), 'Исправленный ответ');

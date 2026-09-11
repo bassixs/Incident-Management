@@ -11,6 +11,7 @@ export const REVIEW_LOCK = ['work-queue', 'review'] as const;
 export const REVIEW_LEASE_ACTION = 'review-queue';
 export const workPanelKey = (chatId: bigint) => `work-panel:${chatId}`;
 export const workButtons = (): Button[][] => [
+  [{ type: 'callback', text: 'Моя работа в личном диалоге', payload: 'personal:home' }],
   [{ type: 'callback', text: 'Следующее свободное', payload: 'work:next' }],
   [{ type: 'callback', text: 'Посмотреть очередь', payload: 'work:list:0' }, { type: 'callback', text: 'Мои в работе', payload: 'work:mine:0' }],
   [{ type: 'callback', text: 'За сегодня', payload: 'work:today:0' }, { type: 'callback', text: 'Обновить', payload: 'work:refresh' }],

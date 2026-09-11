@@ -8,6 +8,6 @@ describe('executor controls by incident stage', () => {
     ['REVISION_REQUIRED', ['Исправить ответ', 'Вернуть на перераспределение', 'Освободить обращение']],
     ['WAITING_REVIEW', []], ['RESOLVED', []], ['REJECTED', []], ['DISTRIBUTION', []],
   ])('%s exposes only usable controls', (status, expected) => {
-    expect(sectorKeyboard('id', { hasTemplate: true, status }).flat().map(b => b.text)).toEqual(expected);
+    expect(sectorKeyboard('id', { hasTemplate: true, status }).flat().map(b => b.text)).toEqual(expected.length ? [...expected, 'Работать лично'] : expected);
   });
 });

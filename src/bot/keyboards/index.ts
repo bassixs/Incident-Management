@@ -231,6 +231,7 @@ export function answerRatingKeyboard(incidentId: string): Button[][] {
 /** Buttons under the distribution-chat card (§16). */
 export function distributionKeyboard(incidentId: string): Button[][] {
   return [
+    [button.callback('Работать лично', incidentCallback('personal', incidentId))],
     [button.callback('Распределить', incidentCallback('assign', incidentId), { intent: 'positive' })],
     [button.callback('Изменить тему', incidentCallback('topic', incidentId))],
     [button.callback('Освободить обращение', `queue:release:${incidentId}`)],
@@ -346,12 +347,14 @@ export function sectorKeyboard(incidentId: string, options: { hasTemplate: boole
   }
   rows.push([button.callback('Вернуть на перераспределение', incidentCallback('redistribute', incidentId))]);
   rows.push([button.callback('Освободить обращение', `work:release:${incidentId}`)]);
+  rows.push([button.callback('Работать лично', incidentCallback('personal', incidentId))]);
   return rows;
 }
 
 /** Buttons under the review-chat card (§29). */
 export function reviewKeyboard(incidentId: string, answerId: string): Button[][] {
   return [
+    [button.callback('Работать лично', incidentCallback('personal', incidentId))],
     [button.callback('Взять на согласование', incidentCallback('review-take', incidentId, answerId))],
     [button.callback('Освободить обращение', `work:release:${incidentId}`)],
     [button.callback('✅ Согласовать', incidentCallback('approve', incidentId, answerId), { intent: 'positive' })],
@@ -363,7 +366,8 @@ export function reviewKeyboard(incidentId: string, answerId: string): Button[][]
 export function revisionKeyboard(incidentId: string): Button[][] {
   return [[button.callback('Исправить ответ', incidentCallback('fix', incidentId), { intent: 'positive' })],
     [button.callback('Вернуть на перераспределение', incidentCallback('redistribute', incidentId))],
-    [button.callback('Освободить обращение', `work:release:${incidentId}`)]];
+    [button.callback('Освободить обращение', `work:release:${incidentId}`)],
+    [button.callback('Работать лично', incidentCallback('personal', incidentId))]];
 }
 
 /** Period picker shown by a bare `/report` (§40). */

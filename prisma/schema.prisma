@@ -124,6 +124,7 @@ model User {
   approvedAnswers IncidentAnswer[] @relation("AnswerApprover")
   bansIssued      Ban[]            @relation("BanAuthor")
   legalAcceptances LegalAcceptance[]
+  privateWorkItems PrivateWorkItem[]
 
   @@index([maxUserId])
 }
@@ -262,6 +263,7 @@ model Incident {
   answers     IncidentAnswer[]
   history     IncidentHistory[]
   sessions    OperatorSession[]
+  privateWorkItems PrivateWorkItem[]
 
   @@index([requesterId, createdAt])
   @@index([requesterMaxUserId, createdAt])
@@ -410,6 +412,25 @@ model SystemSetting {
 }
 
 /// Atomic per-day counter backing Incident.publicCode (INC-YYYYMMDD-NNNN).
+/// Personal employee workspace. Drafts survive release/restart; incident retention removes them.
+model PrivateWorkItem {
+  id           String   @id @default(uuid())
+  maxUserId    BigInt
+  user         User     @relation(fields: [maxUserId], references: [maxUserId], onDelete: Cascade)
+  incidentId   String
+  incident     Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  originChatId BigInt
+  selected     Boolean  @default(false)
+  openedAt     DateTime?
+  data         Json     @default("{}")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([maxUserId, incidentId, originChatId])
+  @@index([maxUserId, selected])
+  @@index([incidentId])
+}
+
 model IncidentCounter {
   day        String @id
   lastNumber Int    @default(0)

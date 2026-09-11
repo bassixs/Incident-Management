@@ -17,7 +17,8 @@ function setup(attachments: unknown[], text = 'Описание', dialog = true)
   const session = { id: 'unchanged-session' };
   const services = {
     config: getConfig(),
-    prisma: { responsibleGroup: { findMany: vi.fn().mockResolvedValue([{ name: 'Профильная группа', bypassReview: false }]) } },
+    prisma: { privateWorkItem: { findFirst: vi.fn().mockResolvedValue(null) }, responsibleGroup: { findMany: vi.fn().mockResolvedValue([{ name: 'Профильная группа', bypassReview: false }]) } },
+    actionGuard: { acquire: vi.fn().mockResolvedValue(true), release: vi.fn().mockResolvedValue(undefined) },
     users: { identity: vi.fn().mockResolvedValue({ user: { id: 'user', maxUserId: 5001n, displayName: 'Житель' }, roles: [] }) },
     messages: { send: vi.fn().mockResolvedValue({}) },
     sessions: { find: vi.fn().mockResolvedValue(session) },
