@@ -4,6 +4,7 @@ import type { PrismaLike, Tx } from '../database/prisma';
 import { formatCounterDay, dayBoundaries } from '../utils/datetime';
 
 export const INCIDENT_INCLUDE = {
+  history: { where: { action: 'REDISTRIBUTION_REQUESTED' }, orderBy: { createdAt: 'desc' }, take: 1 },
   requester: true,
   userSelectedCategory: true,
   assignedGroup: true,

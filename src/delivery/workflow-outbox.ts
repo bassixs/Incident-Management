@@ -87,7 +87,7 @@ export async function queueSector(tx: Tx, incidentId: string): Promise<void> {
   await queueMessage(tx, { chatId: requiredChat(group.maxChatId) }, {
     text: sectorCard(incident, group), label: codeLabel(incident),
     keyboard: sectorKeyboard(incidentId, { hasTemplate: Boolean(group.answerTemplate), status: incident.status }),
-    delivery: { dedupeKey: `sector-card:${incidentId}`, tracking: { type: 'SECTOR_CARD', incidentId } },
+    delivery: { dedupeKey: `sector-card:${incidentId}${incident.history?.[0] ? ':return:' + incident.history[0].id : ''}`, tracking: { type: 'SECTOR_CARD', incidentId } },
   }, incidentId, incident.attachments);
 }
 
@@ -119,7 +119,7 @@ export async function queueStaffRefresh(tx: Tx, incidentId: string, event: strin
     operation: { type: 'staff-refresh', incidentId }, delivery: { dedupeKey: `staff-refresh:${incidentId}:${event}` } }, incidentId);
   if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)) await tx.operatorSession.deleteMany({ where: { incidentId, type: 'WAITING_FOR_ANSWER' } });
   if (incident.status !== 'WAITING_REVIEW') {
-    await tx.operatorSession.deleteMany({ where: { incidentId, type: 'WAITING_REVISION_REASON' } });
+    await tx.operatorSession.deleteMany({ where: { incidentId, type: 'WAITING_REVISION_REASON', NOT: { data: { path: ['redistribution'], equals: true } } } });
     await tx.actionLock.deleteMany({ where: { incidentId, action: 'review-queue' } });
   }
 }

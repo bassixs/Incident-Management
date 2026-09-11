@@ -196,5 +196,6 @@ async function handleSessionCallback(
   if (await discardObsoleteSession(services, session)) return 'Обращение уже перешло на другой этап. Незавершённое действие сброшено.';
   await services.sessions.extend(session.id);
   const incident = session.incidentId ? await services.repository.findById(session.incidentId) : null;
-  return `${incident ? `${incident.publicCode}: ` : ''}${SESSION_PROMPTS[session.type]}`;
+  const prompt = (session.data as { redistribution?: boolean } | null)?.redistribution ? 'Ожидается причина возврата на перераспределение.' : SESSION_PROMPTS[session.type];
+  return `${incident ? `${incident.publicCode}: ` : ''}${prompt}`;
 }

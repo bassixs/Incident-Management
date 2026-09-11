@@ -25,13 +25,24 @@ export const SESSION_PROMPTS: Record<SessionType, string> = {
 export async function discardObsoleteSession(services: AppServices, session: OperatorSession): Promise<boolean> {
   if (!session.incidentId || ![SessionType.WAITING_FOR_ANSWER, SessionType.WAITING_REVISION_REASON, SessionType.WAITING_REJECTION_REASON].some(type => type === session.type)) return false;
   const incident = await services.repository.findById(session.incidentId);
-  const data = session.data as { reviewAnswerId?: string } | null;
-  const valid = incident && (session.type === SessionType.WAITING_FOR_ANSWER
-    ? ['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)
-    : session.type === SessionType.WAITING_REVISION_REASON
-      ? incident.status === 'WAITING_REVIEW' && incident.answers.at(-1)?.id === data?.reviewAnswerId
-      : incident.status === 'DISTRIBUTION');
-  if (valid) return false;
+  const data = session.data as { reviewAnswerId?: string; redistribution?: boolean; assignedGroupId?: string; leaseUntil?: string; assignmentCycle?: string } | null;
+  const sectorStage = incident && ['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status);
+  let valid = false;
+  if (incident) {
+    if (session.type === SessionType.WAITING_FOR_ANSWER) valid = !!sectorStage;
+    else if (session.type === SessionType.WAITING_REVISION_REASON) {
+      valid = data?.redistribution
+        ? !!sectorStage && incident.assignedGroupId === data.assignedGroupId && incident.assignedGroup?.maxChatId === session.chatId
+        : incident.status === 'WAITING_REVIEW' && incident.answers.at(-1)?.id === data?.reviewAnswerId;
+    } else valid = incident.status === 'DISTRIBUTION';
+  }
+  const action = session.type === SessionType.WAITING_REVISION_REASON && !data?.redistribution ? 'review-queue' : 'sector-queue';
+  const leaseValid = !data?.leaseUntil || !!await services.prisma.actionLock.findFirst({ where: {
+    incidentId: session.incidentId, maxUserId: session.maxUserId, action,
+    lockedUntil: { gt: new Date(), equals: new Date(data.leaseUntil) },
+  } });
+  const sameAssignment = !data?.assignmentCycle || data.assignmentCycle === (incident?.history?.[0]?.id ?? 'initial');
+  if (valid && leaseValid && sameAssignment) return false;
   await services.prisma.operatorSession.deleteMany({ where: { id: session.id, expiresAt: session.expiresAt } });
   return true;
 }
@@ -62,7 +73,7 @@ export async function ensureFreeSession(
       text: [
         `У вас уже есть незавершённое действие${pending ? ` с ${pending.publicCode}` : ''}.`,
         '',
-        SESSION_PROMPTS[existing.type],
+        (existing.data as { redistribution?: boolean } | null)?.redistribution ? 'Ожидается причина возврата на перераспределение.' : SESSION_PROMPTS[existing.type],
         '',
         '«Продолжить» — вернуться к нему, «Отменить» — сбросить и начать заново.',
       ].join('\n'),

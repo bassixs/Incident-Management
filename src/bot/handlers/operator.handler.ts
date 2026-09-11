@@ -126,6 +126,13 @@ async function applyRevision(
   session: OperatorSession,
   reason: string,
 ): Promise<void> {
+  const returnData = session.data as { redistribution?: boolean; assignedGroupId?: string } | null;
+  if (returnData?.redistribution) {
+    await services.sector.returnToDistribution(requireIncidentId(session), actor, chatId, reason, returnData.assignedGroupId);
+    await services.prisma.operatorSession.deleteMany({ where: { id: session.id } });
+    await services.messages.send({ chatId }, { text: '↩️ Обращение возвращено в очередь распределения. Причина сохранена, срок ответа не изменён.' });
+    return;
+  }
   assertApprover(services, actor, chatId);
   if (isBlank(reason)) throw new ValidationError('Причина возврата не может быть пустой.');
 

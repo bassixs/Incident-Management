@@ -1,3 +1,4 @@
+import { SECTOR_LEASE_ACTION } from '../../work-queues/leases';
 import { IncidentStatus, ResponsibleGroupKind, SessionType } from '@prisma/client';
 
 import type { AppServices } from '../../app/container';
@@ -15,8 +16,6 @@ import {
 import { codeLabel } from '../views/cards';
 import type { ResolvedActor } from '../handlers/helpers';
 import { ensureFreeSession } from '../handlers/session-guard';
-import { assertReviewReservation } from '../../work-queues/state';
-import { TRANSACTION_OPTIONS } from '../../database/prisma';
 
 const log = moduleLogger('bot-incident');
 
@@ -58,6 +57,24 @@ export async function handleIncidentCallback(
   );
 
   switch (payload.action) {
+    case 'review-take': {
+      await reviewAnswerId(context, incident, payload.argument);
+      await services.workQueues.claimReview(actor, chatId, incident.id);
+      return `${incident.publicCode}: закреплено за ${actor.displayName} на 15 минут`;
+    }
+    case 'redistribute': {
+      assertResponder(actor, incident, chatId);
+      if (incident.assignedGroup?.maxChatId !== chatId || !['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)) throw new ConflictError('Возврат доступен только в текущем профильном чате до отправки ответа.');
+      if (!(await ensureFreeSession(services, actor, chatId, incident.id))) return;
+      const own = await services.prisma.actionLock.findFirst({ where: { incidentId: incident.id, action: SECTOR_LEASE_ACTION, maxUserId: actor.maxUserId, lockedUntil: { gt: new Date() } } });
+      if (!own) await services.sector.takeInWork(incident.id, actor);
+      await services.sessions.start({ maxUserId: actor.maxUserId, chatId, type: SessionType.WAITING_REVISION_REASON, incidentId: incident.id,
+        data: { redistribution: true, assignedGroupId: incident.assignedGroupId, assignmentCycle: incident.history?.[0]?.id ?? 'initial', leaseUntil: (await services.prisma.actionLock.findUniqueOrThrow({ where: { key: `sector-queue:${incident.id}` } })).lockedUntil.toISOString() } });
+      await services.messages.send({ chatId }, { text: `${incident.publicCode}: укажите причину возврата на перераспределение одним сообщением (до 1000 символов).`,
+        keyboard: [[{ type: 'callback', text: 'Отмена', payload: `incident:cancel:${incident.id}` }]] });
+      return;
+    }
+
     case 'topic':
     case 'topic-page': {
       assertDispatcher(services, actor, chatId);
@@ -338,12 +355,14 @@ async function startAnswer(
   }
   if (!(await ensureFreeSession(services, actor, chatId, incident.id))) return undefined;
 
+  const own = await services.prisma.actionLock.findFirst({ where: { incidentId: incident.id, action: SECTOR_LEASE_ACTION, maxUserId: actor.maxUserId, lockedUntil: { gt: new Date() } } });
+  if (!own) await services.sector.takeInWork(incident.id, actor);
   await services.sessions.start({
     maxUserId: actor.maxUserId,
     chatId,
     type: SessionType.WAITING_FOR_ANSWER,
     incidentId: incident.id,
-    ...(prefill ? { data: { prefillText: prefill } } : {}),
+    data: { ...(prefill ? { prefillText: prefill } : {}), assignmentCycle: incident.history?.[0]?.id ?? 'initial', leaseUntil: (await services.prisma.actionLock.findUniqueOrThrow({ where: { key: `sector-queue:${incident.id}` } })).lockedUntil.toISOString() },
   });
 
   await services.messages.send(
@@ -410,14 +429,14 @@ async function startRevision(
   if (incident.status !== IncidentStatus.WAITING_REVIEW) {
     return `${incident.publicCode} сейчас не на согласовании.`;
   }
-  await services.prisma.$transaction(tx => assertReviewReservation(tx, incident.id, actor.maxUserId), TRANSACTION_OPTIONS);
+  await services.workQueues.claimReview(actor, chatId, incident.id);
   if (!(await ensureFreeSession(services, actor, chatId, incident.id))) return undefined;
 
   await services.sessions.start({
     maxUserId: actor.maxUserId,
     chatId,
     type: SessionType.WAITING_REVISION_REASON,
-    data: { reviewAnswerId: answerId },
+    data: { reviewAnswerId: answerId, leaseUntil: (await services.prisma.actionLock.findUniqueOrThrow({ where: { key: `review-queue:${incident.id}` } })).lockedUntil.toISOString() },
     incidentId: incident.id,
   });
   await services.messages.send(

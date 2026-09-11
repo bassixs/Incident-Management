@@ -233,6 +233,7 @@ export function distributionKeyboard(incidentId: string): Button[][] {
   return [
     [button.callback('Распределить', incidentCallback('assign', incidentId), { intent: 'positive' })],
     [button.callback('Изменить тему', incidentCallback('topic', incidentId))],
+    [button.callback('Освободить обращение', `queue:release:${incidentId}`)],
     [button.callback('Отклонить', incidentCallback('reject', incidentId), { intent: 'negative' })],
     [button.callback('Заблокировать автора', incidentCallback('ban', incidentId), { intent: 'negative' })],
   ];
@@ -343,12 +344,16 @@ export function sectorKeyboard(incidentId: string, options: { hasTemplate: boole
   if (options.hasTemplate) {
     rows.push([button.callback('Использовать шаблон', incidentCallback('template', incidentId))]);
   }
+  rows.push([button.callback('Вернуть на перераспределение', incidentCallback('redistribute', incidentId))]);
+  rows.push([button.callback('Освободить обращение', `work:release:${incidentId}`)]);
   return rows;
 }
 
 /** Buttons under the review-chat card (§29). */
 export function reviewKeyboard(incidentId: string, answerId: string): Button[][] {
   return [
+    [button.callback('Взять на согласование', incidentCallback('review-take', incidentId, answerId))],
+    [button.callback('Освободить обращение', `work:release:${incidentId}`)],
     [button.callback('✅ Согласовать', incidentCallback('approve', incidentId, answerId), { intent: 'positive' })],
     [button.callback('↩️ На доработку', incidentCallback('revision', incidentId, answerId), { intent: 'negative' })],
   ];
@@ -356,7 +361,9 @@ export function reviewKeyboard(incidentId: string, answerId: string): Button[][]
 
 /** Button under the "returned for revision" card in the sector chat (§32). */
 export function revisionKeyboard(incidentId: string): Button[][] {
-  return [[button.callback('Исправить ответ', incidentCallback('fix', incidentId), { intent: 'positive' })]];
+  return [[button.callback('Исправить ответ', incidentCallback('fix', incidentId), { intent: 'positive' })],
+    [button.callback('Вернуть на перераспределение', incidentCallback('redistribute', incidentId))],
+    [button.callback('Освободить обращение', `work:release:${incidentId}`)]];
 }
 
 /** Period picker shown by a bare `/report` (§40). */

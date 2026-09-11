@@ -1,3 +1,10 @@
+import { randomUUID } from 'node:crypto';
+import { leaseView, SECTOR_LEASE_ACTION, LEASE_MS, assertSectorReservation } from '../work-queues/leases';
+import { acquireAdvisoryLock } from '../database/prisma';
+import { CLAIM_LOCK } from '../distribution/queue-state';
+import { queueDistributionRefresh, queueMessage, queueStaffRefresh } from '../delivery/workflow-outbox';
+import { assertResponder } from '../bot/middleware/authorize';
+import type { ResolvedActor } from '../bot/handlers/helpers';
 import { TRANSACTION_OPTIONS } from '../database/prisma';
 import { queueSectorRefresh } from '../delivery/workflow-outbox';
 import {
@@ -49,7 +56,7 @@ export class SectorService {
     const result = await this.messages.send(
       { chatId },
       {
-        text: sectorCard(incident, incident.assignedGroup),
+        text: sectorCard(incident, incident.assignedGroup, await leaseView(this.prisma, incidentId, SECTOR_LEASE_ACTION)),
         label: codeLabel(incident),
         keyboard: sectorKeyboard(incident.id, {
           hasTemplate: Boolean(incident.assignedGroup.answerTemplate),
@@ -57,7 +64,7 @@ export class SectorService {
         }),
         attachments: await loadOutboundAttachments(this.media, incident.attachments),
         delivery: {
-          dedupeKey: `sector-card:${incident.id}`,
+          dedupeKey: `sector-card:${incident.id}${incident.history?.[0] ? ':return:' + incident.history[0].id : ''}`,
           tracking: { type: 'SECTOR_CARD', incidentId: incident.id },
         },
       },
@@ -99,58 +106,74 @@ export class SectorService {
     incidentId: string,
     actor: { userId: string; maxUserId: bigint; displayName: string; role: string },
   ): Promise<IncidentWithRelations> {
-    const incident = await this.repository.findById(incidentId);
-    if (!incident) throw new NotFoundError(`Incident ${incidentId} not found`);
-
-    if (incident.status === IncidentStatus.IN_PROGRESS) {
-      if (incident.currentResponderId === actor.userId) {
-        throw new ConflictError(`${incident.publicCode} уже у вас в работе.`);
-      }
-      throw new ConflictError(
-        `${incident.publicCode} уже в работе у сотрудника ${incident.currentResponder?.displayName ?? '—'}.`,
-      );
-    }
-
-    this.state.assertTransition(incident.status, IncidentStatus.IN_PROGRESS, { incidentId });
-
-    await this.prisma.$transaction(async (tx) => {
-      const claimed = await this.repository.transition(
-        tx,
-        incidentId,
-        [IncidentStatus.ASSIGNED, IncidentStatus.REVISION_REQUIRED],
-        { status: IncidentStatus.IN_PROGRESS, currentResponderId: actor.userId },
-      );
-      if (!claimed) {
-        const fresh = await this.repository.findById(incidentId, tx);
-        throw new ConflictError(
-          `${incident.publicCode} уже взято в работу (${fresh?.currentResponder?.displayName ?? '—'}).`,
-        );
-      }
-
-      await this.history.record({
-        incidentId,
-        action: HistoryAction.TAKEN_IN_WORK,
-        fromStatus: incident.status,
-        toStatus: IncidentStatus.IN_PROGRESS,
-        actorMaxUserId: actor.maxUserId,
-        actorRole: actor.role,
-        metadata: { responder: actor.displayName },
-      }, tx);
-      await queueSectorRefresh(tx, incidentId, `sector-status:${incidentId}:taken:${incident.revisionCount}`, true);
+    await this.prisma.$transaction(async tx => {
+      await assertSectorReservation(tx, incidentId, actor.maxUserId);
+      const incident = await this.repository.findById(incidentId, tx);
+      if (!incident) throw new NotFoundError('Обращение не найдено.');
+      if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)) throw new ConflictError('Обращение уже перешло на другой этап.');
+      const active = await tx.actionLock.findFirst({ where: { incidentId, action: SECTOR_LEASE_ACTION, lockedUntil: { gt: new Date() } } });
+      if (active) throw new ConflictError(`${incident.publicCode} уже у вас в работе.`);
+      const key = `sector-queue:${incidentId}`;
+      const until = new Date(Date.now() + LEASE_MS);
+      const data = { incidentId, action: SECTOR_LEASE_ACTION, maxUserId: actor.maxUserId, lockedUntil: until };
+      await tx.actionLock.upsert({ where: { key }, create: { key, ...data }, update: data });
+      await tx.incident.update({ where: { id: incidentId }, data: { status: 'IN_PROGRESS', currentResponderId: actor.userId } });
+      await this.history.record({ incidentId, action: HistoryAction.TAKEN_IN_WORK, fromStatus: incident.status,
+        toStatus: 'IN_PROGRESS', actorMaxUserId: actor.maxUserId, actorRole: actor.role,
+        metadata: { responder: actor.displayName, until: until.toISOString() } }, tx);
+      await queueSectorRefresh(tx, incidentId, `sector-claim:${randomUUID()}`, true);
     }, TRANSACTION_OPTIONS);
-
     await this.messages.flush();
-    log.info(
-      incidentLogFields({
-        incidentId,
-        publicCode: incident.publicCode,
-        maxUserId: actor.maxUserId,
-        action: HistoryAction.TAKEN_IN_WORK,
-      }),
-      'incident taken in work',
-    );
-
     return (await this.repository.findById(incidentId))!;
+  }
+
+  async release(incidentId: string, actor: ResolvedActor, chatId: bigint): Promise<void> {
+    await this.prisma.$transaction(async tx => {
+      await assertSectorReservation(tx, incidentId, actor.maxUserId);
+      const incident = await this.repository.findById(incidentId, tx);
+      if (!incident) throw new NotFoundError('Обращение не найдено.');
+      if (incident.assignedGroup?.maxChatId !== chatId) throw new ConflictError('Откройте текущий профильный чат обращения.');
+      assertResponder(actor, incident, chatId);
+      if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)) throw new ConflictError('Обращение уже перешло на другой этап.');
+      const removed = await tx.actionLock.deleteMany({ where: { incidentId, action: SECTOR_LEASE_ACTION, maxUserId: actor.maxUserId } });
+      if (!removed.count) throw new ConflictError('Обращение уже свободно или закреплено за другим сотрудником.');
+      await tx.incident.update({ where: { id: incidentId }, data: { currentResponderId: null, status: incident.revisionReason ? 'REVISION_REQUIRED' : 'ASSIGNED' } });
+      await tx.operatorSession.deleteMany({ where: { incidentId, maxUserId: actor.maxUserId, chatId } });
+      await this.history.record({ incidentId, action: 'SECTOR_RELEASED', actorMaxUserId: actor.maxUserId, actorRole: actor.role }, tx);
+      await queueSectorRefresh(tx, incidentId, `sector-release:${randomUUID()}`, true);
+    }, TRANSACTION_OPTIONS);
+    await this.messages.flush();
+  }
+
+  async returnToDistribution(incidentId: string, actor: ResolvedActor, chatId: bigint, reason: string, expectedGroupId?: string): Promise<void> {
+    if (!reason.trim() || Array.from(reason).length > 1000) throw new ValidationError('Укажите причину возврата: от 1 до 1000 символов.');
+    await this.prisma.$transaction(async tx => {
+      // Same order as assignment: distribution lock before the incident answer lock.
+      await acquireAdvisoryLock(tx, ...CLAIM_LOCK);
+      await assertSectorReservation(tx, incidentId, actor.maxUserId);
+      const incident = await this.repository.findById(incidentId, tx);
+      if (!incident) throw new NotFoundError('Обращение не найдено.');
+      if (incident.assignedGroup?.maxChatId !== chatId) throw new ConflictError('Откройте текущий профильный чат обращения.');
+      assertResponder(actor, incident, chatId);
+      if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status) || (expectedGroupId && expectedGroupId !== incident.assignedGroupId)) throw new ConflictError('Обращение уже перешло на другой этап или в другую организацию.');
+      this.state.assertTransition(incident.status, 'DISTRIBUTION');
+      const event = await tx.incidentHistory.create({ data: { incidentId, action: 'REDISTRIBUTION_REQUESTED', fromStatus: incident.status,
+        toStatus: 'DISTRIBUTION', actorMaxUserId: actor.maxUserId, actorRole: actor.role,
+        metadata: { reason: reason.trim(), groupId: incident.assignedGroupId, groupName: incident.assignedGroup!.name, operator: actor.displayName } } });
+      await tx.incident.update({ where: { id: incidentId }, data: { status: 'DISTRIBUTION', assignedGroupId: null, assignedAt: null,
+        assignedByUserId: null, currentResponderId: null, sectorMessageId: null, reviewMessageId: null, revisionReason: null,
+        distributionClaimedBy: null, distributionClaimedName: null, distributionClaimUntil: null } });
+      await tx.actionLock.deleteMany({ where: { incidentId, action: { in: ['sector-queue', 'review-queue'] } } });
+      await tx.operatorSession.deleteMany({ where: { incidentId } });
+      await queueDistributionRefresh(tx, incidentId, event.id, true);
+      await queueStaffRefresh(tx, incidentId, event.id);
+      await queueMessage(tx, { chatId: getConfig().DISTRIBUTION_CHAT_ID! }, {
+        text: `↩️ ВОЗВРАЩЕНО НА ПЕРЕРАСПРЕДЕЛЕНИЕ\n${incident.publicCode}\nОт: ${incident.assignedGroup!.name}\nСотрудник: ${actor.displayName}\nПричина: ${reason.trim()}\n\nОбращение в общей очереди по первоначальной дате. Срок ответа сохранён.`,
+        keyboard: [[{ type: 'callback', text: 'Взять на распределение', payload: `queue:open:${incidentId}` }]],
+        delivery: { dedupeKey: `redistribution-notice:${event.id}` },
+      }, incidentId);
+    }, TRANSACTION_OPTIONS);
+    await this.messages.flush();
   }
 
   /** §32 — send the rework request back to the sector chat. */

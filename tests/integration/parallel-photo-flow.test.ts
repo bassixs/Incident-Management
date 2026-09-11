@@ -50,7 +50,12 @@ describeIntegration('parallel users with real photo workflow and simulated MAX t
       sendMessageToUser: (id: number, text: string, extra?: SendMessageExtra) => send('user', id, text, extra),
       sendMessageToChat: (id: number, text: string, extra?: SendMessageExtra) => send('chat', id, text, extra),
       answerOnCallback: async () => { calls.push(Date.now()); return { success: true }; },
-      editCardWithKeyboard: async () => undefined, editMessage: async () => { calls.push(Date.now()); return { success: true }; },
+      getMessage: async (mid: string) => {
+        calls.push(Date.now());
+        const item = sent[Number(mid.replace('sent-', '')) - 1]!;
+        return { body: { mid, text: item.text, attachments: item.tokens.map(token => ({ type: 'image', payload: { token } })) } };
+      },
+      editMessage: async () => { calls.push(Date.now()); return { success: true }; },
       deleteMessage: async () => { calls.push(Date.now()); return { success: true }; },
     };
     const max = new MaxClient({ api } as never);

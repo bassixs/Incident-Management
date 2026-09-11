@@ -50,7 +50,7 @@ export class ActionGuardService {
   }
 
   async purgeExpired(now = new Date()): Promise<number> {
-    const result = await this.prisma.actionLock.deleteMany({ where: { lockedUntil: { lt: now } } });
+    const result = await this.prisma.actionLock.deleteMany({ where: { lockedUntil: { lt: now }, action: { notIn: ['sector-queue', 'review-queue'] } } });
     return result.count;
   }
 }

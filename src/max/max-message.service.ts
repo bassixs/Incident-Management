@@ -1,3 +1,4 @@
+import { leaseView, leaseText, SECTOR_LEASE_ACTION } from '../work-queues/leases';
 import { AsyncActivity } from '../utils/async-activity';
 import { workingHours } from '../utils/work-calendar';
 import { isPhotoReference, photoReference, photoToken, isUnavailablePhoto } from '../media/max-photo-reference';
@@ -375,6 +376,14 @@ export class MaxMessageService {
       await durable.prisma.outboundMessage.delete({ where: { id: row.id } });
       return { state: 'sent', trackingApplied: false };
     }
+    if (row.trackingType === 'SECTOR_CARD' && row.incidentId) {
+      const current = await durable.prisma.incident.findUnique({ where: { id: row.incidentId }, include: INCIDENT_INCLUDE });
+      const expected = current && `sector-card:${current.id}${current.history?.[0] ? ':return:' + current.history[0].id : ''}`;
+      if (!current?.assignedGroup || current.assignedGroup.maxChatId !== row.targetId || row.dedupeKey !== expected) {
+        await durable.prisma.outboundMessage.update({ where: { id }, data: { status: 'SENT', trackingApplied: true, lockedAt: null } });
+        return { state: 'sent', trackingApplied: true };
+      }
+    }
     if (payload.keyboard) payload.keyboard = payload.keyboard.map(buttons => buttons.filter(button =>
       button.type !== 'callback' || !/:clarify(?:-|:)/.test(button.payload))).filter(buttons => buttons.length);
 
@@ -513,12 +522,12 @@ export class MaxMessageService {
         const key = workPanelKey(row.targetId);
         await tx.systemSetting.upsert({ where: { key }, create: { key, value: firstMessageId }, update: { value: firstMessageId } });
       }
-      if (row.incidentId && firstMessageId && (row.trackingType === 'REVIEW_CARD' || row.dedupeKey?.startsWith('work-copy:') || row.dedupeKey?.startsWith('revision:'))) {
+      if (row.incidentId && firstMessageId && (row.trackingType === 'REVIEW_CARD' || row.trackingType === 'SECTOR_CARD' || row.dedupeKey?.startsWith('work-copy:') || row.dedupeKey?.startsWith('revision:'))) {
         await queueStaffRefresh(tx, row.incidentId, `published:${firstMessageId}`);
       }
-      if (row.incidentId && firstMessageId && row.dedupeKey?.startsWith('distribution-claim:')) {
+      if (row.incidentId && firstMessageId && (row.dedupeKey?.startsWith('distribution-claim:') || row.dedupeKey?.startsWith('redistribution-notice:'))) {
         // The assignment may have happened while MAX was delivering this copy.
-        await queueDistributionRefresh(tx, row.incidentId, `copy-sent:${row.id}`);
+        await queueDistributionRefresh(tx, row.incidentId, `copy-sent:${row.id}`, true);
       }
       if (!row.trackingType) return;
 
@@ -554,6 +563,11 @@ export class MaxMessageService {
         });
         return;
       }
+      if (row.trackingType === 'SECTOR_CARD') {
+        const current = await tx.incident.findUnique({ where: { id: row.incidentId }, include: INCIDENT_INCLUDE });
+        const expected = current && `sector-card:${current.id}${current.history?.[0] ? ':return:' + current.history[0].id : ''}`;
+        if (!current?.assignedGroup || current.assignedGroup.maxChatId !== row.targetId || row.dedupeKey !== expected) return;
+      }
       const field =
         row.trackingType === DeliveryTrackingType.DISTRIBUTION_CARD
           ? 'distributionMessageId'
@@ -566,7 +580,7 @@ export class MaxMessageService {
       });
       if (updated.count !== 1) return;
       if (row.trackingType === DeliveryTrackingType.DISTRIBUTION_CARD) {
-        await queueDistributionRefresh(tx, row.incidentId, `original-sent:${row.id}`);
+        await queueDistributionRefresh(tx, row.incidentId, `original-sent:${row.id}`, true);
         await tx.incidentHistory.create({
           data: {
             incidentId: row.incidentId,
@@ -658,14 +672,14 @@ export class MaxMessageService {
     if (!incident) return {};
     const latest = incident.answers.at(-1);
     const rows = await db.outboundMessage.findMany({ where: { incidentId, targetType: 'chat', firstMessageId: { not: null }, OR: [
-      { trackingType: 'REVIEW_CARD' }, { dedupeKey: { startsWith: 'work-copy:' } }, { dedupeKey: { startsWith: `revision:${incidentId}:` } },
+      { trackingType: 'REVIEW_CARD' }, { trackingType: 'SECTOR_CARD' }, { dedupeKey: { startsWith: 'work-copy:' } }, { dedupeKey: { startsWith: `revision:${incidentId}:` } },
     ] } });
     if (incident.reviewMessageId && !rows.some(r => r.firstMessageId === incident.reviewMessageId)) {
       // Legacy original card not linked to a durable publication.
       rows.push({ firstMessageId: incident.reviewMessageId, answerId: latest?.id ?? null, targetId: getConfig().REVIEW_CHAT_ID!, trackingType: 'REVIEW_CARD', dedupeKey: null } as OutboundMessage);
     }
-    const lock = await db.actionLock.findFirst({ where: { incidentId, action: 'review-queue', lockedUntil: { gt: new Date() } } });
-    const owner = lock ? await db.user.findUnique({ where: { maxUserId: lock.maxUserId }, select: { displayName: true } }) : null;
+    const reviewLease = await leaseView(db, incidentId, 'review-queue');
+    const sectorLease = await leaseView(db, incidentId, SECTOR_LEASE_ACTION);
     const seen = new Set<string>();
     for (const row of rows) {
       const stored = row.payload as unknown as StoredPayload | undefined;
@@ -673,32 +687,43 @@ export class MaxMessageService {
       if (!messageId || seen.has(messageId)) continue;
       seen.add(messageId);
       const review = row.trackingType === 'REVIEW_CARD' || row.dedupeKey?.startsWith('work-copy:review:');
-      if (row.targetId !== (review ? getConfig().REVIEW_CHAT_ID : incident.assignedGroup?.maxChatId)) continue;
+      const oldSector = !review && (row.targetId !== incident.assignedGroup?.maxChatId || (incident.history?.[0] && (row.trackingType === 'SECTOR_CARD' ? row.dedupeKey !== `sector-card:${incidentId}:return:${incident.history[0].id}` : row.dedupeKey?.startsWith('work-copy:sector:') ? !row.dedupeKey.endsWith(`:cycle:${incident.history[0].id}`) : row.createdAt < incident.history[0].createdAt)));
       let text: string; let buttons: Button[][] = [];
-      if (review) {
+      if (oldSector) {
+        text = `↩️ ${incident.publicCode}: обращение возвращено на перераспределение. Работа по этой карточке завершена.\nПричина: ${(incident.history?.[0]?.metadata as { reason?: string })?.reason ?? 'Организация изменена'}`;
+      } else if (review) {
         const answer = incident.answers.find(a => a.id === row.answerId);
         if (!answer) continue;
         const active = incident.status === 'WAITING_REVIEW' && latest?.id === answer.id && answer.status === 'WAITING_REVIEW';
-        text = active ? reviewCard(incident, answer, incident.assignedGroup)
+        text = active ? reviewCard(incident, answer, incident.assignedGroup, reviewLease)
           : latest?.id === answer.id && answer.status === 'APPROVED' ? `${reviewDeliveryNotice(incident, answer)}\n\n${answer.text}`
           : `ℹ️ ${incident.publicCode}: ${answer.status === 'REVISION_REQUIRED' ? 'ответ возвращён на доработку' : 'архивная версия ответа'}.\n\n${answer.text}`;
-        if (active) {
-          buttons = reviewKeyboard(incidentId, answer.id);
-          if (lock) text += `\n\nПроверяет: ${owner?.displayName ?? 'сотрудник'}.`;
-          if (lock && row.dedupeKey?.includes(`:${lock.maxUserId}:`)) buttons.push([{ type: 'callback', text: 'Освободить обращение', payload: `work:release:${incidentId}` }]);
-        }
+        if (active) buttons = reviewKeyboard(incidentId, answer.id);
       } else if (row.dedupeKey?.startsWith('revision:')) {
-        text = `↩️ ${incident.publicCode}: ${incident.status === 'REVISION_REQUIRED' ? 'на доработке' : 'доработка по этой карточке завершена'}.\n\n${incident.revisionReason ?? ''}`;
-        if (incident.status === 'REVISION_REQUIRED' && row.dedupeKey === `revision:${incidentId}:${latest?.version}`) buttons = revisionKeyboard(incidentId);
+        const active = incident.status === 'REVISION_REQUIRED' && row.dedupeKey === `revision:${incidentId}:${latest?.version}`;
+        text = `${active ? leaseText(sectorLease) + '\n\n' : ''}↩️ ${incident.publicCode}: ${active ? 'на доработке' : 'доработка по этой карточке завершена'}.\n\n${incident.revisionReason ?? ''}`;
+        if (active) buttons = revisionKeyboard(incidentId);
       } else {
-        text = sectorCard(incident, incident.assignedGroup!);
+        text = sectorCard(incident, incident.assignedGroup!, sectorLease);
         buttons = sectorKeyboard(incidentId, { status: incident.status, hasTemplate: !!incident.assignedGroup?.answerTemplate });
       }
       if (stored?.keyboardMessageId && stored.keyboardMessageId !== row.firstMessageId) {
         // Keep every original text fragment; only the final fragment carries actions.
-        const tail = splitText(stored.text, stored.label).at(-1)!;
-        const notice = `ℹ️ ${incident.publicCode}: ${buttons.length ? 'действия доступны ниже' : 'действия по этой карточке завершены'}.\n\n`;
-        text = Array.from(notice + tail).length <= MAX_TEXT_LENGTH ? notice + tail : tail;
+        const fragments = splitText(stored.text, stored.label);
+        const tail = fragments.at(-1)!;
+        const banner = buttons.length ? 'Закрепление — рядом с кнопками.' : 'Действия по карточке завершены.';
+        const head = fragments[0]!.replace(/^👤 Закреплено за:.*\n⏳ До[^\n]*|^🟢 Свободно[^\n]*/m, banner);
+        if (head !== fragments[0]) {
+          try { await this.max.editCardWithKeyboard(row.firstMessageId!, head, []); }
+          catch (error) { if (!(error instanceof MaxError) || error.status !== 404) throw error; }
+        }
+        const notice = buttons.length ? `${leaseText(review ? reviewLease : sectorLease)}\n\n` : `ℹ️ ${incident.publicCode}: действия по этой карточке завершены.\n\n`;
+        if (Array.from(notice + tail).length <= MAX_TEXT_LENGTH) text = notice + tail;
+        else {
+          text = tail;
+          if (buttons.length) buttons.unshift(...leaseText(review ? reviewLease : sectorLease).split('\n').map(line =>
+            [{ type: 'callback' as const, text: Array.from(line).slice(0, 64).join(''), payload: 'noop' }]));
+        }
       }
       try { await this.max.editCardWithKeyboard(messageId, text, buttons); }
       catch (error) { if (!(error instanceof MaxError) || error.status !== 404) throw error; }
@@ -730,7 +755,7 @@ export class MaxMessageService {
     if (textOnly) {
       // Existing status jobs also refresh controls after this upgrade. MAX media
       // is retained from the actual message, without downloading or re-uploading.
-      await this.max.editCardWithKeyboard(incident.sectorMessageId, sectorCard(incident, incident.assignedGroup),
+      await this.max.editCardWithKeyboard(incident.sectorMessageId, sectorCard(incident, incident.assignedGroup, await leaseView(this.durable!.prisma, incidentId, SECTOR_LEASE_ACTION)),
         sectorKeyboard(incident.id, { hasTemplate: Boolean(incident.assignedGroup.answerTemplate), status: incident.status }));
       return {};
     }
@@ -743,7 +768,7 @@ export class MaxMessageService {
       }
       attachments.push({ type: item.type, originalName: item.originalName, body: await this.durable!.storage.load(item.storageKey) });
     }
-    await this.max.editMessage(incident.sectorMessageId, sectorCard(incident, incident.assignedGroup), [
+    await this.max.editMessage(incident.sectorMessageId, sectorCard(incident, incident.assignedGroup, await leaseView(this.durable!.prisma, incidentId, SECTOR_LEASE_ACTION)), [
       ...await this.upload(attachments, true),
       ...(['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)
         ? [{ type: 'inline_keyboard' as const, payload: { buttons: sectorKeyboard(incident.id, { hasTemplate: Boolean(incident.assignedGroup.answerTemplate), status: incident.status }) } }] : []),
@@ -757,7 +782,7 @@ export class MaxMessageService {
     if (!incident) return {};
     const copies = await prisma.outboundMessage.findMany({ where: {
       incidentId, targetType: 'chat', targetId: getConfig().DISTRIBUTION_CHAT_ID,
-      dedupeKey: { startsWith: `distribution-claim:${incidentId}:` }, firstMessageId: { not: null },
+      OR: [{ dedupeKey: { startsWith: `distribution-claim:${incidentId}:` } }, { dedupeKey: { startsWith: 'redistribution-notice:' } }], firstMessageId: { not: null },
     }, select: { firstMessageId: true, dedupeKey: true } });
     const cards = [...copies];
     if (incident.distributionMessageId) cards.push({ firstMessageId: incident.distributionMessageId, dedupeKey: null });
@@ -767,14 +792,10 @@ export class MaxMessageService {
       let text: string;
       if (incident.status === 'DISTRIBUTION') {
         // The original stays actionable; only obsolete queue copies are retired.
-        if (!card.dedupeKey || card.dedupeKey === activeKey) {
+        if (!card.dedupeKey || card.dedupeKey === activeKey || card.dedupeKey === `redistribution-notice:${incident.history?.[0]?.id}`) {
           if (refreshActive) {
             const keyboard = distributionKeyboard(incidentId);
-            let currentText = distributionCard(incident);
-            if (card.dedupeKey) {
-              currentText += `\n\nРаспределяет: ${incident.distributionClaimedName}. Закреплено на 15 минут.`;
-              keyboard.push([{ type: 'callback', text: 'Освободить обращение', payload: `queue:release:${incidentId}` }]);
-            }
+            const currentText = distributionCard(incident);
             try { await this.max.editCardWithKeyboard(card.firstMessageId!, currentText, keyboard); }
             catch (error) { if (!(error instanceof MaxError) || error.status !== 404) throw error; }
           }

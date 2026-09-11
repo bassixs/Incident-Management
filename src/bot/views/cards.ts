@@ -1,5 +1,6 @@
 import type { Incident, IncidentAnswer, ResponsibleGroup } from '@prisma/client';
 
+import { leaseText, type LeaseView } from '../../work-queues/leases';
 import { getConfig } from '../../config';
 import { describeStatus } from '../../incidents/incident-state.service';
 import type { IncidentWithRelations } from '../../incidents/incident.repository';
@@ -48,8 +49,10 @@ export function distributionCard(incident: IncidentWithRelations): string {
 
   return [
     '🔴 НЕ РАСПРЕДЕЛЕНО',
+    leaseText(incident.distributionClaimUntil && incident.distributionClaimUntil > new Date() ? { name: incident.distributionClaimedName ?? 'Сотрудник', until: incident.distributionClaimUntil } : null),
+    ...(incident.history?.length ? ['↩️ ВОЗВРАЩЕНО НА ПЕРЕРАСПРЕДЕЛЕНИЕ', `Причина: ${(incident.history[0]!.metadata as { reason?: string })?.reason ?? '—'}`] : []),
     '',
-    '🆕 НОВОЕ ОБРАЩЕНИЕ',
+    incident.history?.length ? 'ОБРАЩЕНИЕ НА ПЕРЕРАСПРЕДЕЛЕНИЕ' : '🆕 НОВОЕ ОБРАЩЕНИЕ',
     '',
     codeLabel(incident),
     '',
@@ -116,7 +119,7 @@ function sectorStatus(incident: IncidentWithRelations): string {
   }
 }
 
-export function sectorCard(incident: IncidentWithRelations, group: ResponsibleGroup): string {
+export function sectorCard(incident: IncidentWithRelations, group: ResponsibleGroup, lease?: LeaseView): string {
   const photoCount = incident.attachments.filter((item) => item.type === 'IMAGE').length;
   return [
     sectorStatus(incident),
@@ -124,6 +127,7 @@ export function sectorCard(incident: IncidentWithRelations, group: ResponsibleGr
     '📥 ОБРАЩЕНИЕ',
     '',
     codeLabel(incident),
+    ...(['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status) && lease !== undefined ? [leaseText(lease)] : []),
     '',
     'Ответственная группа:',
     group.name,
@@ -146,7 +150,7 @@ export function sectorCard(incident: IncidentWithRelations, group: ResponsibleGr
     'Срок:',
     incident.slaPausedAt ? 'Приостановлен до получения уточнения' : formatDateTime(incident.deadlineAt),
     ...(photoCount > 0 ? ['', ...attachmentLine(photoCount)] : []),
-    ...(incident.currentResponder ? ['', '👤 Исполнитель:', incident.currentResponder.displayName] : []),
+    ...(incident.currentResponder && (lease === undefined || lease || !['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)) ? ['', '👤 Исполнитель:', incident.currentResponder.displayName] : []),
   ].join('\n');
 }
 
@@ -155,6 +159,7 @@ export function reviewCard(
   incident: IncidentWithRelations,
   answer: IncidentAnswer & { attachments: Array<{ type: string }> },
   group: ResponsibleGroup | null,
+  lease: LeaseView = null,
 ): string {
   const photoCount = answer.attachments.filter((item) => item.type === 'IMAGE').length;
   const fileCount = answer.attachments.filter((item) => item.type === 'FILE').length;
@@ -162,6 +167,7 @@ export function reviewCard(
   const signature = answerSignature(group?.authorityName);
   return [
     '📝 ОТВЕТ НА СОГЛАСОВАНИЕ',
+    leaseText(lease),
     '',
     codeLabel(incident),
     '',
@@ -259,10 +265,11 @@ export function rejectionToRequester(incident: Incident, reason: string): string
 }
 
 /** §41 — /incident lookup result for staff. */
-export function incidentLookupCard(incident: IncidentWithRelations): string {
+export function incidentLookupCard(incident: IncidentWithRelations, lease?: LeaseView): string {
   const lastAnswer = incident.answers.at(-1);
   return [
     codeLabel(incident),
+    ...(lease !== undefined ? [leaseText(lease)] : []),
     '',
     'Статус:',
     incident.slaPausedAt ? 'Ожидаем уточнение от жителя — срок приостановлен' : `${incident.status} — ${describeStatus(incident.status, incident.isOverdue)}`,
@@ -428,7 +435,7 @@ export function incidentDraftPhotoPrompt(hasPhoto: boolean): string {
 }
 
 /** Final state shown only on the original card in the distribution chat. */
-export function distributionWorkedNotice(incident: Incident, group: ResponsibleGroup): string {
+export function distributionWorkedNotice(incident: Incident, group: ResponsibleGroup, lease?: LeaseView): string {
   return [
     '🟢 ОТРАБОТАНО',
     '',

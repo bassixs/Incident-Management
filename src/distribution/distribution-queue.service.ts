@@ -48,16 +48,16 @@ export class DistributionQueueService {
         metadata: { operator: actor.displayName, until: until.toISOString() },
       } });
       if (showCard) await queueMessage(tx, { chatId }, {
-        text: `${distributionCard(updated)}\n\nРаспределяет: ${actor.displayName}. Закреплено на 15 минут.`,
+        text: distributionCard(updated),
         label: `№ ${updated.publicCode}`,
         ...(updated.distributionMessageId ? { replyToMessageId: updated.distributionMessageId } : {}),
-        keyboard: [...distributionKeyboard(updated.id), [{ type: 'callback', text: 'Освободить обращение', payload: `queue:release:${updated.id}` }]],
+        keyboard: distributionKeyboard(updated.id),
         delivery: { dedupeKey: `distribution-claim:${updated.id}:${actor.maxUserId}:${until.getTime()}` },
       }, updated.id, updated.attachments);
-      if (!own || own.id !== updated.id) await queueDistributionRefresh(tx, updated.id);
+      if (!own || own.id !== updated.id) await queueDistributionRefresh(tx, updated.id, undefined, true);
       return updated;
     }, TRANSACTION_OPTIONS);
-    if (showCard) await this.messages.flush();
+    await this.messages.flush();
     return incident;
   }
 
@@ -69,7 +69,8 @@ export class DistributionQueueService {
         data: { distributionClaimedBy: null, distributionClaimedName: null, distributionClaimUntil: null } });
       if (!released.count) throw new ConflictError('Обращение уже обработано, свободно или закреплено за другим оператором.');
       await tx.incidentHistory.create({ data: { incidentId: id, action: 'DISTRIBUTION_RELEASED', actorMaxUserId: actor.maxUserId } });
-      await queueDistributionRefresh(tx, id);
+      await tx.operatorSession.deleteMany({ where: { incidentId: id, maxUserId: actor.maxUserId, chatId } });
+      await queueDistributionRefresh(tx, id, undefined, true);
     }, TRANSACTION_OPTIONS);
     await this.messages.flush();
   }
@@ -80,12 +81,12 @@ export class DistributionQueueService {
     const now = new Date();
     const total = await this.prisma.incident.count({ where: { status: 'DISTRIBUTION' } });
     page = Math.min(page, Math.max(0, Math.ceil(total / 10) - 1));
-    const items = await this.prisma.incident.findMany({ where: { status: 'DISTRIBUTION' }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], skip: page * 10, take: 10 });
+    const items = await this.prisma.incident.findMany({ where: { status: 'DISTRIBUTION' }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], skip: page * 10, take: 10, include: INCIDENT_INCLUDE });
     await this.messages.send({ chatId }, {
       text: [`📋 Нераспределённые: ${total}. Страница ${page + 1}.`, '', ...items.map(i => {
         const minutes = Math.max(0, Math.floor((now.getTime() - i.createdAt.getTime()) / 60_000));
         const owner = i.distributionClaimUntil && i.distributionClaimUntil > now ? ` · ${i.distributionClaimedName}` : ' · свободно';
-        return `${minutes >= 30 ? '⚠️' : '•'} ${i.publicCode} — ${waitLabel(minutes)}${owner}`;
+        return `${i.history?.length ? '↩️ Возвращено · ' : ''}${minutes >= 30 ? '⚠️' : '•'} ${i.publicCode} — ${waitLabel(minutes)}${owner}`;
       }), ...(!total ? ['Очередь пуста.'] : [])].join('\n'),
       keyboard: [...items.map(i => [{ type: 'callback' as const, text: `Открыть ${i.publicCode}`, payload: `queue:open:${i.id}` }]),
         [{ type: 'callback', text: '←', payload: `queue:list:${Math.max(0, page - 1)}` }, { type: 'callback', text: '→', payload: `queue:list:${page + 1}` }],
@@ -131,7 +132,8 @@ export class DistributionQueueService {
         await tx.incident.update({ where: { id: incident.id }, data: {
           distributionClaimedBy: null, distributionClaimedName: null, distributionClaimUntil: null,
         } });
-        await queueDistributionRefresh(tx, incident.id, `expired:${incident.distributionClaimUntil!.getTime()}`);
+        await tx.operatorSession.deleteMany({ where: { incidentId: incident.id, maxUserId: incident.distributionClaimedBy!, chatId: config.DISTRIBUTION_CHAT_ID } });
+        await queueDistributionRefresh(tx, incident.id, `expired:${incident.distributionClaimUntil!.getTime()}`, true);
       }
     }, TRANSACTION_OPTIONS);
     await this.refresh();

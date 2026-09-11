@@ -1,3 +1,4 @@
+import { assertSectorReservation, SECTOR_LEASE_ACTION } from '../work-queues/leases';
 import { queueDeliveryStatus } from '../delivery/delivery-status';
 import { randomUUID } from 'node:crypto';
 import { queueAnswer, queueRevision, queueSectorRefresh } from '../delivery/workflow-outbox';
@@ -14,7 +15,7 @@ import {
 import { acquireAdvisoryLock, TRANSACTION_OPTIONS } from '../database/prisma';
 import { HistoryAction, type IncidentHistoryService } from '../incidents/incident-history.service';
 import type { IncidentStateService } from '../incidents/incident-state.service';
-import type { IncidentRepository, IncidentWithRelations } from '../incidents/incident.repository';
+import { INCIDENT_INCLUDE, type IncidentRepository, type IncidentWithRelations } from '../incidents/incident.repository';
 import type { IncomingMedia, MediaService, StoredMedia } from '../media/media.service';
 import type { ReviewService } from '../review/review.service';
 import { ConflictError, NotFoundError, ValidationError } from '../utils/errors';
@@ -144,7 +145,7 @@ export class AnswerService {
     const answer = await this.prisma.$transaction(async (tx) => {
       await acquireAdvisoryLock(tx, 'incident-answer', incidentId);
 
-      const current = await tx.incident.findUnique({ where: { id: incidentId } });
+      const current = await tx.incident.findUnique({ where: { id: incidentId }, include: INCIDENT_INCLUDE });
       if (!current) throw new NotFoundError(`Incident ${incidentId} not found`);
       if (current.activeClarificationId) throw new ConflictError('Сначала дождитесь уточнения от жителя.');
       if (!SUBMITTABLE.includes(current.status)) {
@@ -153,6 +154,8 @@ export class AnswerService {
         );
       }
 
+      await assertSectorReservation(tx, incidentId, actor.maxUserId);
+      if (current.assignedGroupId !== before.assignedGroupId || current.history?.[0]?.id !== before.history?.[0]?.id) throw new ConflictError('Ответственная организация изменилась. Откройте актуальную карточку.');
       const latest = await tx.incidentAnswer.findFirst({
         where: { incidentId },
         orderBy: { version: 'desc' },
@@ -216,6 +219,7 @@ export class AnswerService {
         tx,
       );
 
+      await tx.actionLock.deleteMany({ where: { incidentId, action: SECTOR_LEASE_ACTION } });
       await this.attachMedia(tx, created.id, stored);
       await queueAnswer(tx, incidentId, created.id, direct);
       if (!direct) await queueSectorRefresh(tx, incidentId, `sector-status:${created.id}:review`, true);

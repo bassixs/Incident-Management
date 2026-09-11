@@ -1,3 +1,4 @@
+import { SECTOR_LEASE_ACTION } from './leases';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import type { Tx } from '../database/prisma';
 import { acquireAdvisoryLock } from '../database/prisma';
@@ -23,13 +24,11 @@ export async function workScope(db: PrismaClient | Tx, chatId: bigint): Promise<
 export async function workPanelText(db: PrismaClient | Tx, chatId: bigint): Promise<string> {
   const scope = await workScope(db, chatId);
   const total = await db.incident.count({ where: scope.where });
-  const busy = scope.kind === 'sector'
-    ? await db.incident.count({ where: { AND: [scope.where, { status: 'IN_PROGRESS' }] } })
-    : await db.actionLock.count({ where: { action: REVIEW_LEASE_ACTION, lockedUntil: { gt: new Date() }, incidentId: { in: (await db.incident.findMany({ where: scope.where, select: { id: true } })).map(i => i.id) } } });
+  const busy = await db.actionLock.count({ where: { action: scope.kind === 'sector' ? SECTOR_LEASE_ACTION : REVIEW_LEASE_ACTION, lockedUntil: { gt: new Date() }, incidentId: { in: (await db.incident.findMany({ where: scope.where, select: { id: true } })).map(i => i.id) } } });
   return [scope.kind === 'sector' ? '📋 ОЧЕРЕДЬ ПРОФИЛЬНОГО ЧАТА' : '📋 ОЧЕРЕДЬ СОГЛАСОВАНИЯ', '',
     `Ожидают обработки: ${total}`, `Свободны: ${total - busy} · В работе: ${busy}`, '',
     '«Следующее свободное» — самое старое свободное обращение.',
-    scope.kind === 'review' ? 'Закрепление за согласующим на 15 минут. Его можно освободить.' : 'После взятия обращения в карточке указан исполнитель.',
+    'Закрепление за сотрудником на 15 минут. Имя и время указаны в карточке. Можно освободить кнопкой.',
     '«За сегодня» — статусы обращений, зарегистрированных сегодня по Москве.',
     'Панель обновляется каждую минуту.',
   ].join('\n');

@@ -1,3 +1,4 @@
+import { leaseView } from '../../work-queues/leases';
 import { InboxStatus, OutboxStatus, ResponsibleGroupKind, UserRole } from '@prisma/client';
 
 import type { AppServices } from '../../app/container';
@@ -104,7 +105,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
     const incident = await services.incidents.findByPublicCode(code);
     if (!incident) throw new AppError(`Обращение ${code.toUpperCase()} не найдено.`, 'NOT_FOUND');
     assertIncidentVisible(actor, incident, chatId);
-    await services.messages.send({ chatId }, { text: incidentLookupCard(incident) });
+    await services.messages.send({ chatId }, { text: incidentLookupCard(incident, incident.status === 'DISTRIBUTION' ? incident.distributionClaimUntil && incident.distributionClaimUntil > new Date() ? { name: incident.distributionClaimedName ?? 'Сотрудник', until: incident.distributionClaimUntil } : null : ['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED', 'WAITING_REVIEW'].includes(incident.status) ? await leaseView(services.prisma, incident.id, incident.status === 'WAITING_REVIEW' ? 'review-queue' : 'sector-queue') : undefined) });
   },
 
   history: async ({ services, actor, chatId, isDialog, args }) => {

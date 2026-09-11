@@ -111,7 +111,7 @@ describeIntegration('persistent distribution queue', () => {
     const send = max.sendToChat.getMockImplementation();
     let delayed = true;
     max.sendToChat.mockImplementation(async (...args: any[]) => {
-      if (args[1].includes('Закреплено на 15 минут') && delayed) { delayed = false; throw new Error('MAX unavailable'); }
+      if (args[1].includes('Закреплено за:') && delayed) { delayed = false; throw new Error('MAX unavailable'); }
       return send(...args);
     });
     await claim();
@@ -154,8 +154,8 @@ describeIntegration('persistent distribution queue', () => {
     const claimed = await Promise.all([claim(), claim(colleague)]);
     expect(new Set(claimed.map(i => i!.id))).toEqual(new Set([older.id, oldest.id]));
     expect((await claim())!.id).toBe(claimed[0]!.id);
-    expect(sends.filter(s => s.text.includes('Закреплено на 15 минут'))).toHaveLength(2);
-    expect(sends.filter(s => s.text.includes('Закреплено на 15 минут')).every(s => s.extra.link.type === 'reply')).toBe(true);
+    expect(sends.filter(s => s.text.includes('Закреплено за:'))).toHaveLength(2);
+    expect(sends.filter(s => s.text.includes('Закреплено за:')).every(s => s.extra.link.type === 'reply')).toBe(true);
     expect((await queueSnapshot(prisma, new Date())).reserved).toBe(2);
     await expect(services.distributionQueue.claim(actor, TEST_CHATS.distribution, newest.id)).rejects.toThrow('Сначала распределите');
   });

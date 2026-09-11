@@ -8,6 +8,8 @@
  */
 
 export const INCIDENT_ACTIONS = [
+  'redistribute',
+  'review-take',
   'topic',
   'topic-page',
   'topic-set',

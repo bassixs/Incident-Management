@@ -101,6 +101,11 @@ describeIntegration('working chat queues and obsolete actions', () => {
     const publications = await prisma.outboundMessage.findMany({ where: { incidentId: i.id, OR: [{ trackingType: 'REVIEW_CARD' }, { dedupeKey: { startsWith: 'work-copy:review:' } }] } });
     expect(publications).toHaveLength(2);
     for (const row of publications) expect((row.payload as any).keyboardMessageId).not.toBe(row.firstMessageId);
+    await services.workQueues.claimReview(actor, TEST_CHATS.review, i.id);
+    for (const row of publications) {
+      expect(lastEdit(row.firstMessageId!)[1]).not.toContain('Свободно');
+      expect(lastEdit((row.payload as any).keyboardMessageId)[1]).toContain(actor.displayName);
+    }
     await services.review.approve(i.id, actor); await services.messages.flush();
     for (const row of publications) {
       const last = lastEdit((row.payload as any).keyboardMessageId);

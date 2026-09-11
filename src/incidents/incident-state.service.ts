@@ -12,15 +12,17 @@ const ALLOWED: Record<IncidentStatus, IncidentStatus[]> = {
   [IncidentStatus.NEW]: [IncidentStatus.DISTRIBUTION],
   [IncidentStatus.DISTRIBUTION]: [IncidentStatus.ASSIGNED, IncidentStatus.REJECTED],
   [IncidentStatus.ASSIGNED]: [
+    IncidentStatus.DISTRIBUTION,
     IncidentStatus.IN_PROGRESS,
     IncidentStatus.WAITING_REVIEW,
     IncidentStatus.RESOLVED,
   ],
-  [IncidentStatus.IN_PROGRESS]: [IncidentStatus.WAITING_REVIEW, IncidentStatus.RESOLVED],
+  [IncidentStatus.IN_PROGRESS]: [IncidentStatus.ASSIGNED, IncidentStatus.REVISION_REQUIRED, IncidentStatus.DISTRIBUTION, IncidentStatus.WAITING_REVIEW, IncidentStatus.RESOLVED],
   [IncidentStatus.WAITING_REVIEW]: [IncidentStatus.RESOLVED, IncidentStatus.REVISION_REQUIRED],
   // A responder may resubmit straight from REVISION_REQUIRED; taking the
   // incident back into work first is optional, not required.
   [IncidentStatus.REVISION_REQUIRED]: [
+    IncidentStatus.DISTRIBUTION,
     IncidentStatus.IN_PROGRESS,
     IncidentStatus.WAITING_REVIEW,
     IncidentStatus.RESOLVED,

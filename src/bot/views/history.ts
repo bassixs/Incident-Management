@@ -9,6 +9,11 @@ const ACTION_LABELS: Record<string, string> = {
   DISTRIBUTION_CLAIMED: 'Оператор взял обращение на распределение',
   DISTRIBUTION_RELEASED: 'Оператор освободил обращение для распределения',
   ASSIGNED: 'Обращение распределено',
+  REDISTRIBUTION_REQUESTED: 'Возвращено на перераспределение',
+  SECTOR_RELEASED: 'Исполнитель освободил обращение',
+  SECTOR_LEASE_EXPIRED: 'Закрепление за исполнителем истекло',
+  REVIEW_CLAIMED: 'Сотрудник взял ответ на согласование',
+  REVIEW_RELEASED: 'Сотрудник освободил ответ на согласовании',
   TOPIC_CHANGED: 'Тема обращения изменена',
   SECTOR_CARD_SENT: 'Карточка отправлена в профильный чат',
   TAKEN_IN_WORK: 'Обращение взято в работу',
@@ -98,6 +103,8 @@ function historyDetails(action: string, metadata: Record<string, unknown>): stri
   if (metadata.photos) details.push(`Фотографий: ${String(metadata.photos)}`);
   if (metadata.categoryCode) details.push(`Сфера: ${String(metadata.categoryCode)}`);
   if (metadata.version) details.push(`Версия ответа: ${String(metadata.version)}`);
+  if (metadata.groupName) details.push(`Организация: ${String(metadata.groupName)}`);
+  if (metadata.until) details.push(`Закреплено до: ${String(metadata.until)}`);
   if (metadata.reason) details.push(`Причина: ${String(metadata.reason)}`);
   if (metadata.targetMaxUserId) details.push(`Пользователь: ${String(metadata.targetMaxUserId)}`);
   if (metadata.deadlineAt) details.push(`Срок ответа: ${String(metadata.deadlineAt)}`);

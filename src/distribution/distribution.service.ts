@@ -186,7 +186,7 @@ export class DistributionService {
         metadata: { groupId: group.id, groupCode: group.code, dispatcher: actor.displayName },
       }, tx);
       await queueSector(tx, incidentId);
-      await queueDistributionRefresh(tx, incidentId, 'assigned');
+      await queueDistributionRefresh(tx, incidentId, `assigned:${randomUUID()}`);
     }, TRANSACTION_OPTIONS);
 
     log.info(
