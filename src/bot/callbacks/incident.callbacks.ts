@@ -16,6 +16,7 @@ import {
 import { codeLabel } from '../views/cards';
 import type { ResolvedActor } from '../handlers/helpers';
 import { ensureFreeSession } from '../handlers/session-guard';
+import { startRejectionFlow, handleRejectionAction } from './rejection-flow';
 
 const log = moduleLogger('bot-incident');
 
@@ -121,7 +122,12 @@ export async function handleIncidentCallback(
       return 'Этот список устарел. Нажмите «Распределить» в карточке обращения ещё раз.';
 
     case 'reject':
-      return startRejection(services, actor, chatId, incident);
+      return startRejectionFlow(services, actor, chatId, incident);
+    case 'reject-reason':
+    case 'reject-edit':
+    case 'reject-confirm':
+    case 'reject-cancel':
+      return handleRejectionAction(services, actor, chatId, incident, payload.action, payload.argument, context.messageId);
 
     case 'ban':
       return startBan(services, actor, chatId, incident);
@@ -271,31 +277,6 @@ async function completeAssignment(
     await services.messages.deleteCard(messageId);
   }
   return `${updated.publicCode} → ${updated.assignedGroup?.name ?? ''}`;
-}
-
-async function startRejection(
-  services: AppServices,
-  actor: ResolvedActor,
-  chatId: bigint,
-  incident: IncidentWithRelations,
-): Promise<string | undefined> {
-  assertDispatcher(services, actor, chatId);
-  if (incident.status !== IncidentStatus.DISTRIBUTION) {
-    return `${incident.publicCode} уже обработано.`;
-  }
-  if (!(await ensureFreeSession(services, actor, chatId, incident.id))) return undefined;
-
-  await services.sessions.start({
-    maxUserId: actor.maxUserId,
-    chatId,
-    type: SessionType.WAITING_REJECTION_REASON,
-    incidentId: incident.id,
-  });
-  await services.messages.send(
-    { chatId },
-    { text: `Укажите причину отклонения ${incident.publicCode} одним сообщением.` },
-  );
-  return undefined;
 }
 
 async function startBan(

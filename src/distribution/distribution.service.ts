@@ -30,6 +30,7 @@ import type { MaxMessageService } from '../max/max-message.service';
 import type { SectorService } from '../sector/sector.service';
 import { AppError, ConflictError, NotFoundError } from '../utils/errors';
 import { incidentLogFields, moduleLogger } from '../utils/logger';
+import { MAX_REJECTION_LENGTH } from './rejection-reasons';
 
 const log = moduleLogger('distribution');
 
@@ -222,7 +223,8 @@ export class DistributionService {
   }
 
   /** §19 — reject with a mandatory reason and tell the requester. */
-  async reject(incidentId: string, reason: string, actor: Actor): Promise<IncidentWithRelations> {
+  async reject(incidentId: string, reason: string, actor: Actor, draft?: { sessionId: string; token: string; chatId: bigint }): Promise<IncidentWithRelations> {
+    if (!reason.trim() || Array.from(reason).length > MAX_REJECTION_LENGTH) throw new ConflictError(`Причина отклонения должна содержать от 1 до ${MAX_REJECTION_LENGTH} символов.`);
     const incident = await this.repository.findById(incidentId);
     if (!incident) throw new NotFoundError(`Incident ${incidentId} not found`);
 
@@ -233,7 +235,17 @@ export class DistributionService {
 
     await this.prisma.$transaction(async (tx) => {
       await acquireAdvisoryLock(tx, ...CLAIM_LOCK);
-      assertClaimOwner(await tx.incident.findUniqueOrThrow({ where: { id: incidentId } }), actor.maxUserId);
+      const current = await tx.incident.findUniqueOrThrow({ where: { id: incidentId } });
+      assertClaimOwner(current, actor.maxUserId);
+      if (draft) {
+        const session = await tx.operatorSession.findUnique({ where: { id: draft.sessionId } });
+        const data = session?.data as { rejectionToken?: string; rejectionStage?: string; reason?: string; distributionLeaseUntil?: string } | null;
+        if (!session || session.type !== 'WAITING_REJECTION_REASON' || session.maxUserId !== actor.maxUserId || session.chatId !== draft.chatId ||
+          session.incidentId !== incidentId || session.expiresAt <= new Date() || data?.rejectionToken !== draft.token || data.rejectionStage !== 'preview' || data.reason !== reason ||
+          current.distributionClaimedBy !== actor.maxUserId || !current.distributionClaimUntil || current.distributionClaimUntil <= new Date() ||
+          current.distributionClaimUntil.toISOString() !== data.distributionLeaseUntil) throw new ConflictError('Карточка отклонения устарела. Откройте обращение через /queue.');
+        await tx.operatorSession.delete({ where: { id: session.id } });
+      }
       const claimed = await this.repository.transition(tx, incidentId, IncidentStatus.DISTRIBUTION, {
         status: IncidentStatus.REJECTED,
         rejectionReason: reason,
@@ -255,7 +267,7 @@ export class DistributionService {
         metadata: { reason, dispatcher: actor.displayName },
       }, tx);
       await queueRejection(tx, incidentId, reason);
-      await queueDistributionRefresh(tx, incidentId, 'rejected');
+      await queueDistributionRefresh(tx, incidentId, 'rejected', true);
     }, TRANSACTION_OPTIONS);
 
     await this.delivery.notify(

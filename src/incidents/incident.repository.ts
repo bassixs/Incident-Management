@@ -78,7 +78,7 @@ export class IncidentRepository {
     return this.prisma.incident.findMany({
       where,
       orderBy: { createdAt: 'asc' },
-      include: INCIDENT_INCLUDE,
+      include: { ...INCIDENT_INCLUDE, history: { where: { action: 'INCIDENT_REJECTED' }, orderBy: { createdAt: 'desc' }, take: 1 } },
     });
   }
 

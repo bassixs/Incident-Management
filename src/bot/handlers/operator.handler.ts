@@ -14,6 +14,7 @@ import { sendReport } from '../views/report';
 import { codeLabel } from '../views/cards';
 import type { ResolvedActor } from './helpers';
 import { discardObsoleteSession } from './session-guard';
+import { acceptRejectionText } from '../callbacks/rejection-flow';
 
 const log = moduleLogger('bot-operator');
 
@@ -44,7 +45,7 @@ export async function handleOperatorMessage(
         await services.prisma.operatorSession.deleteMany({ where: { id: session.id } });
         throw new ValidationError('Запросы уточнений у жителей больше не используются. Продолжите работу с карточкой обращения.');
       case SessionType.WAITING_REJECTION_REASON:
-        await applyRejection(services, actor, chatId, session, text);
+        await acceptRejectionText(services, actor, chatId, session, text);
         break;
       case SessionType.WAITING_REVISION_REASON:
         await applyRevision(services, actor, chatId, session, text);
@@ -98,25 +99,6 @@ async function loadIncident(services: AppServices, incidentId: string) {
   const incident = await services.repository.findById(incidentId);
   if (!incident) throw new AppError('Обращение не найдено.', 'NOT_FOUND');
   return incident;
-}
-
-async function applyRejection(
-  services: AppServices,
-  actor: ResolvedActor,
-  chatId: bigint,
-  session: OperatorSession,
-  reason: string,
-): Promise<void> {
-  assertDispatcher(services, actor, chatId);
-  if (isBlank(reason)) throw new ValidationError('Причина отклонения не может быть пустой.');
-
-  const incidentId = requireIncidentId(session);
-  const incident = await services.distribution.reject(incidentId, reason, actor);
-  await services.sessions.clear(actor.maxUserId, chatId);
-  await services.messages.send(
-    { chatId },
-    { text: `❌ ${incident.publicCode} отклонено. Уведомление для пользователя сохранено в очереди.`, label: codeLabel(incident) },
-  );
 }
 
 async function applyRevision(

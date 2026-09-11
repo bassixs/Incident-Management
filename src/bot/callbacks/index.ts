@@ -16,6 +16,7 @@ import { handleQueueCallback } from './queue.callbacks';
 import { assertWorkingChat } from '../middleware/authorize';
 import { sendChatGuide } from '../views/chat-guide';
 import { cleanupCommand } from '../commands/cleanup';
+import { resumeRejection } from './rejection-flow';
 
 const log = moduleLogger('bot-callbacks');
 
@@ -41,11 +42,13 @@ export async function handleCallbackUpdate(services: AppServices, ctx: Context):
 
   const lease = actionLease(payload, actor.maxUserId, chatId, messageId);
   let acknowledged = false;
+  let leaseAcquired = false;
   try {
     if (lease && !(await services.actionGuard.acquire(lease))) {
       await answerCallback(services, callback.callback_id, 'Уже обрабатывается. Пожалуйста, подождите.');
       return;
     }
+    leaseAcquired = !!lease;
 
     const operation = dispatchCallback(
       services,
@@ -91,6 +94,11 @@ export async function handleCallbackUpdate(services: AppServices, ctx: Context):
         await answerCallback(services, callback.callback_id, errorNotice(error));
       }
     });
+  } finally {
+    // Reopening a cancelled rejection is a new draft, not a duplicate submission.
+    if (leaseAcquired && lease && payload.kind === 'incident' && payload.action === 'reject') {
+      await services.actionGuard.release(lease.key).catch(() => undefined);
+    }
   }
 }
 
@@ -195,6 +203,10 @@ async function handleSessionCallback(
   if (!session) return 'Активных действий нет.';
   if (await discardObsoleteSession(services, session)) return 'Обращение уже перешло на другой этап. Незавершённое действие сброшено.';
   await services.sessions.extend(session.id);
+  if (session.type === 'WAITING_REJECTION_REASON' && (session.data as { rejectionToken?: string } | null)?.rejectionToken) {
+    await resumeRejection(services, session);
+    return 'Подготовка отклонения продолжена.';
+  }
   const incident = session.incidentId ? await services.repository.findById(session.incidentId) : null;
   const prompt = (session.data as { redistribution?: boolean } | null)?.redistribution ? 'Ожидается причина возврата на перераспределение.' : SESSION_PROMPTS[session.type];
   return `${incident ? `${incident.publicCode}: ` : ''}${prompt}`;

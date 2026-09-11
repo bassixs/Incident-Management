@@ -86,6 +86,16 @@ const COLUMNS: Column[] = [
     width: 40,
     value: (incident) => incident.rejectionReason ?? '',
   },
+  {
+    header: 'Отклонил (ФИО сотрудника)',
+    width: 32,
+    value: (incident) => {
+      if (incident.status !== 'REJECTED') return '';
+      const event = incident.history?.find(item => item.action === 'INCIDENT_REJECTED');
+      const metadata = event?.metadata as { dispatcher?: unknown } | null;
+      return typeof metadata?.dispatcher === 'string' ? metadata.dispatcher : '';
+    },
+  },
 ];
 
 function finalAnswerText(incident: IncidentWithRelations): string {

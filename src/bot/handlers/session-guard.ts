@@ -25,7 +25,7 @@ export const SESSION_PROMPTS: Record<SessionType, string> = {
 export async function discardObsoleteSession(services: AppServices, session: OperatorSession): Promise<boolean> {
   if (!session.incidentId || ![SessionType.WAITING_FOR_ANSWER, SessionType.WAITING_REVISION_REASON, SessionType.WAITING_REJECTION_REASON].some(type => type === session.type)) return false;
   const incident = await services.repository.findById(session.incidentId);
-  const data = session.data as { reviewAnswerId?: string; redistribution?: boolean; assignedGroupId?: string; leaseUntil?: string; assignmentCycle?: string } | null;
+  const data = session.data as { reviewAnswerId?: string; redistribution?: boolean; assignedGroupId?: string; leaseUntil?: string; assignmentCycle?: string; distributionLeaseUntil?: string } | null;
   const sectorStage = incident && ['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status);
   let valid = false;
   if (incident) {
@@ -34,7 +34,8 @@ export async function discardObsoleteSession(services: AppServices, session: Ope
       valid = data?.redistribution
         ? !!sectorStage && incident.assignedGroupId === data.assignedGroupId && incident.assignedGroup?.maxChatId === session.chatId
         : incident.status === 'WAITING_REVIEW' && incident.answers.at(-1)?.id === data?.reviewAnswerId;
-    } else valid = incident.status === 'DISTRIBUTION';
+    } else valid = incident.status === 'DISTRIBUTION' && (!data?.distributionLeaseUntil ||
+      (incident.distributionClaimedBy === session.maxUserId && !!incident.distributionClaimUntil && incident.distributionClaimUntil > new Date() && incident.distributionClaimUntil.toISOString() === data.distributionLeaseUntil));
   }
   const action = session.type === SessionType.WAITING_REVISION_REASON && !data?.redistribution ? 'review-queue' : 'sector-queue';
   const leaseValid = !data?.leaseUntil || !!await services.prisma.actionLock.findFirst({ where: {
