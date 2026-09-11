@@ -10,7 +10,6 @@ const log = moduleLogger('bot');
 
 /** Commands advertised in the MAX client UI. */
 const BOT_COMMANDS = [
-  { name: 'work', description: 'Моя работа — для сотрудников' },
   { name: 'start', description: 'Главное меню' },
   { name: 'my', description: 'Мои обращения' },
   { name: 'rules', description: 'Правила подачи обращения' },

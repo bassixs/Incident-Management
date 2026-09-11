@@ -9,6 +9,8 @@ import type { Button, Message } from '../max/max-types';
 import type { CompositeMessage } from '../max/max-message.service';
 import { parseCallbackPayload } from '../max/callback-payload';
 import { workingChatFor } from '../users/working-chat';
+import { hasPrivateWorkAccess } from '../users/private-work-access';
+import { sendMainMenu } from '../bot/handlers/requester.handler';
 import { ConflictError, ForbiddenError, ValidationError } from '../utils/errors';
 import { formatDateTime } from '../utils/datetime';
 import { assertDispatcher, assertApprover, assertResponder, assertWorkingChat } from '../bot/middleware/authorize';
@@ -164,6 +166,7 @@ async function take(services: AppServices, s: Scope) {
 
 export async function invitePersonalWork(services: AppServices, actor: ResolvedActor, chatId: bigint, incidentId?: string) {
   await assertWorkingChat(services, chatId);
+  await actorInChat(services, actor, chatId);
   let payload = 'staff_home';
   let title = `${actor.displayName}, откройте свою работу в личном диалоге с ботом.`;
   if (incidentId) {
@@ -224,6 +227,12 @@ export async function showPersonalWork(services: AppServices, actor: ResolvedAct
 }
 
 export async function personalHome(services: AppServices, actor: ResolvedActor, page = 0) {
+  if (!await hasPrivateWorkAccess(services, actor.maxUserId)) {
+    await exitPersonalWork(services, actor.maxUserId);
+    await services.messages.send({ userId: actor.maxUserId }, { text: 'Рабочий раздел доступен только участникам рабочих чатов. Если вы сотрудник, проверьте участие в чате и повторите попытку.' });
+    await sendMainMenu(services, actor, false);
+    return;
+  }
   // Include work already taken in groups, even before its first private opening.
   const claims = await services.prisma.incident.findMany({ where: { OR: [{ distributionClaimedBy: actor.maxUserId, distributionClaimUntil: { gt: new Date() } },
     { id: { in: (await services.prisma.actionLock.findMany({ where: { maxUserId: actor.maxUserId, action: { in: ['sector-queue', 'review-queue'] }, lockedUntil: { gt: new Date() } } })).flatMap(l => l.incidentId ? [l.incidentId] : []) } }] }, include: { assignedGroup: true } });

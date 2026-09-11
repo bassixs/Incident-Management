@@ -1,4 +1,5 @@
 import { reportActionError } from '../../utils/errors';
+import { hasPrivateWorkAccess } from '../../users/private-work-access';
 import { SessionType } from '@prisma/client';
 
 import type { AppServices } from '../../app/container';
@@ -312,13 +313,13 @@ async function continueToCategorySelection(
 }
 
 /** `/start` and `bot_started`. */
-export async function sendMainMenu(services: AppServices, actor: ResolvedActor): Promise<void> {
+export async function sendMainMenu(services: AppServices, actor: ResolvedActor, includeWork = true): Promise<void> {
   if (await services.bans.isBanned(actor.maxUserId)) {
     await services.messages.send({ userId: actor.maxUserId }, { text: REJECTION_MESSAGES.banned });
     return;
   }
   await services.messages.send(
     { userId: actor.maxUserId },
-    { text: greetingText(), keyboard: [...mainMenuKeyboard(), ...(await services.prisma.privateWorkItem.count({ where: { maxUserId: actor.maxUserId } }) ? [[{ type: 'callback' as const, text: 'Моя работа', payload: 'personal:home' }]] : [])] },
+    { text: greetingText(), keyboard: [...mainMenuKeyboard(), ...(includeWork && await services.prisma.privateWorkItem.count({ where: { maxUserId: actor.maxUserId } }) && await hasPrivateWorkAccess(services, actor.maxUserId) ? [[{ type: 'callback' as const, text: 'Моя работа', payload: 'personal:home' }]] : [])] },
   );
 }

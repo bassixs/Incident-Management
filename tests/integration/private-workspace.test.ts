@@ -10,6 +10,8 @@ import { parseCallbackPayload } from '../../src/max/callback-payload';
 import type { Message } from '../../src/max/max-types';
 import { buildServices } from '../../src/app/container';
 import * as outbox from '../../src/delivery/workflow-outbox';
+import { hasPrivateWorkAccess } from '../../src/users/private-work-access';
+import { sendMainMenu } from '../../src/bot/handlers/requester.handler';
 
 describeIntegration('private employee workspace', () => {
   let prisma: PrismaClient, h: TestHarness;
@@ -46,6 +48,52 @@ describeIntegration('private employee workspace', () => {
   }
   const run = (item: PrivateWorkItem, action: string, argument?: string) => personalAction(h.services, actor, item.id, 'run', `incident:${action}:${item.incidentId}${argument ? ':' + argument : ''}`);
   const confirm = async (item: PrivateWorkItem) => personalAction(h.services, actor, item.id, 'confirm', (await data(item)).draft?.nonce ?? (await data(item)).pending?.nonce);
+
+  it.each(['command', 'link', 'button'])('denies a resident the home panel via %s before creating work items', async entry => {
+    actor = await actorFor(prisma, 9912n, 'Житель', [UserRole.REQUESTER]); allowed = false;
+    const person = { user_id: Number(actor.maxUserId), name: actor.displayName, is_bot: false };
+    const message = { sender: person, recipient: { chat_id: 123456, chat_type: 'dialog' }, body: { mid: randomUUID(), text: '/work' } };
+    if (entry === 'command') await handleMessageUpdate(h.services, { update: { message } } as never);
+    if (entry === 'link') await handleBotStarted(h.services, { user: person, update: { payload: 'staff_home' } } as never);
+    if (entry === 'button') await handleCallbackUpdate(h.services, { update: { message, callback: { callback_id: randomUUID(), user: person, payload: 'personal:home' } } } as never);
+    const replies = h.messages.toUser(actor.maxUserId);
+    expect(replies.some(m => m.message.text.includes('только участникам рабочих чатов'))).toBe(true);
+    expect(replies.some(m => m.message.text.includes('МОЯ РАБОТА'))).toBe(false);
+    expect(replies.flatMap(m => m.message.keyboard?.flat() ?? []).some(b => b.type === 'callback' && b.payload.startsWith('personal:'))).toBe(false);
+    expect(await prisma.privateWorkItem.count()).toBe(0);
+  });
+
+  it.each([TEST_CHATS.distribution, TEST_CHATS.review, TEST_CHATS.sector, -1005n])('allows a current member of chat %s without prior work or staff roles', async chat => {
+    actor = await actorFor(prisma, 9912n, 'Новый сотрудник', [UserRole.REQUESTER]);
+    vi.mocked(h.services.max.api.getChatMembers).mockImplementation(async id => ({ members: BigInt(id) === chat ? [{ user_id: Number(actor.maxUserId), is_bot: false }] : [] }) as never);
+    await personalHome(h.services, actor);
+    expect(h.messages.toUser(actor.maxUserId).at(-1)!.message.text).toContain('МОЯ РАБОТА');
+  });
+
+  it('removes access and the menu button immediately after leaving, despite admin role and saved drafts', async () => {
+    const { item } = await open(); await run(item, 'answer'); await receivePersonalText(h.services, actor, input('Черновик'));
+    allowed = false;
+    await sendMainMenu(h.services, actor);
+    expect(h.messages.toUser(actor.maxUserId).at(-1)!.message.keyboard?.flat().some(b => b.text === 'Моя работа')).toBe(false);
+    await personalHome(h.services, actor);
+    expect((await fresh(item)).selected).toBe(false); expect((await data(item)).draft.text).toBe('Черновик');
+    expect(h.messages.toUser(actor.maxUserId).at(-1)!.message.text).not.toContain('МОЯ РАБОТА');
+    await expect(invitePersonalWork(h.services, actor, TEST_CHATS.sector)).rejects.toThrow('участник');
+  });
+
+  it('fails closed on MAX outage and does not treat a different returned member as the caller', async () => {
+    vi.mocked(h.services.max.api.getChatMembers).mockRejectedValue(new Error('MAX unavailable'));
+    expect(await hasPrivateWorkAccess(h.services, actor.maxUserId)).toBe(false);
+    vi.mocked(h.services.max.api.getChatMembers).mockResolvedValue({ members: [{ user_id: Number(other.maxUserId), is_bot: false }] } as never);
+    expect(await hasPrivateWorkAccess(h.services, actor.maxUserId)).toBe(false);
+  });
+
+  it('ignores old work records for disabled chats', async () => {
+    const { item } = await open();
+    await prisma.responsibleGroup.updateMany({ where: { maxChatId: item.originChatId }, data: { isActive: false } });
+    vi.mocked(h.services.max.api.getChatMembers).mockImplementation(async id => ({ members: BigInt(id) === item.originChatId ? [{ user_id: Number(actor.maxUserId), is_bot: false }] : [] }) as never);
+    expect(await hasPrivateWorkAccess(h.services, actor.maxUserId)).toBe(false);
+  });
 
   it('opens a scoped link and shows identity, incident, reservation and explicit input state privately', async () => {
     const { incident, item, chat } = await open();
