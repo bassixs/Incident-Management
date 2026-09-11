@@ -32,7 +32,7 @@ const COLUMNS: Column[] = [
     value: (incident) => incident.responseRating ?? '',
   },
   {
-    header: 'Тематика жителя',
+    header: 'Тема обращения',
     width: 24,
     value: (incident) => incident.userSelectedCategory?.name ?? 'Иное',
   },
@@ -57,7 +57,7 @@ const COLUMNS: Column[] = [
     value: (incident) => incident.slaPausedAt ? 'Ожидаем уточнение от жителя' : describeStatus(incident.status, false),
   },
   { header: 'Количество доработок', width: 20, value: (incident) => incident.revisionCount },
-  { header: 'Дедлайн', width: 20, value: (incident) => incident.slaPausedAt ? 'Срок приостановлен' : formatDateTime(incident.deadlineAt) },
+  { header: 'Срок ответа', width: 20, value: (incident) => incident.slaPausedAt ? 'Срок приостановлен' : formatDateTime(incident.deadlineAt) },
   { header: 'Просрочено', width: 12, value: (incident) => (incident.slaPausedAt ? 'пауза' : incident.isOverdue ? 'да' : 'нет') },
   { header: 'Пользователь', width: 28, value: (incident) => incident.requesterName },
   { header: 'Телефон', width: 20, value: (incident) => incident.requesterPhone ?? '' },
@@ -96,9 +96,9 @@ function finalAnswerText(incident: IncidentWithRelations): string {
 function overdueColumns(now: Date): Column[] {
   return [
     { header: 'Уникальный номер', width: 24, value: incident => incident.publicCode },
-    { header: 'Тематика жителя', width: 28, value: incident => incident.userSelectedCategory?.name ?? 'Иное' },
+    { header: 'Тема обращения', width: 28, value: incident => incident.userSelectedCategory?.name ?? 'Иное' },
     { header: 'Дата обращения', width: 21, value: incident => formatDateTime(incident.createdAt) },
-    { header: 'Дедлайн', width: 21, value: incident => formatDateTime(incident.deadlineAt) },
+    { header: 'Срок ответа', width: 21, value: incident => formatDateTime(incident.deadlineAt) },
     { header: 'Просрочка, ч', width: 16, value: incident =>
       Math.round((now.getTime() - incident.deadlineAt.getTime()) / 360_000) / 10 },
     { header: 'Статус', width: 26, value: incident => describeStatus(incident.status, false) },

@@ -106,7 +106,7 @@ describeIntegration('automatic access in configured work chats', () => {
     expect(lastText()).toContain('Согласование ответов'); expect(lastText()).toContain('/queue'); expect(lastText()).toContain('/today');
     expect(lastText()).not.toContain('/report');
     await command(TEST_CHATS.sector, '/help');
-    expect(lastText()).toContain('Хозяйственная группа'); expect(lastText()).toContain('Дедлайн указан в карточке');
+    expect(lastText()).toContain('Хозяйственная группа'); expect(lastText()).toContain('Срок ответа указан в карточке');
     expect(lastText()).not.toContain('Уточнить у жителя');
     expect(lastText()).not.toContain('/delivery_retry'); expect(lastText()).not.toContain('/role');
     await command(TEST_CHATS.regional, '/info'); expect(lastText()).toContain('без отдельного согласования');

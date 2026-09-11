@@ -42,7 +42,7 @@ describeIntegration('executor channel in the post-rating invitation', () => {
     expect(ratings.filter(result => result.status === 'fulfilled')).toHaveLength(1);
     await worker.flush(); await worker.flush();
     expect(sendToUser).toHaveBeenCalledTimes(1);
-    expect(sendToUser).toHaveBeenCalledWith(TEST_USERS.requesterA, expect.stringContaining('канале исполнителя'), expect.objectContaining({
+    expect(sendToUser).toHaveBeenCalledWith(TEST_USERS.requesterA, 'Подписывайтесь на наши каналы в MAX', expect.objectContaining({
       attachments: [{ type: 'inline_keyboard', payload: { buttons: [
         [{ type: 'link', text: 'Владислав Шапша', url: 'https://max.ru/Shapsha_VV' }],
         [{ type: 'link', text: 'Правительство Калужской области', url: 'https://max.ru/pravitelstvo40' }],

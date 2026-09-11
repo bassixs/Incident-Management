@@ -23,7 +23,8 @@ import { moduleLogger } from '../utils/logger';
 import { MaxClient } from './max-client';
 import { queueDeliveryStatus, reviewDeliveryNotice } from '../delivery/delivery-status';
 import { INCIDENT_INCLUDE } from '../incidents/incident.repository';
-import { distributionResolvedNotice, distributionWorkedNotice, sectorCard } from '../bot/views/cards';
+import { distributionCard, distributionResolvedNotice, distributionWorkedNotice, sectorCard } from '../bot/views/cards';
+import { distributionKeyboard } from '../bot/keyboards';
 import { queueDistributionRefresh, queueSectorRefresh, queueStaffRefresh } from '../delivery/workflow-outbox';
 import { workPanelKey, workPanelText, workButtons } from '../work-queues/state';
 import { reviewCard } from '../bot/views/cards';
@@ -58,7 +59,7 @@ export type CompositeMessage = {
     | { type: 'distribution-panel' }
     | { type: 'work-panel' }
     | { type: 'staff-refresh'; incidentId: string }
-    | { type: 'distribution-refresh'; incidentId: string }
+    | { type: 'distribution-refresh'; incidentId: string; refreshActive?: boolean }
     | { type: 'distribution-alert'; level: 'normal' | 'escalation'; hour: number };
   replyToMessageId?: string;
   /** Prefix repeated on every follow-up part, e.g. `№ INC-20260823-0001`. */
@@ -450,7 +451,7 @@ export class MaxMessageService {
         : payload.operation?.type === 'staff-refresh'
         ? await this.refreshStaffCards(payload.operation.incidentId)
         : payload.operation?.type === 'distribution-refresh'
-        ? await this.refreshDistributionCards(payload.operation.incidentId)
+        ? await this.refreshDistributionCards(payload.operation.incidentId, payload.operation.refreshActive)
         : payload.operation?.type === 'distribution-alert'
         ? await this.deliverDistributionAlert(row.targetId, payload.operation)
         : payload.operation?.type === 'sla-reminder'
@@ -750,7 +751,7 @@ export class MaxMessageService {
     return {};
   }
 
-  private async refreshDistributionCards(incidentId: string): Promise<{ firstMessageId?: string }> {
+  private async refreshDistributionCards(incidentId: string, refreshActive = false): Promise<{ firstMessageId?: string }> {
     const prisma = this.durable!.prisma;
     const incident = await prisma.incident.findUnique({ where: { id: incidentId }, include: INCIDENT_INCLUDE });
     if (!incident) return {};
@@ -766,7 +767,19 @@ export class MaxMessageService {
       let text: string;
       if (incident.status === 'DISTRIBUTION') {
         // The original stays actionable; only obsolete queue copies are retired.
-        if (!card.dedupeKey || card.dedupeKey === activeKey) continue;
+        if (!card.dedupeKey || card.dedupeKey === activeKey) {
+          if (refreshActive) {
+            const keyboard = distributionKeyboard(incidentId);
+            let currentText = distributionCard(incident);
+            if (card.dedupeKey) {
+              currentText += `\n\nРаспределяет: ${incident.distributionClaimedName}. Закреплено на 15 минут.`;
+              keyboard.push([{ type: 'callback', text: 'Освободить обращение', payload: `queue:release:${incidentId}` }]);
+            }
+            try { await this.max.editCardWithKeyboard(card.firstMessageId!, currentText, keyboard); }
+            catch (error) { if (!(error instanceof MaxError) || error.status !== 404) throw error; }
+          }
+          continue;
+        }
         text = `ℹ️ ${incident.publicCode}: закрепление по этой карточке завершено.\n\nОбращение остаётся в очереди. Откройте /queue, чтобы увидеть его текущее состояние и взять в работу.`;
       } else if (incident.status === 'REJECTED') {
         text = `❌ ${incident.publicCode} отклонено\n\nПричина:\n${incident.rejectionReason ?? '—'}`;

@@ -208,7 +208,7 @@ describeIntegration('review, revision and delivery (PostgreSQL)', () => {
     expect(returned.status).toBe(IncidentStatus.REVISION_REQUIRED);
     expect(returned.revisionCount).toBe(1);
     expect(returned.deadlineAt.getTime()).toBe(originalDeadline);
-    expect(harness.messages.toChat(TEST_CHATS.sector).at(-1)!.message.text).toContain('Дедлайн НЕ изменён');
+    expect(harness.messages.toChat(TEST_CHATS.sector).at(-1)!.message.text).toContain('Срок ответа НЕ изменён');
 
     const second = await harness.services.answers.submit(incident.id, responder, 'Починили, срок — до пятницы.');
     expect(second.answer.version).toBe(2);

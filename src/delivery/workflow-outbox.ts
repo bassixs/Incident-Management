@@ -54,9 +54,7 @@ export async function queueSubscriptionInvite(tx: Tx, incidentId: string): Promi
   const channel = publicChannelFor(incident.assignedGroup?.code);
   const dedupeKey = `subscription-invite:${incidentId}`;
   const message: CompositeMessage = {
-    text: channel
-      ? 'Ответы на волнующие вас вопросы можно также узнать в этих каналах, в том числе на канале исполнителя вашего обращения. Подпишитесь:'
-      : 'Ответы на волнующие вас вопросы можно также узнать в этих каналах. Подпишитесь:',
+    text: 'Подписывайтесь на наши каналы в MAX',
     keyboard: [
       [{ type: 'link', text: 'Владислав Шапша', url: 'https://max.ru/Shapsha_VV' }],
       [{ type: 'link', text: 'Правительство Калужской области', url: 'https://max.ru/pravitelstvo40' }],
@@ -94,10 +92,10 @@ export async function queueSector(tx: Tx, incidentId: string): Promise<void> {
 }
 
 /** Refresh every distribution card, including copies issued by the queue. */
-export async function queueDistributionRefresh(tx: Tx, incidentId: string, event: string = randomUUID()): Promise<void> {
+export async function queueDistributionRefresh(tx: Tx, incidentId: string, event: string = randomUUID(), refreshActive = false): Promise<void> {
   await queueMessage(tx, { chatId: requiredChat(getConfig().DISTRIBUTION_CHAT_ID) }, {
     text: 'Обновление карточек распределения',
-    operation: { type: 'distribution-refresh', incidentId },
+    operation: { type: 'distribution-refresh', incidentId, refreshActive },
     delivery: { dedupeKey: `distribution-refresh:${incidentId}:${event}` },
   }, incidentId);
 }

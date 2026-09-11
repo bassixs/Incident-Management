@@ -82,12 +82,12 @@ describeIntegration('Excel overdue worksheet', () => {
     const report = await h.services.reports.build({ ...TODAY, from: new Date(NOW.getTime() - 7 * 24 * HOUR) }, NOW);
     const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(report.buffer as never);
     const overdue = workbook.getWorksheet('Просроченные')!;
-    expect(overdue.getCell(3, 2).value).toBe('Тематика жителя');
+    expect(overdue.getCell(3, 2).value).toBe('Тема обращения');
     expect(overdue.getCell(4, 2).value).toBe(category.name);
     expect(overdue.getCell(5, 2).value).toBe('Иное');
     expect(overdue.getColumn(5).numFmt).toBe('0.0');
     const all = workbook.getWorksheet('Обращения')!;
-    expect(all.getCell(1, 7).value).toBe('Тематика жителя');
+    expect(all.getCell(1, 7).value).toBe('Тема обращения');
     const topics = [all.getCell(2, 7).value, all.getCell(3, 7).value];
     expect(topics).toEqual(expect.arrayContaining([category.name, 'Иное']));
   });

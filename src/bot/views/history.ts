@@ -9,6 +9,7 @@ const ACTION_LABELS: Record<string, string> = {
   DISTRIBUTION_CLAIMED: 'Оператор взял обращение на распределение',
   DISTRIBUTION_RELEASED: 'Оператор освободил обращение для распределения',
   ASSIGNED: 'Обращение распределено',
+  TOPIC_CHANGED: 'Тема обращения изменена',
   SECTOR_CARD_SENT: 'Карточка отправлена в профильный чат',
   TAKEN_IN_WORK: 'Обращение взято в работу',
   ANSWER_CREATED: 'Подготовлена версия ответа',
@@ -91,6 +92,7 @@ function actorOf(
 
 function historyDetails(action: string, metadata: Record<string, unknown>): string[] {
   const details: string[] = [];
+  if (action === 'TOPIC_CHANGED') details.push(`Тема: ${String(metadata.previousCategoryName)} → ${String(metadata.categoryName)}`);
   if (metadata.question) details.push(`Вопрос: ${String(metadata.question)}`);
   if (metadata.replyText) details.push(`Уточнение жителя: ${String(metadata.replyText)}`);
   if (metadata.photos) details.push(`Фотографий: ${String(metadata.photos)}`);
@@ -98,7 +100,7 @@ function historyDetails(action: string, metadata: Record<string, unknown>): stri
   if (metadata.version) details.push(`Версия ответа: ${String(metadata.version)}`);
   if (metadata.reason) details.push(`Причина: ${String(metadata.reason)}`);
   if (metadata.targetMaxUserId) details.push(`Пользователь: ${String(metadata.targetMaxUserId)}`);
-  if (metadata.deadlineAt) details.push(`Дедлайн: ${String(metadata.deadlineAt)}`);
+  if (metadata.deadlineAt) details.push(`Срок ответа: ${String(metadata.deadlineAt)}`);
   if (action === 'ANSWER_RATED' && metadata.rating) {
     details.push(`Оценка: ${String(metadata.rating)} из 5`);
   }

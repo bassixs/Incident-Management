@@ -263,7 +263,7 @@ export class ReviewService {
           'Вернул:',
           actor.displayName,
           '',
-          '⚠️ Дедлайн НЕ изменён.',
+          '⚠️ Срок ответа НЕ изменён.',
         ].join('\n'),
       );
     }

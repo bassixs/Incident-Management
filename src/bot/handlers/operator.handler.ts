@@ -140,7 +140,7 @@ async function applyRevision(
   await services.messages.send(
     { chatId },
     {
-      text: `↩️ ${incident.publicCode} возвращено на доработку.\n\n⚠️ Дедлайн НЕ изменён.`,
+      text: `↩️ ${incident.publicCode} возвращено на доработку.\n\n⚠️ Срок ответа НЕ изменён.`,
       label: codeLabel(incident),
     },
   );

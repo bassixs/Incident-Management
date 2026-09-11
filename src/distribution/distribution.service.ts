@@ -1,4 +1,5 @@
 import { acquireAdvisoryLock, TRANSACTION_OPTIONS } from '../database/prisma';
+import { randomUUID } from 'node:crypto';
 import { assertClaimOwner, CLAIM_LOCK } from './queue-state';
 import { queueSector, queueRejection, queueDistributionRefresh } from '../delivery/workflow-outbox';
 import {
@@ -119,6 +120,25 @@ export class DistributionService {
   async recommendedGroup(municipalityCode: string | null): Promise<ResponsibleGroup | null> {
     const group = await this.groups.findByMunicipalityCode(municipalityCode);
     return group?.isActive && group.maxChatId !== null ? group : null;
+  }
+
+  async changeTopic(incidentId: string, categoryId: string | null, actor: Actor): Promise<IncidentWithRelations> {
+    await this.prisma.$transaction(async tx => {
+      await acquireAdvisoryLock(tx, ...CLAIM_LOCK);
+      const incident = await this.repository.findById(incidentId, tx);
+      if (!incident) throw new NotFoundError('Обращение не найдено.');
+      if (incident.status !== 'DISTRIBUTION') throw new ConflictError('Тему можно изменить только до распределения обращения.');
+      assertClaimOwner(incident, actor.maxUserId);
+      const category = categoryId ? await tx.category.findFirst({ where: { id: categoryId, isActive: true } }) : null;
+      if (categoryId && !category) throw new NotFoundError('Выбранная тема больше недоступна. Откройте список заново.');
+      if (incident.userSelectedCategoryId === categoryId) return;
+      await tx.incident.update({ where: { id: incidentId }, data: { userSelectedCategoryId: categoryId } });
+      await this.history.record({ incidentId, action: 'TOPIC_CHANGED', actorMaxUserId: actor.maxUserId, actorRole: actor.role,
+        metadata: { previousCategoryId: incident.userSelectedCategoryId, previousCategoryName: incident.userSelectedCategory?.name ?? 'Иное', categoryId, categoryName: category?.name ?? 'Иное' } }, tx);
+      await queueDistributionRefresh(tx, incidentId, `topic:${randomUUID()}`, true);
+    }, TRANSACTION_OPTIONS);
+    await this.messages.flush();
+    return (await this.repository.findById(incidentId))!;
   }
 
   /**

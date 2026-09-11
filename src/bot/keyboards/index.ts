@@ -89,9 +89,7 @@ export function categoryPageCount(total: number): number {
  * Paged сфера picker (§7).
  *
  * With two dozen сферы a single list is a long scroll on a phone, so the page
- * shows a handful at a time with arrows. "Иное" stays pinned on top: it is
- * the honest answer for most people and the shortest path, and the choice is
- * only a hint for the dispatcher anyway.
+ * shows a handful at a time with arrows. "Иное" is the final choice, on the last page only.
  */
 export function requesterCategoryKeyboard(categories: Category[], page = 0): Button[][] {
   const pages = categoryPageCount(categories.length);
@@ -99,8 +97,8 @@ export function requesterCategoryKeyboard(categories: Category[], page = 0): But
   const slice = categories.slice(current * CATEGORY_PAGE_SIZE, (current + 1) * CATEGORY_PAGE_SIZE);
 
   const rows: Button[][] = [
-    [button.callback('Иное', userCallback('category', 'none'))],
     ...slice.map((category) => [button.callback(category.name, userCallback('category', category.id))]),
+    ...(current === pages - 1 ? [[button.callback('Иное', userCallback('category', 'none'))]] : []),
   ];
 
   if (pages > 1) {
@@ -234,9 +232,18 @@ export function answerRatingKeyboard(incidentId: string): Button[][] {
 export function distributionKeyboard(incidentId: string): Button[][] {
   return [
     [button.callback('Распределить', incidentCallback('assign', incidentId), { intent: 'positive' })],
+    [button.callback('Изменить тему', incidentCallback('topic', incidentId))],
     [button.callback('Отклонить', incidentCallback('reject', incidentId), { intent: 'negative' })],
     [button.callback('Заблокировать автора', incidentCallback('ban', incidentId), { intent: 'negative' })],
   ];
+}
+
+export function distributionTopicKeyboard(incidentId: string, categories: Category[], page = 0): Button[][] {
+  return requesterCategoryKeyboard(categories, page).map(row => row.map(item => {
+    if (item.type !== 'callback' || !item.payload.startsWith('user:')) return item;
+    const [, action, argument] = item.payload.split(':');
+    return button.callback(item.text, incidentCallback(action === 'page' ? 'topic-page' : 'topic-set', incidentId, argument));
+  }));
 }
 
 export type AssignmentBranch = 'local' | 'executive';

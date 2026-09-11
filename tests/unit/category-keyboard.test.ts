@@ -27,9 +27,12 @@ function labels(rows: ReturnType<typeof requesterCategoryKeyboard>): string[] {
 }
 
 describe('paged сфера picker', () => {
-  it('shows one page of сферы with "Иное" pinned on top', () => {
+  it('shows categories first and reserves Иное for the last page', () => {
     const rows = requesterCategoryKeyboard(categories(26), 0);
-    expect(labels(rows)[0]).toBe('Иное');
+    expect(labels(rows)[0]).toBe('Сфера 0');
+    expect(labels(rows)).not.toContain('Иное');
+    const last = requesterCategoryKeyboard(categories(26), 4).flat().filter(b => b.type === 'callback' && b.payload.startsWith('user:category:'));
+    expect(last.at(-1)?.text).toBe('Иное');
     expect(labels(rows).filter((text) => text.startsWith('Сфера'))).toHaveLength(CATEGORY_PAGE_SIZE);
   });
 
@@ -57,7 +60,7 @@ describe('paged сфера picker', () => {
 
   it('hides navigation entirely when everything fits on one page', () => {
     const nav = labels(requesterCategoryKeyboard(categories(4), 0));
-    expect(nav).toEqual(['Иное', 'Сфера 0', 'Сфера 1', 'Сфера 2', 'Сфера 3']);
+    expect(nav).toEqual(['Сфера 0', 'Сфера 1', 'Сфера 2', 'Сфера 3', 'Иное']);
   });
 
   it('clamps an out-of-range page instead of showing an empty screen', () => {

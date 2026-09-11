@@ -9,6 +9,7 @@ import { assertApprover, assertDispatcher, assertResponder, requirePermission } 
 import {
   assignmentBranchKeyboard,
   assignmentGroupKeyboard,
+  distributionTopicKeyboard,
   type AssignmentBranch,
 } from '../keyboards';
 import { codeLabel } from '../views/cards';
@@ -41,7 +42,7 @@ export async function handleIncidentCallback(
   if (!incident) throw new NotFoundError('Обращение не найдено.');
   if (chatId === undefined) throw new ForbiddenError('Действие недоступно в этом чате.');
 
-  if (incident.status === 'DISTRIBUTION' && ['assign', 'assign-branch', 'assign-page', 'assign-group', 'reject'].includes(payload.action)) {
+  if (incident.status === 'DISTRIBUTION' && ['assign', 'assign-branch', 'assign-page', 'assign-group', 'reject', 'topic', 'topic-page', 'topic-set'].includes(payload.action)) {
     await services.distributionQueue.claim(actor, chatId, incident.id);
   }
 
@@ -57,6 +58,26 @@ export async function handleIncidentCallback(
   );
 
   switch (payload.action) {
+    case 'topic':
+    case 'topic-page': {
+      assertDispatcher(services, actor, chatId);
+      if (incident.status !== 'DISTRIBUTION') throw new ConflictError('Тему можно изменить только до распределения обращения.');
+      const page = payload.action === 'topic' ? 0 : Number(payload.argument);
+      if (!Number.isSafeInteger(page) || page < 0 || page > 100_000) throw new AppError('Некорректная страница.', 'BAD_PAYLOAD');
+      const text = `${incident.publicCode}\nТекущая тема: ${incident.userSelectedCategory?.name ?? 'Иное'}\n\nВыберите правильную тему обращения:`;
+      const keyboard = distributionTopicKeyboard(incident.id, await services.categories.listActive(), page);
+      if (payload.action === 'topic-page' && context.messageId) await services.messages.editCardKeyboard(context.messageId, text, keyboard);
+      else await services.messages.send({ chatId }, { text, keyboard });
+      return undefined;
+    }
+    case 'topic-set': {
+      assertDispatcher(services, actor, chatId);
+      if (payload.argument !== 'none' && (!payload.argument || !isUuid(payload.argument))) throw new AppError('Тема не указана.', 'BAD_PAYLOAD');
+      const updated = await services.distribution.changeTopic(incident.id, payload.argument === 'none' ? null : payload.argument, actor);
+      const notice = `${updated.publicCode}: тема обращения — ${updated.userSelectedCategory?.name ?? 'Иное'}.`;
+      if (context.messageId && context.messageId !== incident.distributionMessageId) await services.messages.finalizeCard(context.messageId, notice);
+      return notice;
+    }
     case 'repair-photo': {
       if (!payload.argument || !isUuid(payload.argument)) throw new ConflictError('Кнопка устарела.');
       await services.answers.reopenForPhotoReplacement(incident.id, payload.argument, actor, chatId);

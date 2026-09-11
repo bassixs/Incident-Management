@@ -235,7 +235,7 @@ describeIntegration('transactional workflow and recovery', () => {
     const max = {
       sendToUser: async (userId: bigint, text: string, extra?: SendMessageExtra) => {
         if (fail && text.includes('Получен ответ')) throw new Error('MAX unavailable');
-        if (failInvite && text.includes('Подпишитесь:')) throw new Error('Invite unavailable');
+        if (failInvite && text.includes('Подписывайтесь на наши каналы в MAX')) throw new Error('Invite unavailable');
         userMessages.push({ userId, text, extra });
         return { body: { mid: `u-${++sequence}` } };
       },
@@ -274,13 +274,13 @@ describeIntegration('transactional workflow and recovery', () => {
     const queuedInvite = await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: inviteKey } });
     expect(queuedInvite.status).toBe('PENDING');
     expect(queuedInvite.targetId).toBe(TEST_USERS.requesterA);
-    expect(userMessages.some(message => message.text.includes('Подпишитесь:'))).toBe(false);
+    expect(userMessages.some(message => message.text.includes('Подписывайтесь на наши каналы в MAX'))).toBe(false);
     failInvite = false;
     await prisma.outboundMessage.update({ where: { dedupeKey: inviteKey }, data: { nextAttemptAt: new Date(0) } });
     const inviteWorker = new MaxMessageService(max as never, { prisma, storage });
     await inviteWorker.flush();
     await inviteWorker.flush();
-    const invitations = userMessages.filter(message => message.text.includes('Подпишитесь:'));
+    const invitations = userMessages.filter(message => message.text.includes('Подписывайтесь на наши каналы в MAX'));
     expect(invitations).toHaveLength(1);
     expect(invitations[0]!.userId).toBe(TEST_USERS.requesterA);
     expect(invitations[0]!.extra?.attachments).toEqual([{
@@ -290,7 +290,7 @@ describeIntegration('transactional workflow and recovery', () => {
       ] },
     }]);
     expect(userMessages.filter(message => message.text.includes('Получен ответ'))).toHaveLength(1);
-    expect(userMessages.findIndex(message => message.text.includes('Подпишитесь:')))
+    expect(userMessages.findIndex(message => message.text.includes('Подписывайтесь на наши каналы в MAX')))
       .toBeGreaterThan(userMessages.findIndex(message => message.text.includes('Получен ответ')));
     expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: inviteKey } })).status).toBe('SENT');
   });
@@ -311,7 +311,7 @@ describeIntegration('transactional workflow and recovery', () => {
     await h.services.answers.submit(incident.id, await actor(), 'Готово');
     const dedupeKey = `subscription-invite:${incident.id}`;
     await prisma.$transaction(tx => outbox.queueMessage(tx, { userId: TEST_USERS.requesterA }, {
-      text: 'Подпишитесь:', delivery: { dedupeKey },
+      text: 'Подписывайтесь на наши каналы в MAX', delivery: { dedupeKey },
     }, incident.id));
     // Other deliveries have already been simulated by the harness.
     await prisma.outboundMessage.updateMany({ where: { dedupeKey: { not: dedupeKey } }, data: { status: 'SENT' } });
@@ -339,6 +339,6 @@ describeIntegration('transactional workflow and recovery', () => {
     };
     await new MaxMessageService(max as never, { prisma, storage: {} as never }).flush();
     expect(await prisma.outboundMessage.count({ where: { dedupeKey: `subscription-invite:${incident.id}` } })).toBe(0);
-    expect(texts.some(text => text.includes('Подпишитесь:'))).toBe(false);
+    expect(texts.some(text => text.includes('Подписывайтесь на наши каналы в MAX'))).toBe(false);
   });
 });

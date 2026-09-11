@@ -79,4 +79,8 @@ describe('requester-facing copy', () => {
     expect(list).toContain('В работе');
     expect(list).not.toContain('просрочено');
   });
+  it.each(Object.values(IncidentStatus))('shows only two public statuses for %s', status => {
+    const text = myIncidentsText([{ publicCode: 'INC-TEST', status, isOverdue: true } as Incident]);
+    expect(text.split('\n').filter(Boolean)).toEqual(['Ваши последние обращения:', 'INC-TEST', ['RESOLVED', 'REJECTED'].includes(status) ? 'Закрыто' : 'В работе']);
+  });
 });

@@ -8,6 +8,9 @@
  */
 
 export const INCIDENT_ACTIONS = [
+  'topic',
+  'topic-page',
+  'topic-set',
   'assign',
   'assign-branch',
   'assign-page',

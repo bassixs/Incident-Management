@@ -38,7 +38,7 @@ export function registrationConfirmation(incident: Incident): string {
     '',
     'Обращение принято и направлено на рассмотрение.',
     '',
-    'Сохраните номер обращения. Ход обработки можно посмотреть в разделе «Мои обращения».',
+    'Сохраните номер обращения. Статус можно посмотреть в разделе «Мои обращения».',
   ].join('\n');
 }
 
@@ -62,7 +62,7 @@ export function distributionCard(incident: IncidentWithRelations): string {
     'Телефон:',
     incident.requesterPhone ?? 'не указан',
     '',
-    'Сфера пользователя:',
+    'Тема обращения:',
     incident.userSelectedCategory?.name ?? 'Иное',
     '',
     'Территория проблемы:',
@@ -192,7 +192,7 @@ export function reviewCard(
     'Первоначальная дата:',
     formatDateTime(incident.createdAt),
     '',
-    'Дедлайн:',
+    'Срок ответа:',
     formatDateTime(incident.deadlineAt),
     ...(incident.isOverdue ? ['', '🚨 Срок ответа истёк.'] : []),
     '',
@@ -214,10 +214,10 @@ export function revisionCard(incident: Incident, answerVersion: number, reason: 
     'Версия ответа:',
     String(answerVersion),
     '',
-    'Первоначальный дедлайн:',
+    'Первоначальный срок ответа:',
     formatDateTime(incident.deadlineAt),
     '',
-    '⚠️ Дедлайн НЕ изменён.',
+    '⚠️ Срок ответа НЕ изменён.',
   ].join('\n');
 }
 
@@ -270,7 +270,7 @@ export function incidentLookupCard(incident: IncidentWithRelations): string {
     'Создано:',
     formatDateTime(incident.createdAt),
     '',
-    'Дедлайн:',
+    'Срок ответа:',
     formatDateTime(incident.deadlineAt),
     ...(incident.answeredAt ? ['', 'Отвечено:', formatDateTime(incident.answeredAt)] : []),
     '',
@@ -582,7 +582,7 @@ export function myIncidentsText(incidents: Incident[]): string {
     ...incidents.flatMap((incident) => [
       incident.publicCode,
       // Overdue is an internal SLA signal for staff, not a requester-facing status.
-      describeStatus(incident.status, false),
+      ['RESOLVED', 'REJECTED'].includes(incident.status) ? 'Закрыто' : 'В работе',
       '',
     ]),
   ]
