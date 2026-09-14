@@ -17,6 +17,7 @@ import { assertWorkingChat } from '../middleware/authorize';
 import { sendChatGuide } from '../views/chat-guide';
 import { cleanupCommand } from '../commands/cleanup';
 import { resumeRejection } from './rejection-flow';
+import { resumeReviewEdit } from './review-edit-flow';
 import { invitePersonalWork, personalAction, personalHome, exitPersonalWork, withPersonalWorkLock } from '../../work-queues/private-workspace';
 import { sendMainMenu } from '../handlers/requester.handler';
 
@@ -98,7 +99,7 @@ export async function handleCallbackUpdate(services: AppServices, ctx: Context):
     });
   } finally {
     // Reopening a cancelled rejection is a new draft, not a duplicate submission.
-    if (leaseAcquired && lease && payload.kind === 'incident' && ['reject', 'personal'].includes(payload.action)) {
+    if (leaseAcquired && lease && payload.kind === 'incident' && ['reject', 'personal', 'review-edit'].includes(payload.action)) {
       await services.actionGuard.release(lease.key).catch(() => undefined);
     }
   }
@@ -218,6 +219,10 @@ async function handleSessionCallback(
   if (!session) return 'Активных действий нет.';
   if (await discardObsoleteSession(services, session)) return 'Обращение уже перешло на другой этап. Незавершённое действие сброшено.';
   await services.sessions.extend(session.id);
+  if ((session.data as { reviewEdit?: boolean } | null)?.reviewEdit) {
+    await resumeReviewEdit(services, session);
+    return 'Правка ответа продолжена.';
+  }
   if (session.type === 'WAITING_REJECTION_REASON' && (session.data as { rejectionToken?: string } | null)?.rejectionToken) {
     await resumeRejection(services, session);
     return 'Подготовка отклонения продолжена.';

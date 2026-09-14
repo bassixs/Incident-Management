@@ -17,6 +17,7 @@ import { codeLabel } from '../views/cards';
 import type { ResolvedActor } from '../handlers/helpers';
 import { ensureFreeSession } from '../handlers/session-guard';
 import { startRejectionFlow, handleRejectionAction } from './rejection-flow';
+import { startReviewEdit, handleReviewEditAction } from './review-edit-flow';
 import { invitePersonalWork, withPersonalWorkLock } from '../../work-queues/private-workspace';
 
 const log = moduleLogger('bot-incident');
@@ -148,8 +149,18 @@ export async function handleIncidentCallback(
     case 'approve':
       return approve(services, actor, chatId, incident, await reviewAnswerId(context, incident, payload.argument));
 
-    case 'revision':
+    case 'review-edit':
+      return startReviewEdit(services, actor, chatId, incident, await reviewAnswerId(context, incident, payload.argument));
+    case 'review-edit-save':
+    case 'review-edit-back':
+    case 'review-edit-cancel':
+      return handleReviewEditAction(services, actor, chatId, incident, payload.action, payload.argument, context.messageId);
+
+    case 'revision': {
+      const current = await services.sessions.find(actor.maxUserId, chatId);
+      if ((current?.data as { reviewEdit?: boolean } | null)?.reviewEdit) throw new ConflictError('Сначала сохраните или отмените правку ответа.');
       return startRevision(services, actor, chatId, incident, await reviewAnswerId(context, incident, payload.argument));
+    }
 
     case 'cancel': {
       await services.sessions.clear(actor.maxUserId, chatId);

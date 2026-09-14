@@ -189,6 +189,7 @@ function stage(data: WorkData): string {
   if (data.draft && !data.draft.nonce) return 'Бот ждёт исправленный текст и все нужные вложения одним сообщением.';
   if (data.draft || data.pending) return 'Текст или действие подготовлены. Бот ждёт подтверждения кнопкой.';
   if (data.session?.type === 'WAITING_FOR_ANSWER') return 'Бот ждёт текст ответа и, при необходимости, фото или файлы одним сообщением.';
+  if (data.session?.data.reviewEdit) return data.session.data.editStage === 'text' ? 'Бот ждёт полный исправленный текст ответа. Вложения сохранятся.' : 'Проверьте и сохраните правку ответа кнопками ниже.';
   if (data.session?.type === 'WAITING_REVISION_REASON') return data.session.data.redistribution ? 'Бот ждёт причину перераспределения.' : 'Бот ждёт замечания для доработки ответа.';
   if (data.session?.type === 'WAITING_REJECTION_REASON') return data.session.data.rejectionStage === 'text' ? 'Бот ждёт причину отклонения.' : 'Продолжите отклонение кнопками ниже.';
   return 'Бот пока не ждёт текст. Выберите действие кнопкой.';
@@ -208,6 +209,10 @@ export async function showPersonalWork(services: AppServices, actor: ResolvedAct
   } else if (data.pending) {
     text += `\n\n${data.pending.title}`;
     if (active) rows.push([button('Подтвердить', 'confirm', id, data.pending.nonce), button('Назад', 'back', id)]);
+  } else if (active && data.session?.data.reviewEdit) {
+    const { resumeReviewEdit } = await import('../bot/callbacks/review-edit-flow');
+    const live = await services.sessions.find(actor.maxUserId, s.item.originChatId);
+    if (live) { await resumeReviewEdit(personalServices(services, s.item, s.incident.publicCode), live); return; }
   } else if (active && data.session?.type === 'WAITING_REJECTION_REASON') {
     // Reuse the version-bound rejection buttons through the private UI adapter.
     const { resumeRejection } = await import('../bot/callbacks/rejection-flow');
@@ -325,6 +330,7 @@ export async function personalAction(services: AppServices, actor: ResolvedActor
     const p = parseCallbackPayload(argument);
     if (p?.kind !== 'incident' || p.incidentId !== s.item.incidentId) throw new ForbiddenError('Кнопка другого обращения.');
     if (['assign-group', 'approve'].includes(p.action)) {
+      if (data.session?.data.reviewEdit) throw new ConflictError('Сначала сохраните или отмените правку ответа.');
       const group = p.action === 'assign-group' && p.argument ? await services.prisma.responsibleGroup.findUnique({ where: { id: p.argument } }) : null;
       const title = p.action === 'approve' ? 'Согласовать этот ответ и отправить жителю?' : `Направить обращение в организацию «${group?.name ?? 'не найдена'}»?`;
       await save(services, s.item, { ...data, pending: { raw: argument, title, nonce: randomUUID() } });
@@ -348,6 +354,19 @@ export async function receivePersonalText(services: AppServices, actor: Resolved
   const media = classifyAttachments(message.body.attachments);
   if (media.some(m => !['IMAGE', 'FILE'].includes(m.kind))) throw new ValidationError('Можно прикрепить фото или файлы. Видео и аудио не принимаются.');
   if (data.session.type !== 'WAITING_FOR_ANSWER' && media.length) throw new ValidationError('Для причины или замечаний нужен только текст.');
+  if (data.session.data.reviewEdit) {
+    if (data.session.data.editStage !== 'text') throw new ValidationError('Сначала нажмите «Исправить» в предварительном просмотре.');
+    if ((await lease(services, s))?.owner !== actor.maxUserId) {
+      data.session.data = { ...data.session.data, text, editStage: 'preview', editToken: randomUUID() };
+      await save(services, item, data);
+      await showPersonalWork(services, actor, item.id); return true;
+    }
+    await requireOwnLease(services, s);
+    const live = await services.sessions.find(actor.maxUserId, item.originChatId);
+    if (!live || live.incidentId !== item.incidentId || (live.data as { privateWorkspaceId?: string } | null)?.privateWorkspaceId !== item.id) throw new ConflictError('Нажмите «Взять и продолжить».');
+    await handleOperatorMessage(personalServices(services, item, s.incident.publicCode), s.actor, item.originChatId, message, live);
+    await snapshot(services, item); return true;
+  }
   if (data.session.type === 'WAITING_REJECTION_REASON') {
     if (data.session.data.rejectionStage !== 'text') throw new ValidationError('Выберите причину кнопкой или нажмите «Исправить».');
     if (Array.from(text).length > 2000) throw new ValidationError('Причина отклонения должна быть не длиннее 2000 символов.');

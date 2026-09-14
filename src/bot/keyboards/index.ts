@@ -356,6 +356,7 @@ export function reviewKeyboard(incidentId: string, answerId: string): Button[][]
   return [
     [button.callback('Работать лично', incidentCallback('personal', incidentId))],
     [button.callback('Взять на согласование', incidentCallback('review-take', incidentId, answerId))],
+    [button.callback('✏️ Исправить ответ', incidentCallback('review-edit', incidentId, answerId))],
     [button.callback('Освободить обращение', `work:release:${incidentId}`)],
     [button.callback('✅ Согласовать', incidentCallback('approve', incidentId, answerId), { intent: 'positive' })],
     [button.callback('↩️ На доработку', incidentCallback('revision', incidentId, answerId), { intent: 'negative' })],

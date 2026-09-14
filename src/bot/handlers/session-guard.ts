@@ -74,7 +74,8 @@ export async function ensureFreeSession(
       text: [
         `У вас уже есть незавершённое действие${pending ? ` с ${pending.publicCode}` : ''}.`,
         '',
-        (existing.data as { redistribution?: boolean } | null)?.redistribution ? 'Ожидается причина возврата на перераспределение.' : SESSION_PROMPTS[existing.type],
+        (existing.data as { reviewEdit?: boolean } | null)?.reviewEdit ? 'Ожидается правка ответа: введите текст или подтвердите предварительный просмотр.' :
+          (existing.data as { redistribution?: boolean } | null)?.redistribution ? 'Ожидается причина возврата на перераспределение.' : SESSION_PROMPTS[existing.type],
         '',
         '«Продолжить» — вернуться к нему, «Отменить» — сбросить и начать заново.',
       ].join('\n'),

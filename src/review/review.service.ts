@@ -2,8 +2,9 @@ import { queueDeliveryStatus, reviewDeliveryNotice, answerDeliveredNotice } from
 import type { DeliveryOutcome } from '../delivery/requester-delivery.service';
 import { TRANSACTION_OPTIONS } from '../database/prisma';
 import { assertReviewReservation } from '../work-queues/state';
-import { queueAnswer, queueRevision } from '../delivery/workflow-outbox';
-import { AnswerStatus, type IncidentAnswer, IncidentStatus, type PrismaClient } from '@prisma/client';
+import { queueAnswer, queueRevision, queueStaffRefresh } from '../delivery/workflow-outbox';
+import { AnswerStatus, type IncidentAnswer, IncidentStatus, type PrismaClient, type OperatorSession } from '@prisma/client';
+import { assertReviewEdit, assertNoReviewEdit, reviewEditDraft, staleReviewEdit } from './review-edit';
 
 import { reviewKeyboard } from '../bot/keyboards';
 import { codeLabel, finalAnswerToRequester, reviewCard } from '../bot/views/cards';
@@ -46,6 +47,38 @@ export class ReviewService {
       throw new AppError('REVIEW_CHAT_ID не настроен.', 'CONFIG_MISSING');
     }
     return chatId;
+  }
+
+  /** Preserve the executor's original answer and attachments as an immutable version. */
+  async saveCorrection(session: OperatorSession, actor: Actor): Promise<IncidentAnswer> {
+    if (session.maxUserId !== actor.maxUserId || session.chatId !== this.chatId()) throw staleReviewEdit();
+    const data = reviewEditDraft(session);
+    if (data.editStage !== 'preview' || !data.text.trim() || data.text.length > 12000) throw staleReviewEdit();
+    return this.prisma.$transaction(async tx => {
+      const previous = await assertReviewEdit(tx, session);
+      if (!await this.repository.transition(tx, session.incidentId!, IncidentStatus.WAITING_REVIEW, { status: IncidentStatus.WAITING_REVIEW })) throw staleReviewEdit();
+      const answer = await tx.incidentAnswer.create({ data: {
+        incidentId: previous.incidentId, version: previous.version + 1, text: data.text.trim(),
+        createdByUserId: previous.createdByUserId, status: AnswerStatus.WAITING_REVIEW,
+        attachments: { create: previous.attachments.map(a => ({ type: a.type, storageKey: a.storageKey, mimeType: a.mimeType,
+          originalName: a.originalName, size: a.size, sourceUrl: a.sourceUrl, maxToken: a.maxToken })) },
+      } });
+      // Approval and correction use the same lock; a consumed preview cannot be saved twice.
+      const consumed = await tx.operatorSession.deleteMany({ where: { id: session.id, data: { equals: session.data! } } });
+      if (!consumed.count) throw staleReviewEdit();
+      await this.history.record({ incidentId: previous.incidentId, action: HistoryAction.ANSWER_EDITED_BY_REVIEWER,
+        actorMaxUserId: actor.maxUserId, actorRole: actor.role,
+        metadata: { previousAnswerId: previous.id, answerId: answer.id, version: answer.version, approver: actor.displayName },
+      }, tx);
+      await queueAnswer(tx, previous.incidentId, answer.id, false);
+      await queueStaffRefresh(tx, previous.incidentId);
+      if (data.privateWorkspaceId) {
+        const fresh = (await this.repository.findById(previous.incidentId, tx))!;
+        await tx.privateWorkItem.updateMany({ where: { id: data.privateWorkspaceId, maxUserId: actor.maxUserId, incidentId: previous.incidentId, originChatId: session.chatId },
+          data: { data: { cycle: `${fresh.history[0]?.id ?? 'initial'}:${answer.id}`, leaseUntil: data.leaseUntil } } });
+      }
+      return answer;
+    }, TRANSACTION_OPTIONS);
   }
 
   /** Shared delivery path for reviewed and explicitly review-free answers. */
@@ -123,6 +156,7 @@ export class ReviewService {
     const answeredAt = new Date();
     await this.prisma.$transaction(async (tx) => {
       await assertReviewReservation(tx, incidentId, actor.maxUserId);
+      await assertNoReviewEdit(tx, incidentId, actor.maxUserId);
       const claimed = await this.repository.transition(tx, incidentId, IncidentStatus.WAITING_REVIEW, {
         status: IncidentStatus.RESOLVED,
         answeredAt,
@@ -216,6 +250,7 @@ export class ReviewService {
 
     await this.prisma.$transaction(async (tx) => {
       await assertReviewReservation(tx, incidentId, actor.maxUserId);
+      await assertNoReviewEdit(tx, incidentId, actor.maxUserId);
       const claimed = await this.repository.transition(tx, incidentId, IncidentStatus.WAITING_REVIEW, {
         status: IncidentStatus.REVISION_REQUIRED,
         revisionReason: reason,

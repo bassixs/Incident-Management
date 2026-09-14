@@ -111,7 +111,7 @@ describeIntegration('review, revision and delivery (PostgreSQL)', () => {
     expect(delivered.at(-1)!.message.text).toContain(incident.publicCode);
     expect(harness.messages.edits).toContainEqual({
       messageId: 'distribution-mid',
-      text: expect.stringContaining('🟢 ОТРАБОТАНО'),
+      text: expect.stringContaining('🟢 РАСПРЕДЕЛЕНО'),
       mode: 'finalize',
     });
   });

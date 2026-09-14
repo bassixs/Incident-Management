@@ -4,6 +4,7 @@ import type { PrismaLike } from '../database/prisma';
 
 /** Canonical action names. History rows are append-only and never deleted. */
 export const HistoryAction = {
+  ANSWER_EDITED_BY_REVIEWER: 'ANSWER_EDITED_BY_REVIEWER',
   INCIDENT_CREATED: 'INCIDENT_CREATED',
   DISTRIBUTION_CARD_SENT: 'DISTRIBUTION_CARD_SENT',
   ASSIGNED: 'ASSIGNED',

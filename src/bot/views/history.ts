@@ -4,6 +4,7 @@ import { describeStatus } from '../../incidents/incident-state.service';
 import { formatDateTime } from '../../utils/datetime';
 
 const ACTION_LABELS: Record<string, string> = {
+  ANSWER_EDITED_BY_REVIEWER: 'Ответ исправлен согласующим',
   INCIDENT_CREATED: 'Обращение создано',
   DISTRIBUTION_CARD_SENT: 'Карточка отправлена диспетчеру',
   DISTRIBUTION_CLAIMED: 'Оператор взял обращение на распределение',

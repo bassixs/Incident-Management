@@ -15,6 +15,7 @@ import { codeLabel } from '../views/cards';
 import type { ResolvedActor } from './helpers';
 import { discardObsoleteSession } from './session-guard';
 import { acceptRejectionText } from '../callbacks/rejection-flow';
+import { acceptReviewEditText } from '../callbacks/review-edit-flow';
 
 const log = moduleLogger('bot-operator');
 
@@ -48,7 +49,10 @@ export async function handleOperatorMessage(
         await acceptRejectionText(services, actor, chatId, session, text);
         break;
       case SessionType.WAITING_REVISION_REASON:
-        await applyRevision(services, actor, chatId, session, text);
+        if ((session.data as { reviewEdit?: boolean } | null)?.reviewEdit) {
+          if (media.length) throw new ValidationError('Для правки нужен только текст. Уже приложенные фото и файлы сохранятся.');
+          await acceptReviewEditText(services, actor, chatId, session, text);
+        } else await applyRevision(services, actor, chatId, session, text);
         break;
       case SessionType.WAITING_FOR_ANSWER:
         await applyAnswer(services, actor, chatId, session, text, media);
