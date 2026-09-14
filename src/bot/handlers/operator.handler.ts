@@ -16,6 +16,7 @@ import type { ResolvedActor } from './helpers';
 import { discardObsoleteSession } from './session-guard';
 import { acceptRejectionText } from '../callbacks/rejection-flow';
 import { acceptReviewEditText } from '../callbacks/review-edit-flow';
+import { prepareInputConfirmation, pendingConfirmation } from '../callbacks/staff-confirmation';
 
 const log = moduleLogger('bot-operator');
 
@@ -33,6 +34,7 @@ export async function handleOperatorMessage(
   chatId: bigint,
   message: Message,
   session: OperatorSession,
+  options: { confirmed?: boolean } = {},
 ): Promise<void> {
   const text = (message.body.text ?? '').trim();
   const media = classifyAttachments(message.body.attachments);
@@ -40,6 +42,10 @@ export async function handleOperatorMessage(
   try {
     await assertWorkingChat(services, chatId);
     if (await discardObsoleteSession(services, session)) throw new ValidationError('Обращение уже перешло на другой этап. Незавершённое действие сброшено. Откройте актуальную карточку через /queue или проверьте статус через /today.');
+    if (!options.confirmed && pendingConfirmation(session)) throw new ValidationError('Бот ждёт подтверждения кнопкой. Нажмите «Подтвердить», «Исправить» или «Отмена» в предварительном просмотре.');
+    if (!options.confirmed && ['WAITING_FOR_ANSWER', 'WAITING_REVISION_REASON', 'WAITING_BAN_REASON'].includes(session.type) && !(session.data as { reviewEdit?: boolean } | null)?.reviewEdit) {
+      await prepareInputConfirmation(services, actor, chatId, session, message); return;
+    }
     switch (session.type) {
       case SessionType.WAITING_CLARIFICATION_QUESTION:
       case SessionType.WAITING_CLARIFICATION_REPLY:
@@ -129,7 +135,7 @@ async function applyRevision(
     throw new ValidationError('Действие устарело. Нажмите «На доработку» в актуальной карточке ответа.');
   }
   const incident = await services.review.requestRevision(incidentId, reason, actor, data.reviewAnswerId);
-  await services.sessions.clear(actor.maxUserId, chatId);
+  await services.prisma.operatorSession.deleteMany({ where: { id: session.id } });
   await services.messages.send(
     { chatId },
     {
@@ -152,7 +158,7 @@ async function applyAnswer(
   assertResponder(actor, incident, chatId);
 
   const { answer, sentDirectly, deliveryFailed, deliveryQueued } = await services.answers.submit(incidentId, actor, text, media);
-  await services.sessions.clear(actor.maxUserId, chatId);
+  await services.prisma.operatorSession.deleteMany({ where: { id: session.id } });
   await services.messages.send(
     { chatId },
     {
@@ -213,7 +219,7 @@ async function applyBan(
     actorRole: actor.role,
     metadata: { targetMaxUserId: incident.requesterMaxUserId.toString(), reason },
   });
-  await services.sessions.clear(actor.maxUserId, chatId);
+  await services.prisma.operatorSession.deleteMany({ where: { id: session.id } });
   await services.messages.send(
     { chatId },
     {

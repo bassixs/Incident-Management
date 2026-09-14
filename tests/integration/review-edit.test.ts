@@ -36,7 +36,12 @@ describeIntegration('reviewer corrections', () => {
   async function click(action: string, argument?: string, actor = reviewer, chatId = TEST_CHATS.review) {
     const payload = parseCallbackPayload(`incident:${action}:${id}${argument ? ':' + argument : ''}`);
     if (!payload || payload.kind !== 'incident') throw Error('invalid callback');
-    return handleIncidentCallback({ services: h.services, actor, chatId }, payload);
+    const result = await handleIncidentCallback({ services: h.services, actor, chatId }, payload);
+    if (action === 'approve') {
+      const pending = (await h.services.sessions.find(actor.maxUserId, chatId))?.data as any;
+      if (pending?.confirmation) await click('action-confirm', pending.confirmation.token, actor, chatId);
+    }
+    return result;
   }
   async function type(text = 'Здравствуйте, освещение восстановлено.') {
     await handleOperatorMessage(h.services, reviewer, TEST_CHATS.review, message(text), (await session())!);

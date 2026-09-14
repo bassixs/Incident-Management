@@ -79,6 +79,11 @@ describeIntegration('all 50 configured routing destinations', () => {
       callback: { callback_id: randomUUID(), user: { user_id: 89000 + index, name: 'Оператор', is_bot: false }, payload },
       message: { sender: { user_id: 999, name: 'Бот', is_bot: true }, recipient: { chat_id: Number(chatId), chat_type: 'chat' }, body: { mid: randomUUID() } },
     } } as never);
+    if (parseCallbackPayload(payload)?.kind === 'incident' && payload.startsWith('incident:assign-group:')) {
+      const session = await services.sessions.find(BigInt(89000 + index), chatId);
+      const data = session?.data as any;
+      if (data?.confirmation) await click(incidentCallback('action-confirm', session!.incidentId!, data.confirmation.token), index, chatId);
+    }
   }
 
   it('covers every destination exactly once across pages and recommends the correct group for all 27 territories', async () => {

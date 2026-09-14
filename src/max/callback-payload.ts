@@ -9,6 +9,9 @@
 
 export const INCIDENT_ACTIONS = [
   'personal',
+  'action-confirm',
+  'action-edit',
+  'action-cancel',
   'redistribute',
   'review-take',
   'review-edit',

@@ -18,6 +18,7 @@ import type { ResolvedActor } from '../handlers/helpers';
 import { ensureFreeSession } from '../handlers/session-guard';
 import { startRejectionFlow, handleRejectionAction } from './rejection-flow';
 import { startReviewEdit, handleReviewEditAction } from './review-edit-flow';
+import { prepareButtonConfirmation, handleStaffConfirmation, cancelStaffSession } from './staff-confirmation';
 import { invitePersonalWork, withPersonalWorkLock } from '../../work-queues/private-workspace';
 
 const log = moduleLogger('bot-incident');
@@ -27,6 +28,9 @@ export type IncidentCallbackContext = {
   actor: ResolvedActor;
   chatId: bigint | undefined;
   messageId?: string;
+  /** Set only by trusted internal confirmation handlers, never from callback JSON. */
+  confirmed?: boolean;
+  privateExecution?: boolean;
 };
 
 /**
@@ -120,6 +124,7 @@ export async function handleIncidentCallback(
       return pageAssignmentBranch(services, actor, chatId, context.messageId, incident, payload.argument);
 
     case 'assign-group':
+      if (!context.confirmed) return prepareButtonConfirmation(services, actor, chatId, incident, 'assign-group', payload.argument, context.messageId);
       return completeAssignment(services, actor, chatId, context.messageId, incident, payload.argument);
 
     case 'assign-category':
@@ -147,7 +152,13 @@ export async function handleIncidentCallback(
       return startTemplateAnswer(services, actor, chatId, incident);
 
     case 'approve':
+      if (!context.confirmed) return prepareButtonConfirmation(services, actor, chatId, incident, 'approve', await reviewAnswerId(context, incident, payload.argument), context.messageId);
       return approve(services, actor, chatId, incident, await reviewAnswerId(context, incident, payload.argument));
+
+    case 'action-confirm':
+    case 'action-edit':
+    case 'action-cancel':
+      return handleStaffConfirmation(services, actor, chatId, incident.id, payload.action, payload.argument, context.messageId, context.privateExecution);
 
     case 'review-edit':
       return startReviewEdit(services, actor, chatId, incident, await reviewAnswerId(context, incident, payload.argument));
@@ -163,7 +174,7 @@ export async function handleIncidentCallback(
     }
 
     case 'cancel': {
-      await services.sessions.clear(actor.maxUserId, chatId);
+      await cancelStaffSession(services, actor.maxUserId, chatId);
       return 'Действие отменено';
     }
 
@@ -318,6 +329,7 @@ async function startBan(
         '',
         `Автор: ${incident.requesterName}`,
       ].join('\n'),
+      keyboard: [[{ type: 'callback', text: 'Отмена', payload: 'session:cancel' }]],
     },
   );
   return undefined;
@@ -372,7 +384,9 @@ async function startAnswer(
         '',
         'Можно приложить фотографию или файл.',
         'Видео запрещено.',
+        'Перед отправкой бот покажет текст для подтверждения.',
       ].join('\n'),
+      keyboard: [[{ type: 'callback', text: 'Отмена', payload: 'session:cancel' }]],
     },
   );
   return undefined;
@@ -436,7 +450,8 @@ async function startRevision(
   });
   await services.messages.send(
     { chatId },
-    { text: `Укажите причину возврата ответа ${incident.publicCode}.` },
+    { text: `Укажите причину возврата ответа ${incident.publicCode}. Перед возвратом бот попросит подтверждение.`,
+      keyboard: [[{ type: 'callback', text: 'Отмена', payload: 'session:cancel' }]] },
   );
   return undefined;
 }

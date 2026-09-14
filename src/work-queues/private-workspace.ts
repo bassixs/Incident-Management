@@ -17,6 +17,7 @@ import { assertDispatcher, assertApprover, assertResponder, assertWorkingChat } 
 import type { ResolvedActor } from '../bot/handlers/helpers';
 import { handleIncidentCallback } from '../bot/callbacks/incident.callbacks';
 import { handleOperatorMessage } from '../bot/handlers/operator.handler';
+import { withConfirmationLock } from '../bot/callbacks/staff-confirmation';
 import { distributionKeyboard, sectorKeyboard, reviewKeyboard } from '../bot/keyboards';
 import { incidentLookupCard, reviewCard } from '../bot/views/cards';
 import { leaseText, SECTOR_LEASE_ACTION } from './leases';
@@ -186,6 +187,7 @@ export async function invitePersonalWork(services: AppServices, actor: ResolvedA
 }
 
 function stage(data: WorkData): string {
+  if (data.session?.data.confirmation) return 'Бот ждёт подтверждения действия. Можно исправить или отменить.';
   if (data.draft && !data.draft.nonce) return 'Бот ждёт исправленный текст и все нужные вложения одним сообщением.';
   if (data.draft || data.pending) return 'Текст или действие подготовлены. Бот ждёт подтверждения кнопкой.';
   if (data.session?.type === 'WAITING_FOR_ANSWER') return 'Бот ждёт текст ответа и, при необходимости, фото или файлы одним сообщением.';
@@ -209,6 +211,10 @@ export async function showPersonalWork(services: AppServices, actor: ResolvedAct
   } else if (data.pending) {
     text += `\n\n${data.pending.title}`;
     if (active) rows.push([button('Подтвердить', 'confirm', id, data.pending.nonce), button('Назад', 'back', id)]);
+  } else if (active && data.session?.data.confirmation) {
+    const { showStaffConfirmation } = await import('../bot/callbacks/staff-confirmation');
+    const live = await services.sessions.find(actor.maxUserId, s.item.originChatId);
+    if (live) { await showStaffConfirmation(personalServices(services, s.item, s.incident.publicCode), live); return; }
   } else if (active && data.session?.data.reviewEdit) {
     const { resumeReviewEdit } = await import('../bot/callbacks/review-edit-flow');
     const live = await services.sessions.find(actor.maxUserId, s.item.originChatId);
@@ -274,13 +280,13 @@ async function requireOwnLease(services: AppServices, s: Scope) {
   if (dataOf(s.item).cycle !== cycleOf(s.incident)) throw new ConflictError('Этап обращения изменился. Старый черновик не отправлен.');
 }
 
-async function run(services: AppServices, s: Scope, raw: string, messageId?: string) {
+async function run(services: AppServices, s: Scope, raw: string, messageId?: string, confirmed = false) {
   const p = parseCallbackPayload(raw);
   if (!p || p.kind !== 'incident' || p.incidentId !== s.item.incidentId || ['personal', 'ban', 'clarify', 'clarify-send', 'clarify-cancel'].includes(p.action)) throw new ForbiddenError('Эта кнопка недоступна в личной работе.');
   const adapted = personalServices(services, s.item, s.incident.publicCode);
-  const result = await handleIncidentCallback({ services: adapted, actor: s.actor, chatId: s.item.originChatId, messageId }, p);
+  const result = await handleIncidentCallback({ services: adapted, actor: s.actor, chatId: s.item.originChatId, messageId, confirmed, privateExecution: true }, p);
   await snapshot(services, s.item);
-  if (p.action === 'reject-cancel') await save(services, s.item, { cycle: cycleOf(s.incident), leaseUntil: dataOf(s.item).leaseUntil });
+  if (p.action === 'reject-cancel' || p.action === 'action-cancel') await save(services, s.item, { cycle: cycleOf(s.incident), leaseUntil: dataOf(s.item).leaseUntil });
   if (result) await services.messages.send({ userId: s.actor.maxUserId }, { text: result, keyboard: navigation() });
 }
 
@@ -291,14 +297,16 @@ export async function personalAction(services: AppServices, actor: ResolvedActor
   if (action === 'show' || action === 'details') { await showPersonalWork(services, actor, id, action === 'details'); return; }
   if (action === 'resume') { await take(services, s); await showPersonalWork(services, actor, id); return; }
   if (action === 'cancel') {
-    await services.prisma.operatorSession.deleteMany({ where: { maxUserId: actor.maxUserId, chatId: s.item.originChatId, incidentId: s.item.incidentId } });
+    await withConfirmationLock(services, actor.maxUserId, s.item.originChatId, () => services.prisma.operatorSession.deleteMany({ where: { maxUserId: actor.maxUserId, chatId: s.item.originChatId, incidentId: s.item.incidentId } }));
     await save(services, s.item, { cycle: cycleOf(s.incident), leaseUntil: dataOf(s.item).leaseUntil });
     await showPersonalWork(services, actor, id); return;
   }
   if (action === 'release') {
     await snapshot(services, s.item);
-    if (s.kind === 'distribution') await services.distributionQueue.release(s.actor, s.item.originChatId, s.item.incidentId);
-    else await services.workQueues.release(s.actor, s.item.originChatId, s.item.incidentId);
+    await withConfirmationLock(services, actor.maxUserId, s.item.originChatId, async () => {
+      if (s.kind === 'distribution') await services.distributionQueue.release(s.actor, s.item.originChatId, s.item.incidentId);
+      else await services.workQueues.release(s.actor, s.item.originChatId, s.item.incidentId);
+    });
     await showPersonalWork(services, actor, id); return;
   }
   await requireOwnLease(services, s);
@@ -311,13 +319,13 @@ export async function personalAction(services: AppServices, actor: ResolvedActor
   }
   if (action === 'confirm') {
     if (data.pending && data.pending.nonce === argument) {
-      const raw = data.pending.raw; await run(services, s, raw, messageId); delete data.pending; await save(services, s.item, data); return;
+      const raw = data.pending.raw; await run(services, s, raw, messageId, true); delete data.pending; await save(services, s.item, data); return;
     }
     if (!data.draft?.nonce || data.draft.nonce !== argument || !data.session) throw new ConflictError('Предварительный просмотр устарел. Откройте актуальный черновик.');
     const live = await services.sessions.find(actor.maxUserId, s.item.originChatId);
     if (!live || live.incidentId !== s.item.incidentId || live.type !== data.session.type || (live.data as { privateWorkspaceId?: string } | null)?.privateWorkspaceId !== id) throw new ConflictError('Нажмите «Взять и продолжить», чтобы восстановить подготовку.');
     await handleOperatorMessage(personalServices(services, s.item, s.incident.publicCode), s.actor, s.item.originChatId,
-      { body: { mid: data.draft.sourceMessageId, text: data.draft.text, attachments: data.draft.attachments } } as Message, live);
+      { body: { mid: data.draft.sourceMessageId, text: data.draft.text, attachments: data.draft.attachments } } as Message, live, { confirmed: true });
     const after = await services.sessions.find(actor.maxUserId, s.item.originChatId);
     const latest = await services.repository.findById(s.item.incidentId);
     const expected = data.session.type === 'WAITING_FOR_ANSWER' ? ['WAITING_REVIEW', 'RESOLVED'] : data.session.data.redistribution ? ['DISTRIBUTION'] : ['REVISION_REQUIRED'];
@@ -332,7 +340,7 @@ export async function personalAction(services: AppServices, actor: ResolvedActor
     if (['assign-group', 'approve'].includes(p.action)) {
       if (data.session?.data.reviewEdit) throw new ConflictError('Сначала сохраните или отмените правку ответа.');
       const group = p.action === 'assign-group' && p.argument ? await services.prisma.responsibleGroup.findUnique({ where: { id: p.argument } }) : null;
-      const title = p.action === 'approve' ? 'Согласовать этот ответ и отправить жителю?' : `Направить обращение в организацию «${group?.name ?? 'не найдена'}»?`;
+      const title = p.action === 'approve' ? `Согласовать этот ответ и отправить жителю?\n\n${s.incident.answers.at(-1)?.text ?? ''}\n\nВложений: ${s.incident.answers.at(-1)?.attachments.length ?? 0}.` : `Направить обращение в организацию «${group?.name ?? 'не найдена'}»?`;
       await save(services, s.item, { ...data, pending: { raw: argument, title, nonce: randomUUID() } });
       await showPersonalWork(services, actor, id); return;
     }
@@ -350,6 +358,7 @@ export async function receivePersonalText(services: AppServices, actor: Resolved
     await services.messages.send({ userId: actor.maxUserId }, { text: `${s.incident.publicCode}: бот пока не ждёт текст. Выберите действие в рабочей карточке.`, keyboard: [[button('Текущее обращение', 'show', item.id)], ...navigation()] }); return true;
   }
   const text = (message.body.text ?? '').trim();
+  if (data.session.data.confirmation) throw new ValidationError('Сначала подтвердите, исправьте или отмените действие кнопками в карточке.');
   if (!text || text.length > 12000) throw new ValidationError('Отправьте непустой текст до 12 000 символов.');
   const media = classifyAttachments(message.body.attachments);
   if (media.some(m => !['IMAGE', 'FILE'].includes(m.kind))) throw new ValidationError('Можно прикрепить фото или файлы. Видео и аудио не принимаются.');

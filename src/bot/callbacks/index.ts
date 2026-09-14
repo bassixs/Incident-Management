@@ -18,6 +18,7 @@ import { sendChatGuide } from '../views/chat-guide';
 import { cleanupCommand } from '../commands/cleanup';
 import { resumeRejection } from './rejection-flow';
 import { resumeReviewEdit } from './review-edit-flow';
+import { cancelStaffSession, pendingConfirmation, showStaffConfirmation, withConfirmationLock } from './staff-confirmation';
 import { invitePersonalWork, personalAction, personalHome, exitPersonalWork, withPersonalWorkLock } from '../../work-queues/private-workspace';
 import { sendMainMenu } from '../handlers/requester.handler';
 
@@ -99,7 +100,7 @@ export async function handleCallbackUpdate(services: AppServices, ctx: Context):
     });
   } finally {
     // Reopening a cancelled rejection is a new draft, not a duplicate submission.
-    if (leaseAcquired && lease && payload.kind === 'incident' && ['reject', 'personal', 'review-edit'].includes(payload.action)) {
+    if (leaseAcquired && lease && payload.kind === 'incident' && ['reject', 'personal', 'review-edit', 'approve', 'assign-group', 'action-confirm', 'action-edit', 'action-cancel'].includes(payload.action)) {
       await services.actionGuard.release(lease.key).catch(() => undefined);
     }
   }
@@ -131,7 +132,7 @@ async function dispatchCallback(
       if (payload.action === 'next') return services.workQueues.claim(actor, chatId!);
       if (payload.action === 'refresh') await services.workQueues.refresh(actor, chatId!);
       else if (payload.action === 'open') await services.workQueues.open(actor, chatId!, payload.argument!);
-      else if (payload.action === 'release') await services.workQueues.release(actor, chatId!, payload.argument!);
+      else if (payload.action === 'release') await withConfirmationLock(services, actor.maxUserId, chatId!, () => services.workQueues.release(actor, chatId!, payload.argument!));
       else await services.workQueues.list(actor, chatId!, Number(payload.argument), payload.action === 'mine', payload.action === 'today');
       return 'Готово';
     case 'cleanup':
@@ -145,6 +146,7 @@ async function dispatchCallback(
       return undefined;
     case 'queue':
       await assertWorkingChat(services, chatId, isDialog);
+      if (payload.action === 'release') return withConfirmationLock(services, actor.maxUserId, chatId!, () => handleQueueCallback(services, actor, chatId, payload));
       return handleQueueCallback(services, actor, chatId, payload);
     case 'user':
       if (isDialog) await exitPersonalWork(services, actor.maxUserId);
@@ -211,7 +213,7 @@ async function handleSessionCallback(
   if (chatId === undefined) return 'Действие недоступно.';
 
   if (action === 'cancel') {
-    await services.sessions.clear(maxUserId, chatId);
+    await cancelStaffSession(services, maxUserId, chatId);
     return 'Незавершённое действие отменено.';
   }
 
@@ -219,6 +221,7 @@ async function handleSessionCallback(
   if (!session) return 'Активных действий нет.';
   if (await discardObsoleteSession(services, session)) return 'Обращение уже перешло на другой этап. Незавершённое действие сброшено.';
   await services.sessions.extend(session.id);
+  if (pendingConfirmation(session)) { await showStaffConfirmation(services, session); return 'Проверьте действие и подтвердите или отмените.'; }
   if ((session.data as { reviewEdit?: boolean } | null)?.reviewEdit) {
     await resumeReviewEdit(services, session);
     return 'Правка ответа продолжена.';

@@ -150,6 +150,9 @@ describeIntegration('staff reservations and redistribution', () => {
     await handleOperatorMessage(services, actor, TEST_CHATS.sector, { body: { text: '', attachments: [] } } as never, session);
     expect((await services.repository.findById(i.id))!.status).toBe('IN_PROGRESS');
     await handleOperatorMessage(services, actor, TEST_CHATS.sector, { body: { text: 'Дорога в ведении другой организации', attachments: [] } } as never, session);
+    expect((await services.repository.findById(i.id))!.status).toBe('IN_PROGRESS');
+    const confirmation = (await services.sessions.find(actor.maxUserId, TEST_CHATS.sector))!.data as any;
+    await handleIncidentCallback({ services, actor, chatId: TEST_CHATS.sector }, { kind: 'incident', action: 'action-confirm', incidentId: i.id, argument: confirmation.confirmation.token });
     expect((await services.repository.findById(i.id))!.status).toBe('DISTRIBUTION');
     expect(await services.sessions.find(actor.maxUserId, TEST_CHATS.sector)).toBeNull();
   });

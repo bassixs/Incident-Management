@@ -512,6 +512,10 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
       { kind: 'incident', action: 'assign-group', incidentId: incident.id, argument: category.id },
     );
 
+    expect(harness.messages.deleted).not.toContain('assignment-picker-mid');
+    const pending = (await harness.services.sessions.find(dispatcher.maxUserId, TEST_CHATS.distribution))!.data as any;
+    await handleIncidentCallback({ services: harness.services, actor: dispatcher, chatId: TEST_CHATS.distribution },
+      { kind: 'incident', action: 'action-confirm', incidentId: incident.id, argument: pending.confirmation.token });
     expect(harness.messages.deleted).toContain('assignment-picker-mid');
   });
 

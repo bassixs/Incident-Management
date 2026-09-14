@@ -65,7 +65,7 @@ export async function ensureFreeSession(
   const existing = await services.sessions.find(actor.maxUserId, chatId);
   if (!existing) return true;
   if (await discardObsoleteSession(services, existing)) return true;
-  if (incidentId && existing.incidentId === incidentId) return true;
+  if (incidentId && existing.incidentId === incidentId && !(existing.data as { confirmation?: unknown } | null)?.confirmation) return true;
 
   const pending = existing.incidentId ? await services.repository.findById(existing.incidentId) : null;
   await services.messages.send(
@@ -74,6 +74,7 @@ export async function ensureFreeSession(
       text: [
         `У вас уже есть незавершённое действие${pending ? ` с ${pending.publicCode}` : ''}.`,
         '',
+        (existing.data as { confirmation?: unknown } | null)?.confirmation ? 'Ожидается подтверждение действия кнопкой. Можно продолжить или отменить.' :
         (existing.data as { reviewEdit?: boolean } | null)?.reviewEdit ? 'Ожидается правка ответа: введите текст или подтвердите предварительный просмотр.' :
           (existing.data as { redistribution?: boolean } | null)?.redistribution ? 'Ожидается причина возврата на перераспределение.' : SESSION_PROMPTS[existing.type],
         '',
