@@ -110,7 +110,7 @@ describe('полные названия всех исполнителей', () =
     expect(signature).toMatch(/^Ответ подготовлен (Администрацией|Министерством|Государственной жилищной инспекцией|Управлением|Комитетом|Инспекцией) .+\.$/);
     expect(signature).not.toMatch(/ГЖИ|УАТК|ЗАГС|ЖКХ|Госстройнадзор/);
     expect(finalAnswerToRequester(incident, answer, ANSWERED_AT, authorityName)).toContain(signature);
-    expect(reviewCard({ ...incident, attachments: [] } as unknown as IncidentWithRelations,
+    expect(reviewCard({ ...incident, attachments: [], answers: [] } as unknown as IncidentWithRelations,
       { ...answer, attachments: [] }, { ...group, authorityName } as ResponsibleGroup)).toContain(signature);
   });
 

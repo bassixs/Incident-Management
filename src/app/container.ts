@@ -146,7 +146,6 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
     incidents,
     history,
     state,
-    responsibleGroups,
     messages,
     media,
     sector,

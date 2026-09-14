@@ -8,5 +8,8 @@ export default defineConfig({
     globals: false,
     testTimeout: 20000,
     pool: 'threads',
+    // Integration files reset the same incident_test database. Concurrency is
+    // exercised inside scenarios; running their files together corrupts fixtures.
+    fileParallelism: false,
   },
 });

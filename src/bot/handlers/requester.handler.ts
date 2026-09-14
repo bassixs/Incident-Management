@@ -10,7 +10,7 @@ import {
 } from '../../incidents/incident.service';
 import type { Message } from '../../max/max-types';
 import { classifyAttachments } from '../../media/media.service';
-import { AppError, ValidationError } from '../../utils/errors';
+import { ValidationError } from '../../utils/errors';
 import { normaliseIncidentText, unicodeLength } from '../../utils/text';
 import {
   legalDocumentsKeyboard,

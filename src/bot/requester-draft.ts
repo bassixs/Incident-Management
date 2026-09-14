@@ -73,7 +73,7 @@ export async function showIncidentDraftPreview(
     : null;
   let attachments: OutboundAttachment[];
   try {
-    attachments = await loadPreviewPhotos(services, draft.draftMedia);
+    attachments = await loadPreviewPhotos(draft.draftMedia);
     await services.messages.send({ userId: maxUserId }, {
       text: incidentDraftPreview({ requesterName: draft.requesterName, requesterPhone: draft.requesterPhone,
         problemMunicipalityName: draft.problemMunicipalityName, problemLocality: draft.problemLocality,
@@ -109,7 +109,6 @@ export async function showIncidentDraftPreview(
 }
 
 async function loadPreviewPhotos(
-  services: AppServices,
   media: IncomingMedia[],
 ): Promise<OutboundAttachment[]> {
   const attachments: OutboundAttachment[] = [];

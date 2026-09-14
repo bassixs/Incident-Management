@@ -9,7 +9,6 @@ import { TRANSACTION_OPTIONS } from '../database/prisma';
 import { queueSectorRefresh } from '../delivery/workflow-outbox';
 import {
   type Incident,
-  IncidentStatus,
   type PrismaClient,
   type ResponsibleGroup,
 } from '@prisma/client';
@@ -51,7 +50,6 @@ export class SectorService {
       throw new ValidationError('Обращение ещё не распределено.');
     }
     const chatId = this.groups.requireChatId(incident.assignedGroup);
-    const config = getConfig();
 
     const result = await this.messages.send(
       { chatId },

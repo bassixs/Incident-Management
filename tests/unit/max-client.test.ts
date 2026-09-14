@@ -8,6 +8,25 @@ import { ValidationError } from '../../src/utils/errors';
 afterEach(() => vi.unstubAllGlobals());
 
 describe('updating card controls without losing photos', () => {
+  it('skips unchanged edits but repairs externally changed buttons on the next read', async () => {
+    const bot = new Bot('test-token');
+    const buttons = [[{ type: 'callback' as const, text: 'Согласовать', payload: 'current' }]];
+    const get = vi.spyOn(bot.api, 'getMessage').mockResolvedValue({ body: { text: 'Ответ', attachments: [
+      { type: 'image', payload: { token: 'photo' } }, { type: 'inline_keyboard', payload: { buttons } },
+    ] } } as never);
+    const edit = vi.spyOn(bot.api, 'editMessage').mockResolvedValue({ success: true });
+    const client = new MaxClient(bot);
+    await client.editCardWithKeyboard('card', 'Ответ', buttons);
+    await client.editCardWithKeyboard('card', 'Ответ', buttons);
+    expect(get).toHaveBeenCalledTimes(2); expect(edit).not.toHaveBeenCalled();
+    get.mockResolvedValue({ body: { text: 'Ответ', attachments: [{ type: 'image', payload: { token: 'photo' } }] } } as never);
+    await client.editCardWithKeyboard('card', 'Ответ', buttons);
+    expect(edit).toHaveBeenCalledTimes(1);
+    expect(edit).toHaveBeenCalledWith('card', { text: 'Ответ', attachments: [
+      { type: 'image', payload: { token: 'photo' } }, { type: 'inline_keyboard', payload: { buttons } },
+    ] });
+  });
+
   it('keeps every existing photo token and removes only the keyboard on completion', async () => {
     const bot = new Bot('test-token');
     vi.spyOn(bot.api, 'getMessage').mockResolvedValue({ body: { attachments: [

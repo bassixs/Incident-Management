@@ -6,7 +6,6 @@ import { AuditAction } from '../../audit/admin-audit.service';
 import { parseReportRange, REPORT_USAGE } from '../../reports/report-range';
 import { formatRetentionPreview, formatRetentionRun } from '../../retention/retention.service';
 import { AppError, ForbiddenError, ValidationError } from '../../utils/errors';
-import { moduleLogger } from '../../utils/logger';
 import { sendChatInfo } from '../views/chat-guide';
 import { assertIncidentVisible, assertWorkingChat, requirePermission } from '../middleware/authorize';
 import { reportPeriodKeyboard } from '../keyboards';
@@ -17,8 +16,6 @@ import type { ResolvedActor } from '../handlers/helpers';
 import { adminAuditText, incidentHistoryText } from '../views/history';
 import { cleanupCommand } from './cleanup';
 import { personalHome, invitePersonalWork, exitPersonalWork, withPersonalWorkLock, enterPersonalWork, showPersonalWork } from '../../work-queues/private-workspace';
-
-const log = moduleLogger('bot-commands');
 
 export type CommandContext = {
   services: AppServices;

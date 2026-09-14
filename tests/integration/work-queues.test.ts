@@ -149,6 +149,20 @@ describeIntegration('working chat queues and obsolete actions', () => {
     await services.workQueues.refresh(actor, TEST_CHATS.sector);
     expect(sent.filter(s => s.text.includes('ОЧЕРЕДЬ ПРОФИЛЬНОГО')).length).toBe(2);
   });
+  it('skips unchanged panel edits while checking existence and restoring a lost pin', async () => {
+    await services.workQueues.refresh(actor, TEST_CHATS.sector);
+    const panel = sent.find(s => s.text.includes('ОЧЕРЕДЬ ПРОФИЛЬНОГО'))!;
+    max.api.getMessage.mockImplementation(async () => ({ recipient: { chat_id: Number(TEST_CHATS.sector) }, body: { mid: panel.mid, text: panel.text, attachments: panel.extra.attachments } }));
+    max.api.getPinnedMessage.mockResolvedValue({ message: { body: { mid: panel.mid } } });
+    max.editMessage.mockClear(); max.api.pinMessage.mockClear();
+    await services.workQueues.refresh(actor, TEST_CHATS.sector);
+    expect(max.editMessage).not.toHaveBeenCalled(); expect(max.api.pinMessage).not.toHaveBeenCalled();
+    max.api.getPinnedMessage.mockResolvedValue({ message: null });
+    await services.workQueues.refresh(actor, TEST_CHATS.sector);
+    expect(max.editMessage).not.toHaveBeenCalled(); expect(max.api.pinMessage).toHaveBeenCalledTimes(1);
+    await create(); await services.workQueues.refresh(actor, TEST_CHATS.sector);
+    expect(max.editMessage).toHaveBeenCalledWith(panel.mid, expect.stringContaining('Ожидают обработки: 1'), expect.anything());
+  });
   it('uses Moscow creation-day boundaries, paginates, and keeps profile daily summaries scoped', async () => {
     const mine = await create(); const foreign = await create(0, GROUP_CODES.it);
     const previous = await create(); const start = new Date(Date.now()); start.setUTCHours(-3, 0, 0, 0);

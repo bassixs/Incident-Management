@@ -1,0 +1,14 @@
+{
+  "incidents": 96,
+  "employees": 24,
+  "peakConcurrentWorkflows": 8,
+  "arrivalsDuringWork": 88,
+  "duplicateConfirmationsChecked": 24,
+  "resolved": 84,
+  "rejected": 12,
+  "seconds": 76.98441053199998,
+  "workflowP95Ms": 9300.985694000003,
+  "messages": 1448,
+  "errors": 0,
+  "boundary": "Real PostgreSQL and application handlers/outbox; MAX transport simulated, 2 ms per send. Resident registration enters through IncidentService; webhook ingress is tested separately."
+}

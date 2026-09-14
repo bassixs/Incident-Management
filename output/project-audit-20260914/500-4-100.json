@@ -1,0 +1,46 @@
+{
+  "residents": 500,
+  "photosPerResident": 4,
+  "simulatedApiMs": 100,
+  "seconds": 389.17,
+  "incidents": 500,
+  "photos": 2000,
+  "httpAcknowledgementMs": {
+    "p50": 15,
+    "p95": 790,
+    "max": 823.2
+  },
+  "previewMs": {
+    "p50": 12335.5,
+    "p95": 22521,
+    "max": 23656.9
+  },
+  "residentConfirmationMs": {
+    "p50": 59072.1,
+    "p95": 91332.1,
+    "max": 94774.9
+  },
+  "distributionCardMs": {
+    "p50": 195609.9,
+    "p95": 319431.4,
+    "max": 333190.6
+  },
+  "handlerMs": {
+    "p50": 431,
+    "p95": 1172.3,
+    "max": 1302
+  },
+  "peakInbox": 500,
+  "peakOutbox": 498,
+  "peakActive": 8,
+  "peakRssMB": 199.5,
+  "cpuCorePercent": 16.6,
+  "eventLoopP99Ms": 21.7,
+  "productionReadyMs": {
+    "p50": 4.1,
+    "p95": 6.7,
+    "max": 35.9
+  },
+  "errors": 0,
+  "ownershipErrors": 0
+}

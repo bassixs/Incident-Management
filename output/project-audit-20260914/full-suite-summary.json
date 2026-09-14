@@ -1,0 +1,11 @@
+{
+  "success": true,
+  "files": 73,
+  "tests": 634,
+  "passed": 634,
+  "failed": 0,
+  "skipped": 0,
+  "startTime": 1789385123378,
+  "durationSeconds": 455.98314453125,
+  "failedFiles": []
+}

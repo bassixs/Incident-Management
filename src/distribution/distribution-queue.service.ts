@@ -81,7 +81,9 @@ export class DistributionQueueService {
     const now = new Date();
     const total = await this.prisma.incident.count({ where: { status: 'DISTRIBUTION' } });
     page = Math.min(page, Math.max(0, Math.ceil(total / 10) - 1));
-    const items = await this.prisma.incident.findMany({ where: { status: 'DISTRIBUTION' }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], skip: page * 10, take: 10, include: INCIDENT_INCLUDE });
+    const items = await this.prisma.incident.findMany({ where: { status: 'DISTRIBUTION' }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], skip: page * 10, take: 10,
+      select: { id: true, publicCode: true, createdAt: true, distributionClaimUntil: true, distributionClaimedName: true,
+        history: { where: { action: 'REDISTRIBUTION_REQUESTED' }, take: 1, select: { id: true } } } });
     await this.messages.send({ chatId }, {
       text: [`📋 Нераспределённые: ${total}. Страница ${page + 1}.`, '', ...items.map(i => {
         const minutes = Math.max(0, Math.floor((now.getTime() - i.createdAt.getTime()) / 60_000));

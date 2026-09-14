@@ -1,0 +1,14 @@
+{
+  "incidents": 2,
+  "panelsChecked": 52,
+  "unchangedPanels": 52,
+  "pinnedPanels": 52,
+  "failedOutbound": 0,
+  "issues": [],
+  "readiness": "ready",
+  "doctor": { "ok": 62, "warnings": 0, "errors": 0 },
+  "imageFilesChecked": 114,
+  "imageDifferences": [],
+  "image": "sha256:d8a03fcdd025d1caa23d10d27e54cdb07f87dbe00c3d50c3569ff9afa187d327",
+  "backup": "/opt/incident-bot/backups/pre-project-audit-20260914"
+}

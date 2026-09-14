@@ -6,3 +6,11 @@ data
 coverage
 *.log
 tests
+tmp
+tools
+scripts
+.codex
+.agents
+__pycache__
+output/*
+!output/pdf

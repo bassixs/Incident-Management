@@ -134,7 +134,9 @@ export class WorkQueueService {
     }
     const total = await this.prisma.incident.count({ where });
     page = Math.min(page, Math.max(0, Math.ceil(total / 8) - 1));
-    const items = await this.prisma.incident.findMany({ where, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], skip: page * 8, take: 8, include: INCIDENT_INCLUDE });
+    const items = await this.prisma.incident.findMany({ where, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], skip: page * 8, take: 8,
+      select: { id: true, publicCode: true, status: true, distributionClaimUntil: true, distributionClaimedName: true,
+        answers: { orderBy: { version: 'desc' }, take: 1, select: { deliveredAt: true } } } });
     const statuses: Record<string, string> = { NEW: 'Принято', DISTRIBUTION: 'Распределение', ASSIGNED: 'Свободное', IN_PROGRESS: 'В работе', WAITING_REVIEW: 'На согласовании', REVISION_REQUIRED: 'На доработке', REJECTED: 'Отклонено', RESOLVED: 'Ожидает доставки' };
     const action = today ? 'today' : mine ? 'mine' : 'list';
     const counts = today ? await this.prisma.incident.groupBy({ by: ['status'], where, _count: true }) : [];

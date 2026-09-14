@@ -15,6 +15,7 @@ import { getConfig } from '../config';
 import { assertMediaSize } from '../media/media-limits';
 import { ValidationError } from '../utils/errors';
 import { ApiRateGate } from './api-rate-gate';
+import { hasSameCardContent } from './card-content';
 import { moduleLogger } from '../utils/logger';
 import { retry } from '../utils/retry';
 
@@ -140,6 +141,7 @@ export class MaxClient {
   /** Replace only a card's controls while retaining its existing MAX media tokens. */
   async editCardWithKeyboard(messageId: string, text: string, buttons: import('./max-types').Button[][]): Promise<void> {
     const current = await this.call('getMessage', () => this.api.getMessage(messageId));
+    if (hasSameCardContent(current, text, buttons)) return;
     const attachments: AttachmentRequest[] = [];
     for (const item of current.body.attachments ?? []) {
       if (item.type === 'inline_keyboard') continue;

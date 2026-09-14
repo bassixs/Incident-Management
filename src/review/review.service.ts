@@ -18,7 +18,6 @@ import type { IncidentService } from '../incidents/incident.service';
 import { loadOutboundAttachments } from '../media/attachment-loader';
 import type { MediaService } from '../media/media.service';
 import type { MaxMessageService } from '../max/max-message.service';
-import type { ResponsibleGroupService } from '../responsible-groups/responsible-group.service';
 import type { SectorService } from '../sector/sector.service';
 import { AppError, ConflictError, NotFoundError } from '../utils/errors';
 import { incidentLogFields, moduleLogger } from '../utils/logger';
@@ -33,7 +32,6 @@ export class ReviewService {
     private readonly incidents: IncidentService,
     private readonly history: IncidentHistoryService,
     private readonly state: IncidentStateService,
-    private readonly groups: ResponsibleGroupService,
     private readonly messages: MaxMessageService,
     private readonly media: MediaService,
     private readonly sector: SectorService,

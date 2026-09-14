@@ -29,6 +29,7 @@ import { distributionKeyboard } from '../bot/keyboards';
 import { queueDistributionRefresh, queueSectorRefresh, queueStaffRefresh } from '../delivery/workflow-outbox';
 import { workPanelKey, workPanelText, workButtons } from '../work-queues/state';
 import { reviewCard } from '../bot/views/cards';
+import { hasSameCardContent } from './card-content';
 import { reviewKeyboard, revisionKeyboard } from '../bot/keyboards';
 import { sectorKeyboard } from '../bot/keyboards';
 import { slaNotification, slaStage, type SlaStage } from '../sla/sla-notification';
@@ -639,7 +640,9 @@ export class MaxMessageService {
         // MAX can acknowledge editing a deleted id; verify existence first.
         const current = await this.max.getMessage(firstMessageId);
         if (String(current.recipient.chat_id) !== String(chatId)) throw new Error('Queue panel belongs to another chat');
-        await this.max.editMessage(firstMessageId, text, [{ type: 'inline_keyboard', payload: { buttons: keyboard } }]);
+        if (!hasSameCardContent(current, text, keyboard)) {
+          await this.max.editMessage(firstMessageId, text, [{ type: 'inline_keyboard', payload: { buttons: keyboard } }]);
+        }
       } catch (error) {
         // Recreate only a confirmed missing message, never on transient MAX failures.
         if (!(error instanceof MaxError) || error.status !== 404) throw error;
