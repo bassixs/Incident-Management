@@ -10,7 +10,7 @@ import { getConfig } from '../config';
 import { acquireAdvisoryLock, TRANSACTION_OPTIONS } from '../database/prisma';
 import { queueMessage, queueStaffRefresh } from '../delivery/workflow-outbox';
 import { INCIDENT_INCLUDE } from '../incidents/incident.repository';
-import { reviewCard, sectorCard } from '../bot/views/cards';
+import { reviewCard, sectorCard, distributionStatus } from '../bot/views/cards';
 import { reviewKeyboard, sectorKeyboard } from '../bot/keyboards';
 import { ConflictError, ForbiddenError, ValidationError } from '../utils/errors';
 import { AsyncActivity } from '../utils/async-activity';
@@ -138,13 +138,15 @@ export class WorkQueueService {
     const statuses: Record<string, string> = { NEW: 'Принято', DISTRIBUTION: 'Распределение', ASSIGNED: 'Свободное', IN_PROGRESS: 'В работе', WAITING_REVIEW: 'На согласовании', REVISION_REQUIRED: 'На доработке', REJECTED: 'Отклонено', RESOLVED: 'Ожидает доставки' };
     const action = today ? 'today' : mine ? 'mine' : 'list';
     const counts = today ? await this.prisma.incident.groupBy({ by: ['status'], where, _count: true }) : [];
+    const distribution = chatId === getConfig().DISTRIBUTION_CHAT_ID;
+    const notDistributed = counts.filter(r => ['DISTRIBUTION', 'REJECTED'].includes(r.status)).reduce((sum, r) => sum + r._count, 0);
     const delivered = today ? await this.prisma.incident.count({ where: { AND: [where, { status: 'RESOLVED', answers: { some: { deliveredAt: { not: null } } } }] } }) : 0;
     const ownership = new Map(await Promise.all(items.map(async i => [i.id, i.status === 'DISTRIBUTION' ? leaseText(i.distributionClaimUntil && i.distributionClaimUntil > new Date() ? { name: i.distributionClaimedName ?? 'Сотрудник', until: i.distributionClaimUntil } : null) : ['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED', 'WAITING_REVIEW'].includes(i.status) ? leaseText(await leaseView(this.prisma, i.id, i.status === 'WAITING_REVIEW' ? REVIEW_LEASE_ACTION : SECTOR_LEASE_ACTION)) : ''] as const)));
     await this.messages.send({ chatId }, { text: [today ? '📅 ОБРАЩЕНИЯ ЗА СЕГОДНЯ · МСК' : mine ? '📋 МОИ В РАБОТЕ' : '📋 ОЧЕРЕДЬ ОБРАЩЕНИЙ',
       `Всего: ${total}. Страница ${page + 1} из ${Math.max(1, Math.ceil(total / 8))}.`,
-      ...(today ? ['Зарегистрированы сегодня; показан текущий статус.', ...counts.flatMap(r => r.status === 'RESOLVED'
+      ...(today && distribution ? [`🔴 Не распределено: ${notDistributed}`, `🟢 Распределено: ${total - notDistributed}`] : today ? ['Зарегистрированы сегодня; показан текущий статус.', ...counts.flatMap(r => r.status === 'RESOLVED'
         ? [`Отработано: ${delivered}`, `Ожидает доставки: ${r._count - delivered}`] : [`${statuses[r.status]}: ${r._count}`])] : []), '',
-      ...items.map(i => `${i.publicCode} — ${i.status === 'RESOLVED' && i.answers.at(-1)?.deliveredAt ? 'Отработано' : statuses[i.status]}${ownership.get(i.id) ? `\n${ownership.get(i.id)}` : ''}`),
+      ...items.map(i => `${i.publicCode} — ${distribution ? distributionStatus(i) : i.status === 'RESOLVED' && i.answers.at(-1)?.deliveredAt ? 'Отработано' : statuses[i.status]}${ownership.get(i.id) && (!distribution || i.status === 'DISTRIBUTION') ? `\n${distribution ? ownership.get(i.id)!.replace(/^🟢 /, '') : ownership.get(i.id)}` : ''}${distribution && i.status === 'REJECTED' ? '\nОбращение отклонено.' : ''}`),
       ...(!total ? ['Обращений нет.'] : []), ...(today ? ['', 'Подробности: /incident НОМЕР_ОБРАЩЕНИЯ'] : []),
     ].join('\n'), keyboard: [
       ...(!today ? items.map(i => [{ type: 'callback' as const, text: `Открыть ${i.publicCode}`, payload: `work:open:${i.id}` }]) : []),

@@ -5,6 +5,8 @@ import {
   distributionCard,
   distributionResolvedNotice,
   distributionWorkedNotice,
+  distributionStatus,
+  incidentLookupCard,
   sectorCard,
 } from '../../src/bot/views/cards';
 import type { IncidentWithRelations } from '../../src/incidents/incident.repository';
@@ -39,10 +41,11 @@ const group = {
 describe('staff card status markers', () => {
   it('marks a new distribution card as not distributed', () => {
     expect(distributionCard(incident).startsWith('🔴 НЕ РАСПРЕДЕЛЕНО')).toBe(true);
+    expect(distributionCard(incident)).not.toContain('🟢');
   });
 
   it('marks the closed distribution card as distributed', () => {
-    expect(distributionResolvedNotice(incident, group, 'Диспетчер').startsWith('🟡 РАСПРЕДЕЛЕНО')).toBe(true);
+    expect(distributionResolvedNotice(incident, group, 'Диспетчер').startsWith('🟢 РАСПРЕДЕЛЕНО')).toBe(true);
   });
 
   it('marks a newly assigned sector card as available', () => {
@@ -61,6 +64,9 @@ describe('staff card status markers', () => {
     expect(text.startsWith(marker)).toBe(true);
     expect(text).not.toContain('НОВОЕ ОБРАЩЕНИЕ');
     expect(text).toContain(incident.text);
+    expect(distributionStatus({ status })).toBe('🟢 РАСПРЕДЕЛЕНО');
+    expect(incidentLookupCard({ ...incident, status }, undefined, true)).toContain('Статус:\n🟢 РАСПРЕДЕЛЕНО');
+    expect(incidentLookupCard({ ...incident, status }, undefined, true)).not.toContain(status);
   });
 
   it('only marks the latest delivered answer as worked', () => {
@@ -79,7 +85,9 @@ describe('staff card status markers', () => {
     expect(text).not.toContain('В работе:');
   });
 
-  it('marks the final distribution card as worked', () => {
-    expect(distributionWorkedNotice(incident, group).startsWith('🟢 ОТРАБОТАНО')).toBe(true);
+  it('keeps the final distribution card distributed without delivery indicators', () => {
+    expect(distributionWorkedNotice(incident, group).startsWith('🟢 РАСПРЕДЕЛЕНО')).toBe(true);
+    expect(distributionWorkedNotice(incident, group)).not.toContain('Ответ отправлен');
+    expect(distributionStatus({ status: 'REJECTED' })).toBe('🔴 НЕ РАСПРЕДЕЛЕНО');
   });
 });

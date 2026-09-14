@@ -53,22 +53,27 @@ describeIntegration('persistent distribution queue', () => {
   const claim = (who = actor) => services.distributionQueue.claim(who, TEST_CHATS.distribution, undefined, true);
   const copies = (id: string) => prisma.outboundMessage.findMany({ where: { incidentId: id, dedupeKey: { startsWith: `distribution-claim:${id}:` } } });
 
-  it('finalizes both the original and the issued copy after assignment, then shows delivery on both', async () => {
+  it('keeps the original and queue copy green after assignment, review and delivery', async () => {
     const incident = await create();
     await claim();
     const copy = (await copies(incident.id))[0]!;
     const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: GROUP_CODES.facility } });
     await services.distribution.assign(incident.id, group.id, actor);
     for (const mid of [incident.distributionMessageId, copy.firstMessageId]) {
-      expect(max.editMessage).toHaveBeenCalledWith(mid, expect.stringContaining('🟡 РАСПРЕДЕЛЕНО'), []);
+      expect(max.editMessage).toHaveBeenCalledWith(mid, expect.stringContaining('🟢 РАСПРЕДЕЛЕНО'), []);
       expect(max.editMessage).toHaveBeenCalledWith(mid, expect.stringContaining(group.name), []);
     }
     await services.answers.submit(incident.id, actor, 'Фонарь отремонтирован', []);
+    await services.messages.flush();
+    for (const mid of [incident.distributionMessageId, copy.firstMessageId]) {
+      const last = max.editMessage.mock.calls.filter((call: any[]) => call[0] === mid).at(-1);
+      expect(last[1]).toMatch(/^🟢 РАСПРЕДЕЛЕНО/); expect(last[1]).not.toMatch(/СОГЛАСОВАНИИ|ОТРАБОТАНО/);
+    }
     await services.review.approve(incident.id, actor);
     await services.messages.flush();
     for (const mid of [incident.distributionMessageId, copy.firstMessageId]) {
       const last = max.editMessage.mock.calls.filter((call: any[]) => call[0] === mid).at(-1);
-      expect(last[1]).toContain('ОТРАБОТАНО'); expect(last[2]).toEqual([]);
+      expect(last[1]).toContain('🟢 РАСПРЕДЕЛЕНО'); expect(last[1]).not.toContain('ОТРАБОТАНО'); expect(last[2]).toEqual([]);
     }
     expect(await prisma.incidentHistory.count({ where: { incidentId: incident.id, action: 'ASSIGNED' } })).toBe(1);
   });
@@ -101,7 +106,7 @@ describeIntegration('persistent distribution queue', () => {
     advance(10);
     const worker = new MaxMessageService(max, { prisma, storage: { remove: async () => undefined } as never });
     await worker.flush();
-    expect(max.editMessage).toHaveBeenCalledWith(copy.firstMessageId, expect.stringContaining('🟡 РАСПРЕДЕЛЕНО'), []);
+    expect(max.editMessage).toHaveBeenCalledWith(copy.firstMessageId, expect.stringContaining('🟢 РАСПРЕДЕЛЕНО'), []);
     expect(sends.filter(s => s.target === group.maxChatId)).toHaveLength(1);
     expect(await prisma.outboundMessage.count({ where: { incidentId: incident.id, status: 'PENDING' } })).toBe(0);
   });
@@ -121,7 +126,7 @@ describeIntegration('persistent distribution queue', () => {
     advance(10); await services.messages.flush();
     const copy = (await copies(incident.id))[0]!;
     expect(copy.firstMessageId).not.toBeNull();
-    expect(max.editMessage).toHaveBeenCalledWith(copy.firstMessageId, expect.stringContaining('🟡 РАСПРЕДЕЛЕНО'), []);
+    expect(max.editMessage).toHaveBeenCalledWith(copy.firstMessageId, expect.stringContaining('🟢 РАСПРЕДЕЛЕНО'), []);
   });
 
   it('rejects every copy and ignores a deleted copy while refreshing the others', async () => {

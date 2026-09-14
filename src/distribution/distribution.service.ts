@@ -213,7 +213,7 @@ export class DistributionService {
     return (await this.repository.findById(incidentId))!;
   }
 
-  /** Turn the original distribution card green after the answer reaches the requester. */
+  /** Keep the routing indicator unchanged when the answer reaches the requester. */
   async markWorked(incident: IncidentWithRelations): Promise<void> {
     if (!incident.distributionMessageId || !incident.assignedGroup || !incident.answers.some(a => a.deliveredAt)) return;
     await this.messages.finalizeCard(
@@ -281,7 +281,8 @@ export class DistributionService {
       await this.messages.finalizeCard(
         incident.distributionMessageId,
         [
-          `❌ ${incident.publicCode} отклонено`,
+          '🔴 НЕ РАСПРЕДЕЛЕНО',
+          `${incident.publicCode} отклонено`,
           '',
           'Причина:',
           reason,

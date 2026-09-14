@@ -24,7 +24,7 @@ import { moduleLogger } from '../utils/logger';
 import { MaxClient } from './max-client';
 import { queueDeliveryStatus, reviewDeliveryNotice } from '../delivery/delivery-status';
 import { INCIDENT_INCLUDE } from '../incidents/incident.repository';
-import { distributionCard, distributionResolvedNotice, distributionWorkedNotice, sectorCard } from '../bot/views/cards';
+import { distributionCard, distributionResolvedNotice, distributionStatus, sectorCard } from '../bot/views/cards';
 import { distributionKeyboard } from '../bot/keyboards';
 import { queueDistributionRefresh, queueSectorRefresh, queueStaffRefresh } from '../delivery/workflow-outbox';
 import { workPanelKey, workPanelText, workButtons } from '../work-queues/state';
@@ -801,15 +801,13 @@ export class MaxMessageService {
           }
           continue;
         }
-        text = `ℹ️ ${incident.publicCode}: закрепление по этой карточке завершено.\n\nОбращение остаётся в очереди. Откройте /queue, чтобы увидеть его текущее состояние и взять в работу.`;
+        text = `🔴 НЕ РАСПРЕДЕЛЕНО\n\n${incident.publicCode}: закрепление по этой карточке завершено.\n\nОбращение остаётся в очереди. Откройте /queue, чтобы увидеть его текущее состояние и взять в работу.`;
       } else if (incident.status === 'REJECTED') {
-        text = `❌ ${incident.publicCode} отклонено\n\nПричина:\n${incident.rejectionReason ?? '—'}`;
+        text = `🔴 НЕ РАСПРЕДЕЛЕНО\n\n${incident.publicCode} отклонено\n\nПричина:\n${incident.rejectionReason ?? '—'}`;
       } else if (incident.assignedGroup) {
-        text = incident.answers.some(answer => answer.deliveredAt)
-          ? distributionWorkedNotice(incident, incident.assignedGroup)
-          : distributionResolvedNotice(incident, incident.assignedGroup, incident.assignedBy?.displayName ?? '—');
+        text = distributionResolvedNotice(incident, incident.assignedGroup, incident.assignedBy?.displayName ?? '—');
       } else {
-        text = `ℹ️ ${incident.publicCode}: обращение уже обработано.\nТекущее состояние: /incident ${incident.publicCode}`;
+        text = `${distributionStatus(incident)}\n\n${incident.publicCode}\nПодробности: /incident ${incident.publicCode}`;
       }
       // Unlike best-effort edits, a MAX failure here remains in the durable retry queue.
       try {

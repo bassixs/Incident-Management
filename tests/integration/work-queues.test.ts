@@ -120,6 +120,10 @@ describeIntegration('working chat queues and obsolete actions', () => {
     await services.messages.flush();
     const summary = sent.findLast(s => s.chat === TEST_CHATS.review && s.text.includes('ОБРАЩЕНИЯ ЗА СЕГОДНЯ'))!;
     expect(summary.text).toContain('Отработано: 1'); expect(summary.text).toContain('Ожидает доставки: 1');
+    await services.workQueues.list(actor, TEST_CHATS.distribution, 0, false, true); await services.messages.flush();
+    const routing = sent.findLast(s => s.chat === TEST_CHATS.distribution && s.text.includes('ОБРАЩЕНИЯ ЗА СЕГОДНЯ'))!.text;
+    expect(routing).toContain('🟢 Распределено: 2'); expect(routing).toContain('🔴 Не распределено: 0');
+    expect(routing).not.toMatch(/Отработано|Ожидает доставки|На согласовании/);
   });
   it('recreates only confirmed missing panels even when MAX would accept editing deleted messages', async () => {
     await services.workQueues.refresh(actor, TEST_CHATS.sector);

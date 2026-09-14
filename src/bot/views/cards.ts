@@ -44,12 +44,16 @@ export function registrationConfirmation(incident: Incident): string {
 }
 
 /** §16 — the card every new incident gets in the distribution chat. */
+export function distributionStatus(incident: Pick<Incident, 'status'>): string {
+  return ['DISTRIBUTION', 'REJECTED'].includes(incident.status) ? '🔴 НЕ РАСПРЕДЕЛЕНО' : '🟢 РАСПРЕДЕЛЕНО';
+}
+
 export function distributionCard(incident: IncidentWithRelations): string {
   const photoCount = incident.attachments.filter((item) => item.type === 'IMAGE').length;
 
   return [
     '🔴 НЕ РАСПРЕДЕЛЕНО',
-    leaseText(incident.distributionClaimUntil && incident.distributionClaimUntil > new Date() ? { name: incident.distributionClaimedName ?? 'Сотрудник', until: incident.distributionClaimUntil } : null),
+    leaseText(incident.distributionClaimUntil && incident.distributionClaimUntil > new Date() ? { name: incident.distributionClaimedName ?? 'Сотрудник', until: incident.distributionClaimUntil } : null).replace(/^🟢 /, ''),
     ...(incident.history?.length ? ['↩️ ВОЗВРАЩЕНО НА ПЕРЕРАСПРЕДЕЛЕНИЕ', `Причина: ${(incident.history[0]!.metadata as { reason?: string })?.reason ?? '—'}`] : []),
     '',
     incident.history?.length ? 'ОБРАЩЕНИЕ НА ПЕРЕРАСПРЕДЕЛЕНИЕ' : '🆕 НОВОЕ ОБРАЩЕНИЕ',
@@ -87,7 +91,7 @@ export function distributionResolvedNotice(
   dispatcherName: string,
 ): string {
   return [
-    '🟡 РАСПРЕДЕЛЕНО',
+    '🟢 РАСПРЕДЕЛЕНО',
     '',
     incident.publicCode,
     '',
@@ -265,14 +269,14 @@ export function rejectionToRequester(incident: Incident, reason: string): string
 }
 
 /** §41 — /incident lookup result for staff. */
-export function incidentLookupCard(incident: IncidentWithRelations, lease?: LeaseView): string {
+export function incidentLookupCard(incident: IncidentWithRelations, lease?: LeaseView, distribution = false): string {
   const lastAnswer = incident.answers.at(-1);
   return [
     codeLabel(incident),
-    ...(lease !== undefined ? [leaseText(lease)] : []),
+    ...(lease !== undefined && (!distribution || incident.status === 'DISTRIBUTION') ? [distribution ? leaseText(lease).replace(/^🟢 /, '') : leaseText(lease)] : []),
     '',
     'Статус:',
-    incident.slaPausedAt ? 'Ожидаем уточнение от жителя — срок приостановлен' : `${incident.status} — ${describeStatus(incident.status, incident.isOverdue)}`,
+    distribution ? distributionStatus(incident) : incident.slaPausedAt ? 'Ожидаем уточнение от жителя — срок приостановлен' : `${incident.status} — ${describeStatus(incident.status, incident.isOverdue)}`,
     '',
     'Создано:',
     formatDateTime(incident.createdAt),
@@ -435,17 +439,8 @@ export function incidentDraftPhotoPrompt(hasPhoto: boolean): string {
 }
 
 /** Final state shown only on the original card in the distribution chat. */
-export function distributionWorkedNotice(incident: Incident, group: ResponsibleGroup, lease?: LeaseView): string {
-  return [
-    '🟢 ОТРАБОТАНО',
-    '',
-    incident.publicCode,
-    '',
-    'Ответственная группа:',
-    group.name,
-    '',
-    'Ответ отправлен пользователю.',
-  ].join('\n');
+export function distributionWorkedNotice(incident: Incident & { assignedBy?: { displayName: string } | null }, group: ResponsibleGroup): string {
+  return distributionResolvedNotice(incident, group, incident.assignedBy?.displayName ?? '—');
 }
 
 export function legalDocumentsText(status: LegalAccessStatus): string {
