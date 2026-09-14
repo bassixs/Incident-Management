@@ -8,6 +8,7 @@ import {
   distributionStatus,
   incidentLookupCard,
   sectorCard,
+  reviewCard,
 } from '../../src/bot/views/cards';
 import type { IncidentWithRelations } from '../../src/incidents/incident.repository';
 
@@ -37,6 +38,34 @@ const group = {
   name: 'Жуковский район',
   kind: ResponsibleGroupKind.LOCAL_GOVERNMENT,
 } as Parameters<typeof distributionResolvedNotice>[1];
+
+describe('review card revision history', () => {
+  const answer = (version: number, text: string, revisionReason: string | null = null) =>
+    ({ version, text, revisionReason, attachments: [] }) as unknown as IncidentWithRelations['answers'][number];
+
+  it('does not show a revision history on the first review or a correction without a return', () => {
+    const first = answer(1, 'Исходный ответ'); const corrected = answer(2, 'Правка куратора');
+    const i = { ...incident, answers: [first, corrected] };
+    expect(reviewCard(i, first, group)).not.toContain('ИСТОРИЯ ДОРАБОТКИ');
+    expect(reviewCard(i, corrected, group)).not.toContain('Исходный ответ');
+    expect(reviewCard(i, corrected, group)).toContain('Ответ:\nПравка куратора');
+  });
+
+  it('orders only earlier versions, pairs remarks with their text and leaves the input unchanged', () => {
+    const first = answer(1, 'Первый текст', 'Первое замечание');
+    const second = answer(2, 'Второй текст', 'Второе замечание');
+    const current = answer(3, 'Третий текст'); const future = answer(4, 'Будущий текст');
+    const i = { ...incident, answers: [future, second, current, first], revisionReason: 'Чужое последнее замечание' };
+    const text = reviewCard(i, current, group);
+    expect(text).toContain('Первоначальный ответ (версия 1):\nПервый текст\n\n↩️ Причина доработки версии 1:\nПервое замечание');
+    expect(text).toContain('Предыдущий ответ (версия 2):\nВторой текст\n\n↩️ Причина доработки версии 2:\nВторое замечание');
+    expect(text.indexOf('Первый текст')).toBeLessThan(text.indexOf('Второй текст'));
+    expect(text.indexOf('Второй текст')).toBeLessThan(text.indexOf('Третий текст'));
+    expect(text).not.toContain('Будущий текст');
+    expect(text).not.toContain('Чужое последнее замечание');
+    expect(i.answers.map(a => a.version)).toEqual([4, 2, 3, 1]);
+  });
+});
 
 describe('staff card status markers', () => {
   it('marks a new distribution card as not distributed', () => {

@@ -96,11 +96,20 @@ describeIntegration('working chat queues and obsolete actions', () => {
   });
   it('tracks and retires the final fragment of a long review card without removing answer text', async () => {
     const i = await create();
+    await services.answers.submit(i.id, actor, 'Первоначальный подробный текст. '.repeat(200), []);
+    await services.review.requestRevision(i.id, 'Добавьте результаты обследования.', actor);
     await services.answers.submit(i.id, actor, 'Подробный ответ. '.repeat(350), []);
+    const latest = (await services.repository.findById(i.id))!.answers.at(-1)!;
     await services.workQueues.open(actor, TEST_CHATS.review, i.id);
-    const publications = await prisma.outboundMessage.findMany({ where: { incidentId: i.id, OR: [{ trackingType: 'REVIEW_CARD' }, { dedupeKey: { startsWith: 'work-copy:review:' } }] } });
+    const publications = await prisma.outboundMessage.findMany({ where: { incidentId: i.id, answerId: latest.id, OR: [{ trackingType: 'REVIEW_CARD' }, { dedupeKey: { startsWith: 'work-copy:review:' } }] } });
     expect(publications).toHaveLength(2);
-    for (const row of publications) expect((row.payload as any).keyboardMessageId).not.toBe(row.firstMessageId);
+    for (const row of publications) {
+      expect((row.payload as any).keyboardMessageId).not.toBe(row.firstMessageId);
+      expect((row.payload as any).text).toContain('Первоначальный ответ (версия 1):');
+      expect((row.payload as any).text).toContain('Причина доработки версии 1:\nДобавьте результаты обследования.');
+      expect((row.payload as any).text).toContain('НОВЫЙ ОТВЕТ (версия 2):');
+    }
+    expect(sent.filter(s => s.chat === TEST_CHATS.review).every(s => Array.from(s.text).length <= 4000)).toBe(true);
     await services.workQueues.claimReview(actor, TEST_CHATS.review, i.id);
     for (const row of publications) {
       expect(lastEdit(row.firstMessageId!)[1]).not.toContain('Свободно');

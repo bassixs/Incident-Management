@@ -49,6 +49,25 @@ describeIntegration('reviewer corrections', () => {
   async function preview() { await click('review-edit', originalId); await type(); return (await session())!; }
   const token = async () => reviewEditDraft((await session())!).editToken;
 
+  it('shows reviewer edits and the matching return reason in repeated review and personal details', async () => {
+    await preview(); await click('review-edit-save', await token());
+    await h.services.review.requestRevision(id, 'Укажите дату ремонта.', reviewer);
+    await h.services.answers.submit(id, executor, 'Светильник заменён 14 сентября.', []);
+    const checkHistory = (text: string) => {
+      expect(text).toContain('Первоначальный ответ (версия 1):\nЗдравствуйте освещение восстановлено.');
+      expect(text).toContain('Предыдущий ответ (версия 2):\nЗдравствуйте, освещение восстановлено.');
+      expect(text).not.toContain('Причина доработки версии 1:');
+      expect(text).toContain('Причина доработки версии 2:\nУкажите дату ремонта.');
+      expect(text).toContain('НОВЫЙ ОТВЕТ (версия 3):\nСветильник заменён 14 сентября.');
+    };
+    checkHistory(h.messages.toChat(TEST_CHATS.review).at(-1)!.message.text);
+    await invitePersonalWork(h.services, reviewer, TEST_CHATS.review, id);
+    const item = await prisma.privateWorkItem.findFirstOrThrow({ where: { incidentId: id } });
+    await enterPersonalWork(h.services, reviewer, item.id);
+    await showPersonalWork(h.services, reviewer, item.id, true);
+    checkHistory(h.messages.toUser(reviewer.maxUserId).at(-1)!.message.text);
+  });
+
   it('previews, saves a new version and only then approves; preserves attachments, executor, history and срок ответа', async () => {
     await prisma.answerAttachment.create({ data: { answerId: originalId, type: 'FILE', storageKey: 'review-correction.pdf', mimeType: 'application/pdf', originalName: 'Акт.pdf', size: 50, maxToken: 'file-token' } });
     const before = (await fresh())!; const draft = await preview();

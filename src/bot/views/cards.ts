@@ -169,6 +169,21 @@ export function reviewCard(
   const fileCount = answer.attachments.filter((item) => item.type === 'FILE').length;
   const attachmentLines = attachmentLine(photoCount, fileCount);
   const signature = answerSignature(group?.authorityName);
+  // Remarks belong to the answer that was returned, not to the latest draft.
+  // Keep intermediate reviewer edits too, without calling them a return.
+  const previous = incident.answers.filter(item => item.version < answer.version)
+    .sort((a, b) => a.version - b.version);
+  const repeatedReview = previous.some(item => item.revisionReason);
+  const revisionHistory = repeatedReview ? [
+    '📚 ИСТОРИЯ ДОРАБОТКИ',
+    ...previous.flatMap((item, index) => [
+      '',
+      `${index === 0 ? 'Первоначальный ответ' : 'Предыдущий ответ'} (версия ${item.version}):`,
+      item.text,
+      ...(item.revisionReason ? ['', `↩️ Причина доработки версии ${item.version}:`, item.revisionReason] : []),
+    ]),
+    '',
+  ] : [];
   return [
     '📝 ОТВЕТ НА СОГЛАСОВАНИЕ',
     leaseText(lease),
@@ -190,7 +205,8 @@ export function reviewCard(
     'Обращение:',
     incident.text,
     '',
-    'Ответ:',
+    ...revisionHistory,
+    repeatedReview ? `📝 НОВЫЙ ОТВЕТ (версия ${answer.version}):` : 'Ответ:',
     answer.text,
     // The approver must see the signature the requester will get, since it is
     // added automatically and is not part of the text under review.

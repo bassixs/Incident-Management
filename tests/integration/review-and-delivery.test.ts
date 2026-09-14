@@ -213,6 +213,10 @@ describeIntegration('review, revision and delivery (PostgreSQL)', () => {
     const second = await harness.services.answers.submit(incident.id, responder, 'Починили, срок — до пятницы.');
     expect(second.answer.version).toBe(2);
     expect(second.incident.deadlineAt.getTime()).toBe(originalDeadline);
+    const secondCard = harness.messages.toChat(TEST_CHATS.review).at(-1)!.message.text;
+    expect(secondCard).toContain('Первоначальный ответ (версия 1):\nПочинили.');
+    expect(secondCard).toContain('Причина доработки версии 1:\nНеобходимо уточнить срок устранения проблемы.');
+    expect(secondCard).toContain('НОВЫЙ ОТВЕТ (версия 2):\nПочинили, срок — до пятницы.');
 
     const returnedAgain = await harness.services.review.requestRevision(incident.id, 'Ещё раз', approver);
     expect(returnedAgain.revisionCount).toBe(2);
@@ -220,10 +224,23 @@ describeIntegration('review, revision and delivery (PostgreSQL)', () => {
 
     const third = await harness.services.answers.submit(incident.id, responder, 'Финальный ответ.');
     expect(third.answer.version).toBe(3);
+    const thirdCard = harness.messages.toChat(TEST_CHATS.review).at(-1)!.message.text;
+    expect(thirdCard).toContain('Первоначальный ответ (версия 1):\nПочинили.');
+    expect(thirdCard).toContain('Причина доработки версии 1:\nНеобходимо уточнить срок устранения проблемы.');
+    expect(thirdCard).toContain('Предыдущий ответ (версия 2):\nПочинили, срок — до пятницы.');
+    expect(thirdCard).toContain('Причина доработки версии 2:\nЕщё раз');
+    expect(thirdCard).toContain('НОВЫЙ ОТВЕТ (версия 3):\nФинальный ответ.');
+    const queued = await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: `review-card:${third.answer.id}` } });
+    expect((queued.payload as { text: string }).text).toBe(thirdCard);
 
     const resolved = await harness.services.review.approve(incident.id, approver);
     expect(resolved.status).toBe(IncidentStatus.RESOLVED);
     expect(resolved.deadlineAt.getTime()).toBe(originalDeadline);
+    const delivered = harness.messages.toUser(TEST_USERS.requesterA).at(-1)!.message.text;
+    expect(delivered).toContain('Финальный ответ.');
+    expect(delivered).not.toContain('Починили');
+    expect(delivered).not.toContain('ИСТОРИЯ ДОРАБОТКИ');
+    expect(delivered).not.toContain('Ещё раз');
 
     // §67: no version of the answer is ever deleted.
     const versions = await prisma.incidentAnswer.findMany({
