@@ -8,7 +8,7 @@ import type { LegalAccessStatus } from '../../legal/legal-acceptance.service';
 import { formatDate, formatDateTime } from '../../utils/datetime';
 import { answerSignature } from '../../responsible-groups/answer-signature';
 
-/** `№ INC-20260823-0001` — the label repeated on every fragment of a message. */
+/** `№ INC-000001` — the label repeated on every fragment of a message. */
 export function codeLabel(incident: Pick<Incident, 'publicCode'>): string {
   return `№ ${incident.publicCode}`;
 }

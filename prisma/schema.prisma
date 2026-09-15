@@ -411,7 +411,6 @@ model SystemSetting {
   updatedAt DateTime @updatedAt
 }
 
-/// Atomic per-day counter backing Incident.publicCode (INC-YYYYMMDD-NNNN).
 /// Personal employee workspace. Drafts survive release/restart; incident retention removes them.
 model PrivateWorkItem {
   id           String   @id @default(uuid())
@@ -432,6 +431,7 @@ model PrivateWorkItem {
 }
 
 model IncidentCounter {
+  /// 'global' backs INC-NNNNNN. Historical YYYYMMDD rows are preserved.
   day        String @id
   lastNumber Int    @default(0)
 }

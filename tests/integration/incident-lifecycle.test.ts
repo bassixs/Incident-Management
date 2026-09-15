@@ -10,6 +10,7 @@ import type { Message } from '../../src/max/max-types';
 import { ConflictError, RateLimitError } from '../../src/utils/errors';
 import * as configModule from '../../src/config';
 import { rulesText } from '../../src/bot/views/cards';
+import { IncidentRepository } from '../../src/incidents/incident.repository';
 import {
   actorFor,
   CATEGORY_CODES,
@@ -36,7 +37,7 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
   afterAll(async () => {
     await prisma.$disconnect();
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
   beforeEach(async () => {
     await resetDatabase(prisma);
@@ -393,14 +394,53 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
       text: 'Второе обращение',
     });
 
-    expect(first.publicCode).toMatch(/^INC-\d{8}-0001$/);
-    expect(second.publicCode).toMatch(/^INC-\d{8}-0002$/);
+    expect(first.publicCode).toBe('INC-000001');
+    expect(second.publicCode).toBe('INC-000002');
 
     await expect(
       harness.services.incidents.create({ requester: requesterA(), text: 'Третье обращение' }),
     ).rejects.toBeInstanceOf(RateLimitError);
 
     expect(await prisma.incident.count()).toBe(2);
+  });
+
+  it('continues numbering across days, years and repository instances', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-12-31T20:59:00Z'));
+    const first = await harness.services.incidents.create({ requester: requesterA(), text: 'До полуночи' });
+    vi.setSystemTime(new Date('2026-12-31T21:01:00Z'));
+    const second = await harness.services.incidents.create({ requester: requesterA(), text: 'После полуночи' });
+    const next = await prisma.$transaction(tx => new IncidentRepository(prisma).nextPublicCode(tx));
+    expect([first.publicCode, second.publicCode, next]).toEqual(['INC-000001', 'INC-000002', 'INC-000003']);
+  });
+
+  it('starts the new series at one while preserving dated codes and counters', async () => {
+    const old = await harness.services.incidents.create({ requester: requesterA(), text: 'Старое обращение' });
+    await prisma.incident.update({ where: { id: old.id }, data: { publicCode: 'INC-20260914-0123' } });
+    await prisma.incidentCounter.update({ where: { day: 'global' }, data: { day: '20260914', lastNumber: 123 } });
+    const created = await harness.services.incidents.create({ requester: requesterA(), text: 'Новая серия' });
+    expect(created.publicCode).toBe('INC-000001');
+    expect((await harness.services.incidents.findByPublicCode('inc-20260914-0123'))?.id).toBe(old.id);
+    expect((await harness.services.incidents.findByPublicCode('inc-000001'))?.id).toBe(created.id);
+    expect((await prisma.incidentCounter.findUniqueOrThrow({ where: { day: '20260914' } })).lastNumber).toBe(123);
+  });
+
+  it('rolls back a reserved number when registration fails', async () => {
+    await expect(prisma.$transaction(async tx => {
+      expect(await new IncidentRepository(prisma).nextPublicCode(tx)).toBe('INC-000001');
+      throw new Error('registration rolled back');
+    })).rejects.toThrow('registration rolled back');
+    const incident = await harness.services.incidents.create({ requester: requesterA(), text: 'После отмены транзакции' });
+    expect(incident.publicCode).toBe('INC-000001');
+  });
+
+  it('never wraps or emits a seventh digit when the six-digit range is exhausted', async () => {
+    await prisma.incidentCounter.create({ data: { day: 'global', lastNumber: 999998 } });
+    const last = await harness.services.incidents.create({ requester: requesterA(), text: 'Последний номер' });
+    expect(last.publicCode).toBe('INC-999999');
+    await expect(harness.services.incidents.create({ requester: requesterA(), text: 'Номер за пределами' })).rejects.toThrow('номера обращений закончились');
+    expect(await prisma.incident.count()).toBe(1);
+    expect((await prisma.incidentCounter.findUniqueOrThrow({ where: { day: 'global' } })).lastNumber).toBe(999999);
   });
 
   it('does not consume the quota on a format error', async () => {

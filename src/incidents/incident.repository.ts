@@ -1,7 +1,8 @@
 import { type Incident, IncidentStatus, Prisma, type PrismaClient } from '@prisma/client';
 
 import type { PrismaLike, Tx } from '../database/prisma';
-import { formatCounterDay, dayBoundaries } from '../utils/datetime';
+import { dayBoundaries } from '../utils/datetime';
+import { ConflictError } from '../utils/errors';
 
 export const INCIDENT_INCLUDE = {
   history: { where: { action: 'REDISTRIBUTION_REQUESTED' }, orderBy: { createdAt: 'desc' }, take: 1 },
@@ -21,21 +22,23 @@ export class IncidentRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
   /**
-   * Atomically reserve the next publicCode for a day.
+   * Reserve a global six-digit publicCode in the incident's transaction.
+   * Historical daily counters stay intact; only the global row is incremented.
    *
    * A single INSERT ... ON CONFLICT DO UPDATE ... RETURNING is atomic even
    * under parallel transactions, so two incidents can never share a number.
    */
-  async nextPublicCode(tx: Tx, when: Date, timeZone?: string): Promise<string> {
-    const day = formatCounterDay(when, timeZone);
+  async nextPublicCode(tx: Tx): Promise<string> {
     const rows = await tx.$queryRaw<Array<{ lastNumber: number }>>`
       INSERT INTO "IncidentCounter" ("day", "lastNumber")
-      VALUES (${day}, 1)
+      VALUES ('global', 1)
       ON CONFLICT ("day") DO UPDATE SET "lastNumber" = "IncidentCounter"."lastNumber" + 1
+      WHERE "IncidentCounter"."lastNumber" < 999999
       RETURNING "lastNumber"
     `;
-    const next = rows[0]?.lastNumber ?? 1;
-    return `INC-${day}-${String(next).padStart(4, '0')}`;
+    const next = rows[0]?.lastNumber;
+    if (next === undefined) throw new ConflictError('Шестизначные номера обращений закончились. Обратитесь к администратору.');
+    return `INC-${String(next).padStart(6, '0')}`;
   }
 
   async countCreatedBetween(tx: PrismaLike, requesterMaxUserId: bigint, start: Date, end: Date): Promise<number> {

@@ -227,7 +227,7 @@ export class CleanupService {
         // card too. Do not deliver a cached card after its source was deleted.
         const references = new Set([...ids, ...snapshot.incidents.map(item => item.publicCode)]);
         const untracked = await tx.outboundMessage.findMany({ where: { incidentId: null, answerId: null }, select: { id: true, payload: true } });
-        const cachedIds = untracked.filter(row => [...encoded(row.payload).matchAll(/INC-\d{8}-\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi)]
+        const cachedIds = untracked.filter(row => [...encoded(row.payload).matchAll(/INC-(?:\d{8}-\d+|\d{6})\b|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi)]
           .some(match => references.has(match[0]))).map(row => row.id);
         outboxWhere = { OR: [outboxWhere, { id: { in: cachedIds } }] };
       }

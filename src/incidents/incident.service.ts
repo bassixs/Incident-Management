@@ -193,7 +193,7 @@ export class IncidentService {
       );
       await this.users.saveRequesterProfile(user.maxUserId, requesterName, requesterPhone, tx);
 
-      const publicCode = await this.repository.nextPublicCode(tx, now, config.APP_TIMEZONE);
+      const publicCode = await this.repository.nextPublicCode(tx);
       const created = await this.repository.create(tx, {
         id: incidentId,
         publicCode,

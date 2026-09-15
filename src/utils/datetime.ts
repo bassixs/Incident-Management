@@ -17,11 +17,6 @@ export function formatDate(date: Date, timeZone?: string): string {
   return formatInTimeZone(date, tz(timeZone), 'dd.MM.yyyy');
 }
 
-/** `20260823` — the day component of publicCode, in the configured timezone. */
-export function formatCounterDay(date: Date, timeZone?: string): string {
-  return formatInTimeZone(date, tz(timeZone), 'yyyyMMdd');
-}
-
 /** `2026-08-23` — ISO calendar day in the configured timezone. */
 export function formatIsoDay(date: Date, timeZone?: string): string {
   return formatInTimeZone(date, tz(timeZone), 'yyyy-MM-dd');

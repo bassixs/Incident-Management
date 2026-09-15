@@ -44,9 +44,13 @@ describeIntegration('manual cleanup with separate data and profile commands', ()
   async function planState() { return JSON.parse((await prisma.systemSetting.findUniqueOrThrow({ where: { key: CLEANUP_KEY } })).value); }
   async function confirm(plan: { kind: 'data' | 'users'; token: string }) { await service.confirm(plan.kind, plan.token, actor, chat); await service.tick(); }
 
-  it('previews without mutations, deletes selected incident graph and deliveries, preserves profiles and settings', async () => {
+  it.each(['dated', 'sequential'])('previews and deletes selected %s incident graph, preserving profiles and settings', async format => {
     const user = await resident(1001n);
     const selected = await incident(user, '0001');
+    if (format === 'sequential') {
+      selected.publicCode = 'INC-000001';
+      await prisma.incident.update({ where: { id: selected.id }, data: { publicCode: selected.publicCode } });
+    }
     const kept = await incident(user, '0002', new Date(Date.now() - 100 * 86_400_000));
     const staff = await ensureUser(prisma, 1002n, 'Автоматический исполнитель');
     const answer = await prisma.incidentAnswer.create({ data: { incidentId: selected.id, version: 1, text: 'Ответ', createdByUserId: staff.id } });
@@ -62,6 +66,7 @@ describeIntegration('manual cleanup with separate data and profile commands', ()
     await prisma.operatorSession.create({ data: { maxUserId: staff.maxUserId, chatId: -1010n, incidentId: selected.id, type: 'WAITING_FOR_ANSWER', expiresAt: new Date(Date.now() + 60_000) } });
     await prisma.actionLock.create({ data: { key: 'selected', incidentId: selected.id, maxUserId: staff.maxUserId, action: 'answer', lockedUntil: new Date() } });
     await prisma.incidentCounter.create({ data: { day: '20260907', lastNumber: 100 } });
+    await prisma.incidentCounter.create({ data: { day: 'global', lastNumber: 101 } });
     await prisma.systemSetting.create({ data: { key: 'keep-setting', value: 'keep' } });
     const plan = await service.preview('data', actor, chat, parseCleanupRange('today'));
     expect(plan.counts).toMatchObject({ incidents: 1, active: 1, profiles: 0 });
@@ -77,6 +82,7 @@ describeIntegration('manual cleanup with separate data and profile commands', ()
     expect(await prisma.user.count()).toBe(3);
     expect(await prisma.systemSetting.findUnique({ where: { key: 'keep-setting' } })).not.toBeNull();
     expect((await prisma.incidentCounter.findUniqueOrThrow({ where: { day: '20260907' } })).lastNumber).toBe(100);
+    expect((await prisma.incidentCounter.findUniqueOrThrow({ where: { day: 'global' } })).lastNumber).toBe(101);
     expect(remove.mock.calls).toEqual([['answers/deleted.pdf']]);
     expect(await prisma.adminAuditLog.count({ where: { action: 'MANUAL_CLEANUP' } })).toBe(1);
     // Employees whose only business record was deleted are still protected.

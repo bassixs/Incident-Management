@@ -111,7 +111,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
     requirePermission(actor, 'incident.lookup');
     await assertWorkingChat(services, chatId, isDialog);
     const code = args[0];
-    if (!code) throw new ValidationError('Использование: /incident INC-20260823-0001');
+    if (!code) throw new ValidationError('Использование: /incident INC-000001');
     const incident = await services.incidents.findByPublicCode(code);
     if (!incident) throw new AppError(`Обращение ${code.toUpperCase()} не найдено.`, 'NOT_FOUND');
     assertIncidentVisible(actor, incident, chatId);
@@ -122,7 +122,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
     requirePermission(actor, 'incident.lookup');
     await assertWorkingChat(services, chatId, isDialog);
     const code = args[0];
-    if (!code) throw new ValidationError('Использование: /history INC-20260823-0001');
+    if (!code) throw new ValidationError('Использование: /history INC-000001');
     const incident = await services.incidents.findByPublicCode(code);
     if (!incident) throw new AppError(`Обращение ${code.toUpperCase()} не найдено.`, 'NOT_FOUND');
     assertIncidentVisible(actor, incident, chatId);
@@ -163,7 +163,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
     requirePermission(actor, 'incident.lookup');
     await assertWorkingChat(services, chatId, isDialog);
     const code = args[0];
-    if (!code) throw new ValidationError('Использование: /resend INC-20260823-0001');
+    if (!code) throw new ValidationError('Использование: /resend INC-000001');
     const incident = await services.incidents.findByPublicCode(code);
     if (!incident) throw new AppError(`Обращение ${code.toUpperCase()} не найдено.`, 'NOT_FOUND');
     assertIncidentVisible(actor, incident, chatId);

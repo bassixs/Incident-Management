@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   computeDeadline,
   dayBoundaries,
-  formatCounterDay,
+  formatIsoDay,
   formatDateTime,
   hoursUntil,
 } from '../../src/utils/datetime';
@@ -39,7 +39,7 @@ describe('calendar days in APP_TIMEZONE', () => {
     // 23:30Z on the 23rd is 02:30 on the 24th in Moscow.
     const { start } = dayBoundaries(new Date('2026-08-23T23:30:00.000Z'), 'Europe/Moscow');
     expect(start.toISOString()).toBe('2026-08-23T21:00:00.000Z');
-    expect(formatCounterDay(new Date('2026-08-23T23:30:00.000Z'), 'Europe/Moscow')).toBe('20260824');
+    expect(formatIsoDay(new Date('2026-08-23T23:30:00.000Z'), 'Europe/Moscow')).toBe('2026-08-24');
   });
 
   it('formats operator-facing timestamps in the configured zone', () => {

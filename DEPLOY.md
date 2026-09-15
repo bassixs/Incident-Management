@@ -509,7 +509,7 @@ curl -i -X POST https://<домен>/webhook/max \
 `chatId`, `action`. Проследить обращение целиком:
 
 ```bash
-docker compose logs app | grep INC-20260823-0001
+docker compose logs app | grep INC-000001
 ```
 
 Ожидаемая последовательность: `incident registered` → `distribution card
@@ -523,7 +523,7 @@ published` → `answer approved and delivered` → `answer delivered to requeste
 SELECT action, "fromStatus", "toStatus", "actorMaxUserId", "createdAt"
 FROM "IncidentHistory" h
 JOIN "Incident" i ON i.id = h."incidentId"
-WHERE i."publicCode" = 'INC-20260823-0001'
+WHERE i."publicCode" = 'INC-000001'
 ORDER BY h."createdAt";
 ```
 

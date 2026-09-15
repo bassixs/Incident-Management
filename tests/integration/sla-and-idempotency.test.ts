@@ -296,6 +296,6 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
     );
     const codes = created.map((incident) => incident.publicCode);
     expect(new Set(codes).size).toBe(5);
-    for (const code of codes) expect(code).toMatch(/^INC-\d{8}-\d{4}$/);
+    expect(codes.sort()).toEqual(['INC-000001', 'INC-000002', 'INC-000003', 'INC-000004', 'INC-000005']);
   });
 });

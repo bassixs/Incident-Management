@@ -64,7 +64,7 @@ export type CompositeMessage = {
     | { type: 'distribution-refresh'; incidentId: string; refreshActive?: boolean }
     | { type: 'distribution-alert'; level: 'normal' | 'escalation'; hour: number };
   replyToMessageId?: string;
-  /** Prefix repeated on every follow-up part, e.g. `№ INC-20260823-0001`. */
+  /** Prefix repeated on every follow-up part, e.g. `№ INC-000001`. */
   label?: string;
   keyboard?: Button[][];
   attachments?: OutboundAttachment[];
