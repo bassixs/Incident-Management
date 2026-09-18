@@ -1,8 +1,11 @@
 /** Public subscription channels supplied by the project owner. Keys are stable
  * responsible-group codes, never requester location, category or MAX chat title.
- * REGION_KALUGA already has the common regional channels; Gosstroynadzor has none.
+ * Every configured organization has its own channel in addition to the two common ones.
  */
 const CHANNELS = new Map<string, { name: string; url: string }>([
+  ['REGION_KALUGA', 'Администрация Губернатора', 'id4027059418_gos'],
+  ['REGION_DEFENDERS', 'Защитники Отечества', 'FZO40'],
+  ['REGION_SOCIAL_FUND', 'Социальный фонд', 'sfr_kaluzhskayaoblast'],
   ['LG_BABYNINSKY', 'Администрация Бабынинского округа', 'id4000028966_gos'],
   ['LG_BARYATINSKY', 'Администрация Барятинского округа', 'id4000029141_gos'],
   ['LG_BOROVSKY', 'Администрация Боровского округа', 'id4000028684_gos'],
@@ -51,6 +54,7 @@ const CHANNELS = new Map<string, { name: string; url: string }>([
   ['EA_ARCHITECTURE', 'Управление архитектуры и градостроительства', 'id4027103378_gos'],
   ['EA_VETERINARY', 'Комитет ветеринарии при Правительстве Калужской области', 'id4027019207_gos'],
   ['EA_YOUTH', 'Управление молодежной политики', 'id4028073454_gos'],
+  ['EA_GOSSTROYNADZOR', 'Госстройнадзор', 'id4027062604_gos'],
 ].map(([code, name, slug]) => [code!, { name: name!, url: `https://max.ru/${slug}` }]));
 
 export function publicChannelFor(groupCode: string | null | undefined): { name: string; url: string } | undefined {

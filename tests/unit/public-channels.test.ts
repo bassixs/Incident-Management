@@ -4,6 +4,8 @@ import { publicChannelFor } from '../../src/responsible-groups/public-channels';
 
 // Independently listed destinations from the owner's channel list.
 const expected: Array<[string, string]> = [
+  ['REGION_KALUGA', 'id4027059418_gos'], ['REGION_DEFENDERS', 'FZO40'],
+  ['REGION_SOCIAL_FUND', 'sfr_kaluzhskayaoblast'], ['EA_GOSSTROYNADZOR', 'id4027062604_gos'],
   ['LG_BABYNINSKY', 'id4000028966_gos'], ['LG_BARYATINSKY', 'id4000029141_gos'],
   ['LG_BOROVSKY', 'id4000028684_gos'], ['LG_KALUGA_CITY', 'id4027017947_gos'],
   ['LG_OBNINSK_CITY', 'obninsk_today'], ['LG_DZERZHINSKY', 'id4000028638_gos'],
@@ -35,11 +37,11 @@ describe('subscription channels for responsible organizations', () => {
     expect(RESPONSIBLE_GROUPS.some(group => group.code === code)).toBe(true);
     expect(publicChannelFor(code)?.url).toBe(`https://max.ru/${slug}`);
   });
-  it('covers 48 organizations, leaving organizations without a supplied channel unset', () => {
-    expect(expected).toHaveLength(48);
-    expect(new Set(expected.map(([code]) => code)).size).toBe(48);
+  it('covers all 52 configured organizations', () => {
+    expect(expected).toHaveLength(52);
+    expect(new Set(expected.map(([code]) => code)).size).toBe(52);
     expect(RESPONSIBLE_GROUPS.filter(group => !publicChannelFor(group.code)).map(group => group.code))
-      .toEqual(['REGION_KALUGA', 'REGION_DEFENDERS', 'REGION_SOCIAL_FUND', 'EA_GOSSTROYNADZOR']);
+      .toEqual([]);
     expect(publicChannelFor('unknown')).toBeUndefined();
     expect(publicChannelFor(null)).toBeUndefined();
   });
