@@ -106,6 +106,10 @@ describeIntegration('private employee workspace', () => {
     expect(prompt.text).toContain(incident.publicCode); expect(prompt.text).toContain('Следующим сообщением');
     expect(h.messages.toChat(chat)).toHaveLength(count);
     expect((await h.services.sessions.find(actor.maxUserId, chat))!.data).toMatchObject({ privateWorkspaceId: item.id });
+    await personalAction(h.services, actor, item.id, 'details');
+    const details = h.messages.toUser(actor.maxUserId).at(-1)!.message.text;
+    expect(details).toContain(incident.publicCode);
+    expect(details).not.toMatch(/Срок ответа|ПРОСРОЧЕНО|срок приостановлен/);
     for (const entry of h.messages.toUser(actor.maxUserId)) for (const b of entry.message.keyboard?.flat() ?? []) if (b.type === 'callback') expect(parseCallbackPayload(b.payload)).not.toBeNull();
   });
 

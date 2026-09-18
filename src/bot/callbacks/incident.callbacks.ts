@@ -253,16 +253,16 @@ async function sendAssignmentPage(
   messageId?: string,
 ): Promise<string | undefined> {
   const kind =
-    branch === 'local' ? ResponsibleGroupKind.LOCAL_GOVERNMENT : ResponsibleGroupKind.EXECUTIVE_AUTHORITY;
+    branch === 'regional' ? ResponsibleGroupKind.REGIONAL : branch === 'local' ? ResponsibleGroupKind.LOCAL_GOVERNMENT : ResponsibleGroupKind.EXECUTIVE_AUTHORITY;
   const [{ groups, hiddenCount }, recommendation] = await Promise.all([
     services.distribution.assignmentOptions(kind),
-    branch === 'local'
+    branch !== 'executive'
       ? services.distribution.recommendedGroup(incident.problemMunicipalityCode)
       : Promise.resolve(null),
   ]);
   if (groups.length === 0) return 'В этом разделе пока нет доступных профильных чатов.';
   const recommendedGroup = recommendation?.kind === kind ? recommendation : null;
-  const title = branch === 'local' ? 'Органы местного самоуправления' : 'Органы исполнительной власти';
+  const title = branch === 'regional' ? 'Калужская область' : branch === 'local' ? 'Органы местного самоуправления' : 'Органы исполнительной власти';
   const text = [
     '🔴 НЕ РАСПРЕДЕЛЕНО',
     '',
@@ -280,7 +280,7 @@ async function sendAssignmentPage(
 }
 
 function requireAssignmentBranch(raw: string | undefined): AssignmentBranch {
-  if (raw === 'local' || raw === 'executive') return raw;
+  if (raw === 'regional' || raw === 'local' || raw === 'executive') return raw;
   throw new AppError('Раздел распределения не указан.', 'BAD_PAYLOAD');
 }
 

@@ -75,7 +75,7 @@ export function assertResponder(
     throw new ForbiddenError('Это действие доступно только в профильном чате этого обращения.');
   }
   if (group?.bypassReview && !hasPermission(actor.roles, 'incident.distribute')) {
-    throw new ForbiddenError('В чате «Калужская область» отвечать могут только распределители.');
+    throw new ForbiddenError('В чате «Администрация Губернатора» отвечать могут только распределители.');
   }
 }
 

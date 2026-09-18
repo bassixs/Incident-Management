@@ -4,7 +4,7 @@ import type { Incident, PrismaClient } from '@prisma/client';
 import { TRANSACTION_OPTIONS } from '../database/prisma';
 import { queueMessage } from '../delivery/workflow-outbox';
 import type { MaxMessageService } from '../max/max-message.service';
-import { slaNotification, slaStage, type SlaStage } from './sla-notification';
+import { slaNotification, slaStage } from './sla-notification';
 
 import { HistoryAction, type IncidentHistoryService } from '../incidents/incident-history.service';
 import type { IncidentRepository } from '../incidents/incident.repository';
@@ -26,9 +26,9 @@ export type SlaSweepResult = {
  * Periodic SLA supervision (§14).
  *
  * Overdue is a flag, never a status: an incident past its deadline keeps its
- * workflow status and stays open. Each notification is sent at most once
- * thanks to the persisted `slaWarn*SentAt` / `overdueNotifiedAt` marks, so a
- * restart or a second worker cannot spam a chat.
+ * workflow status and stays open. A single reminder becomes due after 24 elapsed
+ * hours. The persisted claim and durable delivery survive restarts/concurrency;
+ * legacy notification marks suppress another reminder after an upgrade.
  */
 export class SlaService {
   private readonly activity = new AsyncActivity();
@@ -93,9 +93,7 @@ export class SlaService {
       const stage = slaStage(incident, now);
       try {
         if (stage !== undefined && await this.queueWarning(incident, stage, now)) {
-          if (stage === 'overdue') result.overdue += 1;
-          else if (stage === 48) result.warned48 += 1;
-          else result.warned24 += 1;
+          result.warned24 += 1;
         }
       } catch (error) {
         log.error(
@@ -109,20 +107,19 @@ export class SlaService {
     return result;
   }
 
-  /** Claim the stage, history and delivery together; send only the latest due stage. */
-  private async queueWarning(incident: Incident, stage: SlaStage, now: Date): Promise<boolean> {
+  /** Atomically claim the only reminder together with its history and delivery. */
+  private async queueWarning(incident: Incident, stage: 24, now: Date): Promise<boolean> {
     const notification = await this.prisma.$transaction(async tx => {
-      const field = stage === 24 ? 'slaReminder24SentAt' : stage === 48 ? 'slaWarn24SentAt' : 'overdueNotifiedAt';
       const claimed = await tx.incident.updateMany({
-        where: { id: incident.id, [field]: null, slaPausedAt: null, status: { notIn: ['RESOLVED', 'REJECTED'] } },
-        data: { [field]: now, ...(stage === 'overdue' ? { isOverdue: true } : {}) },
+        where: { id: incident.id, slaReminder24SentAt: null, slaWarn24SentAt: null, slaWarn6SentAt: null, overdueNotifiedAt: null, slaPausedAt: null, status: { notIn: ['RESOLVED', 'REJECTED'] } },
+        data: { slaReminder24SentAt: now },
       });
       if (claimed.count !== 1) return null;
       const fresh = await tx.incident.findUniqueOrThrow({ where: { id: incident.id }, include: { assignedGroup: true, currentResponder: true } });
       const prepared = slaNotification(fresh, stage);
       await this.history.record({
         incidentId: incident.id,
-        action: stage === 24 ? HistoryAction.SLA_REMINDER_24H : stage === 48 ? HistoryAction.SLA_REMINDER_48H : HistoryAction.SLA_OVERDUE,
+        action: HistoryAction.SLA_REMINDER_24H,
         metadata: { deadlineAt: fresh.deadlineAt.toISOString(), stage },
       }, tx);
       await queueMessage(tx, prepared.target, prepared.message, incident.id);

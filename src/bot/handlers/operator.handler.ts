@@ -122,7 +122,7 @@ async function applyRevision(
   if (returnData?.redistribution) {
     await services.sector.returnToDistribution(requireIncidentId(session), actor, chatId, reason, returnData.assignedGroupId);
     await services.prisma.operatorSession.deleteMany({ where: { id: session.id } });
-    await services.messages.send({ chatId }, { text: '↩️ Обращение возвращено в очередь распределения. Причина сохранена, срок ответа не изменён.' });
+    await services.messages.send({ chatId }, { text: '↩️ Обращение возвращено в очередь распределения. Причина сохранена.' });
     return;
   }
   assertApprover(services, actor, chatId);
@@ -139,7 +139,7 @@ async function applyRevision(
   await services.messages.send(
     { chatId },
     {
-      text: `↩️ ${incident.publicCode} возвращено на доработку.\n\n⚠️ Срок ответа НЕ изменён.`,
+      text: `↩️ ${incident.publicCode} возвращено на доработку.`,
       label: codeLabel(incident),
     },
   );

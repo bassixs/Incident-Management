@@ -45,6 +45,22 @@ describeIntegration('automatic access in configured work chats', () => {
   }
   const lastText = () => h.messages.sent.at(-1)!.message.text;
 
+  it('hides internal deadlines in executor lookup/history while preserving internal views and data', async () => {
+    const row = await incident();
+    const group = (await h.services.responsibleGroups.findByCode(GROUP_CODES.facility))!;
+    await prisma.incident.update({ where: { id: row.id }, data: { assignedGroupId: group.id, status: 'ASSIGNED', isOverdue: true } });
+    await h.services.history.record({ incidentId: row.id, action: 'SLA_OVERDUE', metadata: { deadlineAt: row.deadlineAt.toISOString() } });
+    for (const cmd of ['incident', 'history']) {
+      await command(TEST_CHATS.sector, `/${cmd} ${row.publicCode}`);
+      expect(lastText()).toContain(row.publicCode);
+      expect(lastText()).not.toMatch(/срок|просроч/i);
+      await command(TEST_CHATS.distribution, `/${cmd} ${row.publicCode}`);
+      expect(lastText()).toMatch(/Срок/);
+    }
+    expect((await prisma.incident.findUniqueOrThrow({ where: { id: row.id } })).deadlineAt).toEqual(row.deadlineAt);
+    expect(await prisma.incidentHistory.count({ where: { incidentId: row.id, action: 'SLA_OVERDUE' } })).toBe(1);
+  });
+
   it('derives roles independently in every chat, never granting global or administrator access', async () => {
     const [dispatch, review, sector, regional, delivery, privateActor, stranger] = await Promise.all([
       TEST_CHATS.distribution, TEST_CHATS.review, TEST_CHATS.sector, TEST_CHATS.regional, -1005n, undefined, -99999n,

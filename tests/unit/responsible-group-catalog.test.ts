@@ -4,9 +4,9 @@ import { describe, expect, it } from 'vitest';
 import { RESPONSIBLE_GROUPS } from '../../src/responsible-groups/catalog';
 
 describe('каталог ответственных групп', () => {
-  it('contains exactly 1 regional, 26 local and 23 executive groups', () => {
-    expect(RESPONSIBLE_GROUPS).toHaveLength(50);
-    expect(RESPONSIBLE_GROUPS.filter((group) => group.kind === ResponsibleGroupKind.REGIONAL)).toHaveLength(1);
+  it('contains exactly 3 regional, 26 local and 23 executive groups', () => {
+    expect(RESPONSIBLE_GROUPS).toHaveLength(52);
+    expect(RESPONSIBLE_GROUPS.filter((group) => group.kind === ResponsibleGroupKind.REGIONAL)).toHaveLength(3);
     expect(
       RESPONSIBLE_GROUPS.filter((group) => group.kind === ResponsibleGroupKind.LOCAL_GOVERNMENT),
     ).toHaveLength(26);
@@ -30,7 +30,7 @@ describe('каталог ответственных групп', () => {
 
   it('allows direct answers only for Kaluga Region', () => {
     expect(RESPONSIBLE_GROUPS.filter((group) => group.bypassReview)).toEqual([
-      expect.objectContaining({ code: 'REGION_KALUGA', name: 'Калужская область' }),
+      expect.objectContaining({ code: 'REGION_KALUGA', name: 'Администрация Губернатора' }),
     ]);
   });
 });

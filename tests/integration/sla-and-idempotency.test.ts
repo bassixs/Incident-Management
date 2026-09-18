@@ -57,7 +57,7 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
     return incident;
   }
 
-  it('warns on the second and third weekdays, expires at closing, and announces expiry the next morning', async () => {
+  it('reminds once after a day, defers weekends, and silently tracks the internal deadline', async () => {
     const incident = await routedIncident('Проверка SLA');
     const deadline = incident.deadlineAt;
 
@@ -70,7 +70,7 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
     const at48h = incidentWorkday(incident.createdAt, 3).start;
     expect((await harness.services.sla.sweep(new Date(at48h.getTime() - 1))).warned48).toBe(0);
     result = await harness.services.sla.sweep(at48h);
-    expect(result.warned48).toBe(1);
+    expect(result.warned48).toBe(0);
     expect((await harness.services.sla.sweep(at48h)).warned48).toBe(0);
 
     const afterDeadline = new Date(deadline.getTime());
@@ -78,7 +78,7 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
     expect(result.overdue).toBe(0); // Closing time is already outside the notification window.
     expect((await harness.services.repository.findById(incident.id))!.isOverdue).toBe(true);
     result = await harness.services.sla.sweep(incidentWorkday(afterDeadline, 1).start);
-    expect(result.overdue).toBe(1);
+    expect(result.overdue).toBe(0);
     expect((await harness.services.sla.sweep(afterDeadline)).overdue).toBe(0);
 
     const fresh = await harness.services.repository.findById(incident.id);
@@ -87,31 +87,32 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
     expect(fresh!.status).toBe(IncidentStatus.ASSIGNED);
 
     const reminders = harness.messages.toChat(TEST_CHATS.sector).filter(entry => entry.message.operation?.type === 'sla-reminder');
-    expect(reminders).toHaveLength(3);
+    expect(reminders).toHaveLength(1);
     for (const entry of reminders) {
       expect(entry.message.replyToMessageId).toBe(fresh!.sectorMessageId);
       expect(entry.message.text).toContain('Хозяйственная группа');
+      expect(entry.message.text).not.toMatch(/Срок|ПРОСРОЧЕНО|рабочий день/);
     }
     expect((await harness.services.sla.sweep(new Date(deadline.getTime() + 86_400_000))).overdue).toBe(0);
 
     const events = await prisma.incidentHistory.findMany({ where: { incidentId: incident.id } });
     const actions = events.map((event) => event.action);
     expect(actions).toContain(HistoryAction.SLA_REMINDER_24H);
-    expect(actions).toContain(HistoryAction.SLA_REMINDER_48H);
-    expect(actions).toContain(HistoryAction.SLA_OVERDUE);
+    expect(actions).not.toContain(HistoryAction.SLA_REMINDER_48H);
+    expect(actions).not.toContain(HistoryAction.SLA_OVERDUE);
 
     expect(harness.messages.toChat(TEST_CHATS.sector).some((entry) => entry.message.text.includes('ПРОСРОЧЕНО'))).toBe(
-      true,
+      false,
     );
   });
 
-  it('sends only the latest due stage after downtime and survives concurrent sweeps', async () => {
+  it('sends one reminder after downtime and survives concurrent sweeps', async () => {
     const incident = await routedIncident('Пропущены первые сутки');
     const now = new Date(incidentWorkday(incident.createdAt, 3).start.getTime() + 3_600_000);
     const results = await Promise.all([harness.services.sla.sweep(now), harness.services.sla.sweep(now)]);
-    expect(results.reduce((sum, item) => sum + item.warned48, 0)).toBe(1);
-    expect(results.every(item => item.warned24 === 0)).toBe(true);
-    expect(await prisma.outboundMessage.count({ where: { dedupeKey: `sla:${incident.id}:24` } })).toBe(1);
+    expect(results.reduce((sum, item) => sum + item.warned24, 0)).toBe(1);
+    expect(results.every(item => item.warned48 === 0)).toBe(true);
+    expect(await prisma.outboundMessage.count({ where: { dedupeKey: `sla:${incident.id}:elapsed24` } })).toBe(1);
   });
 
   it('preserves the legacy two-day mark without sending a duplicate', async () => {
@@ -153,7 +154,7 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
     await worker.flush();
     expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: key } })).status).toBe('PENDING');
     if (outcome === 'closed') await prisma.incident.update({ where: { id: incident.id }, data: { status: 'RESOLVED' } });
-    if (outcome === 'superseded') await prisma.incident.update({ where: { id: incident.id }, data: { createdAt: new Date(Date.now() - 48 * 3_600_000) } });
+    if (outcome === 'superseded') await prisma.incident.update({ where: { id: incident.id }, data: { slaWarn24SentAt: new Date() } });
     if (outcome === 'missing-card') await prisma.incident.update({ where: { id: incident.id }, data: { sectorMessageId: null } });
     await prisma.outboundMessage.update({ where: { dedupeKey: key }, data: { nextAttemptAt: new Date(0) } });
     const resumed = new MaxMessageService(max as never, { prisma, storage: {} as never });
@@ -171,13 +172,15 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
     expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: key } })).status).toBe('SENT');
   });
 
-  it('selects the second-day reminder even for an arrival less than 24 hours earlier', async () => {
+  it('waits for 24 elapsed hours even when the next working morning has started', async () => {
     const original = await routedIncident('Позднее обращение');
     const previous = new Date(Date.now() - 86_400_000); previous.setUTCHours(13, 59, 0, 0);
     await prisma.incident.update({ where: { id: original.id }, data: { createdAt: previous, deadlineAt: computeDeadline(previous, 3) } });
     const now = new Date(); now.setUTCHours(5, 0, 0, 0);
     expect(now.getTime() - previous.getTime()).toBeLessThan(86_400_000);
-    expect((await harness.services.sla.sweep(now)).warned24).toBe(1);
+    expect((await harness.services.sla.sweep(now)).warned24).toBe(0);
+    expect((await harness.services.sla.sweep(new Date(previous.getTime() + 86_400_000 - 1))).warned24).toBe(0);
+    expect((await harness.services.sla.sweep(new Date(previous.getTime() + 86_400_000))).warned24).toBe(1);
   });
 
   it('keeps weekends quiet and still marks expired incidents overdue', async () => {
@@ -192,12 +195,12 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
     expect(await prisma.outboundMessage.count({ where: { dedupeKey: { startsWith: `sla:${incident.id}:` } } })).toBe(0);
   });
 
-  for (const stage of [24, 48, 'overdue'] as const) it(`re-arms a queued ${stage} reminder after closing without blocking other messages`, async () => {
+  it('re-arms an unsent reminder after closing without blocking other messages', async () => {
     const original = await routedIncident('Очередь после закрытия');
-    const createdAt = new Date(Date.now() - (stage === 24 ? 1 : stage === 48 ? 2 : 3) * 86_400_000);
+    const createdAt = new Date(Date.now() - 86_400_000);
     const incident = await prisma.incident.update({ where: { id: original.id }, data: { createdAt, deadlineAt: computeDeadline(createdAt, 3) } });
     await harness.services.sla.sweep();
-    const key = `sla:${incident.id}:${stage === 24 ? 'elapsed24' : stage === 48 ? '24' : 'overdue'}`;
+    const key = `sla:${incident.id}:elapsed24`;
     await prisma.outboundMessage.updateMany({ where: { dedupeKey: { not: key } }, data: { status: 'SENT' } });
     await prisma.outboundMessage.create({ data: { targetType: 'chat', targetId: TEST_CHATS.sector, payload: { text: 'Обычная карточка' }, attachments: [], dedupeKey: 'after-quiet-reminder' } });
     const closing = new Date(); closing.setUTCHours(14, 0, 0, 0); vi.setSystemTime(closing);
@@ -205,7 +208,7 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
     const worker = new MaxMessageService(max as never, { prisma, storage: {} as never });
     await worker.flush(); await worker.flush();
     expect(await prisma.outboundMessage.findUnique({ where: { dedupeKey: key } })).toBeNull();
-    const field = stage === 24 ? 'slaReminder24SentAt' : stage === 48 ? 'slaWarn24SentAt' : 'overdueNotifiedAt';
+    const field = 'slaReminder24SentAt';
     expect((await harness.services.repository.findById(incident.id))![field]).toBeNull();
     expect(max.sendToChat).toHaveBeenCalledTimes(1);
     expect(max.sendToChat.mock.calls[0]![1]).toBe('Обычная карточка');
@@ -213,7 +216,27 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
     expect(workingHours(new Date())).toBe(true);
     await harness.services.sla.sweep(); await worker.flush();
     expect(max.sendToChat).toHaveBeenCalledTimes(2);
-    expect(max.sendToChat.mock.calls[1]![1]).toContain(stage === 24 ? 'третий' : 'ПРОСРОЧЕНО');
+    expect(max.sendToChat.mock.calls[1]![1]).toContain('Напоминание об обращении');
+  });
+
+
+  for (const stage of [48, 'overdue'] as const) it(`discards legacy queued ${stage} notifications without re-arming them`, async () => {
+    const original = await routedIncident('Старое уведомление');
+    const field = stage === 48 ? 'slaWarn24SentAt' : 'overdueNotifiedAt';
+    await prisma.incident.update({ where: { id: original.id }, data: { [field]: new Date(), createdAt: new Date(Date.now() - 4 * 86_400_000) } });
+    await prisma.outboundMessage.updateMany({ data: { status: 'SENT' } });
+    const key = `sla:${original.id}:legacy`;
+    await prisma.outboundMessage.create({ data: { targetType: 'chat', targetId: TEST_CHATS.sector, incidentId: original.id,
+      payload: { text: 'Старая ступень', operation: { type: 'sla-reminder', incidentId: original.id, stage } }, attachments: [], dedupeKey: key } });
+    const closing = new Date(); closing.setUTCHours(14, 0, 0, 0); vi.setSystemTime(closing);
+    const max = { sendToChat: vi.fn() };
+    const worker = new MaxMessageService(max as never, { prisma, storage: {} as never });
+    await worker.flush();
+    expect(max.sendToChat).not.toHaveBeenCalled();
+    expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: key } })).status).toBe('SENT');
+    expect((await harness.services.repository.findById(original.id))![field]).not.toBeNull();
+    vi.setSystemTime(incidentWorkday(closing, 1).start);
+    expect((await harness.services.sla.sweep()).warned24).toBe(0);
   });
 
   it('ignores resolved incidents', async () => {

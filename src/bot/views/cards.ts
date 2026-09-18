@@ -151,8 +151,6 @@ export function sectorCard(incident: IncidentWithRelations, group: ResponsibleGr
     'Дата:',
     formatDateTime(incident.createdAt),
     '',
-    'Срок:',
-    incident.slaPausedAt ? 'Приостановлен до получения уточнения' : formatDateTime(incident.deadlineAt),
     ...(photoCount > 0 ? ['', ...attachmentLine(photoCount)] : []),
     ...(incident.currentResponder && (lease === undefined || lease || !['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)) ? ['', '👤 Исполнитель:', incident.currentResponder.displayName] : []),
   ].join('\n');
@@ -239,11 +237,6 @@ export function revisionCard(incident: Incident, answerVersion: number, reason: 
     '',
     'Версия ответа:',
     String(answerVersion),
-    '',
-    'Первоначальный срок ответа:',
-    formatDateTime(incident.deadlineAt),
-    '',
-    '⚠️ Срок ответа НЕ изменён.',
   ].join('\n');
 }
 
@@ -285,20 +278,18 @@ export function rejectionToRequester(incident: Incident, reason: string): string
 }
 
 /** §41 — /incident lookup result for staff. */
-export function incidentLookupCard(incident: IncidentWithRelations, lease?: LeaseView, distribution = false): string {
+export function incidentLookupCard(incident: IncidentWithRelations, lease?: LeaseView, distribution = false, showSla = true): string {
   const lastAnswer = incident.answers.at(-1);
   return [
     codeLabel(incident),
     ...(lease !== undefined && (!distribution || incident.status === 'DISTRIBUTION') ? [distribution ? leaseText(lease).replace(/^🟢 /, '') : leaseText(lease)] : []),
     '',
     'Статус:',
-    distribution ? distributionStatus(incident) : incident.slaPausedAt ? 'Ожидаем уточнение от жителя — срок приостановлен' : `${incident.status} — ${describeStatus(incident.status, incident.isOverdue)}`,
+    distribution ? distributionStatus(incident) : incident.slaPausedAt ? 'Ожидаем уточнение от жителя' : `${incident.status} — ${describeStatus(incident.status, showSla && incident.isOverdue)}`,
     '',
     'Создано:',
     formatDateTime(incident.createdAt),
-    '',
-    'Срок ответа:',
-    formatDateTime(incident.deadlineAt),
+    ...(showSla ? ['', 'Срок ответа:', formatDateTime(incident.deadlineAt)] : []),
     ...(incident.answeredAt ? ['', 'Отвечено:', formatDateTime(incident.answeredAt)] : []),
     '',
     'Ответственная группа:',

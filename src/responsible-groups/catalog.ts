@@ -55,9 +55,12 @@ const executive = (code: string, name: string, maxChatId: bigint): ResponsibleGr
   maxChatId,
 });
 
-/** Зафиксированный пользователем перечень из 50 профильных чатов. */
+/** Зафиксированный пользователем перечень из 52 профильных чатов. */
 export const RESPONSIBLE_GROUPS: ResponsibleGroupSeed[] = [
-  regional('REGION_KALUGA', 'Калужская область', -78347547385914n, 'KALUGA_REGION', true),
+  { ...regional('REGION_KALUGA', 'Администрация Губернатора', -78347547385914n, 'KALUGA_REGION', true),
+    authorityName: 'Администрация Губернатора Калужской области' },
+  regional('REGION_DEFENDERS', 'Фонд защитников Отечества', -79091217342522n),
+  regional('REGION_SOCIAL_FUND', 'Социальный фонд', -79091264397370n),
 
   local('LG_BABYNINSKY', 'Бабынинский округ', -78339541704762n, 'BABYNINSKY'),
   local('LG_BARYATINSKY', 'Барятинский округ', -78347519270970n, 'BARYATINSKY'),

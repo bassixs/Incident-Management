@@ -44,6 +44,8 @@ describe('новое распределение по ответственным 
       'Органы исполнительной власти',
       'Отмена',
     ]);
+    const first = assignmentBranchKeyboard(INCIDENT_ID, regional, null)[0]![0]! as { payload: string };
+    expect(parseCallbackPayload(first.payload)).toMatchObject({ action: 'assign-branch', argument: 'regional' });
   });
 
   it('marks Kaluga Region as recommended for a region-wide question', () => {

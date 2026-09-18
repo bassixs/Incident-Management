@@ -1,4 +1,3 @@
-import { incidentWorkday } from '../utils/work-calendar';
 import type { Incident, ResponsibleGroup, User } from '@prisma/client';
 
 import { getConfig } from '../config';
@@ -13,12 +12,12 @@ type SlaIncident = Incident & {
   currentResponder: User | null;
 };
 
-export function slaStage(incident: Incident, now: Date): SlaStage | undefined {
+export function slaStage(incident: Incident, now: Date): 24 | undefined {
   if (incident.slaPausedAt) return undefined;
   if (incident.status === 'RESOLVED' || incident.status === 'REJECTED') return undefined;
-  if (incident.deadlineAt <= now) return 'overdue';
-  if (now >= incidentWorkday(incident.createdAt, 3).start) return 48;
-  if (now >= incidentWorkday(incident.createdAt, 2).start) return 24;
+  // Legacy marks count too: an upgrade must not remind previously notified staff again.
+  if (incident.slaWarn24SentAt || incident.slaWarn6SentAt || incident.overdueNotifiedAt) return undefined;
+  if (now.getTime() - incident.createdAt.getTime() >= 86_400_000) return 24;
   return undefined;
 }
 
@@ -30,15 +29,14 @@ export function slaNotification(incident: SlaIncident, stage: SlaStage): { targe
     target: { chatId },
     message: {
       text: [
-        stage === 'overdue' ? '🚨 ПРОСРОЧЕНО' : `⚠️ Напоминание: ${stage === 24 ? 'второй' : 'третий'} рабочий день`,
+        '🔔 Напоминание об обращении',
         '',
         `№ ${incident.publicCode}`,
-        stage === 'overdue' ? 'Срок ответа истёк. Обращение не закрыто.' : 'Обращение ещё не закрыто.',
+        'Обращение ещё не закрыто. Проверьте, требуется ли ваше действие.',
         `Статус: ${describeStatus(incident.status)}`,
         `Ответственная группа: ${incident.assignedGroup?.name ?? 'Не назначена — требуется распределение'}`,
         `Ответственный сотрудник: ${incident.currentResponder?.displayName ?? 'Пока никто не взял в работу'}`,
         `Зарегистрировано: ${formatDateTime(incident.createdAt)}`,
-        `Срок ответа: ${formatDateTime(incident.deadlineAt)}`,
         '',
         'Нажмите на цитату над сообщением, чтобы перейти к карточке обращения.',
       ].join('\n'),

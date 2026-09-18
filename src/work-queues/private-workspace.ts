@@ -229,7 +229,7 @@ export async function showPersonalWork(services: AppServices, actor: ResolvedAct
       ? reviewKeyboard(s.incident.id, s.incident.answers.at(-1)!.id)
       : sectorKeyboard(s.incident.id, { status: s.incident.status, hasTemplate: !!s.incident.assignedGroup?.answerTemplate }), s.item);
   }
-  if (details) text += `\n\n${s.kind === 'review' ? reviewCard(s.incident, s.incident.answers.at(-1)!, s.incident.assignedGroup, owned) : incidentLookupCard(s.incident, owned, s.kind === 'distribution')}`;
+  if (details) text += `\n\n${s.kind === 'review' ? reviewCard(s.incident, s.incident.answers.at(-1)!, s.incident.assignedGroup, owned) : incidentLookupCard(s.incident, owned, s.kind === 'distribution', s.kind !== 'sector')}`;
   else text += `\n\nОбращение:\n${s.incident.text}`;
   rows.push([button('Показать обращение', 'details', id), button('Обновить состояние', 'show', id)]);
   rows.push(active ? [button('Освободить', 'release', id), button('Отменить действие', 'cancel', id)] : [button('Взять и продолжить', 'resume', id), button('Отменить старое действие', 'cancel', id)]);

@@ -9,6 +9,7 @@ import {
   incidentLookupCard,
   sectorCard,
   reviewCard,
+  revisionCard,
 } from '../../src/bot/views/cards';
 import type { IncidentWithRelations } from '../../src/incidents/incident.repository';
 
@@ -68,6 +69,14 @@ describe('review card revision history', () => {
 });
 
 describe('staff card status markers', () => {
+  it('hides the internal answer deadline from all executor cards but retains it for internal lookup', () => {
+    const row = { ...incident, status: IncidentStatus.IN_PROGRESS, isOverdue: true };
+    for (const text of [sectorCard(row, group), revisionCard(row, 1, 'Уточните адрес'), incidentLookupCard(row, undefined, false, false)]) {
+      expect(text).not.toMatch(/срок|просроч|07\.09\.2026/i);
+    }
+    expect(incidentLookupCard(row)).toContain('Срок ответа:');
+    expect(row.deadlineAt).toEqual(incident.deadlineAt);
+  });
   it('marks a new distribution card as not distributed', () => {
     expect(distributionCard(incident).startsWith('🔴 НЕ РАСПРЕДЕЛЕНО')).toBe(true);
     expect(distributionCard(incident)).not.toContain('🟢');

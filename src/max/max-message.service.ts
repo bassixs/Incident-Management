@@ -396,13 +396,19 @@ export class MaxMessageService {
 
     try {
       if (payload.operation?.type === 'sla-reminder') {
+        // Retire notifications queued by the old multi-stage policy, retaining its marks.
+        if (payload.operation.stage !== 24) {
+          await durable.prisma.outboundMessage.update({ where: { id: row.id }, data: {
+            status: OutboxStatus.SENT, lockedAt: null, lastError: null,
+          } });
+          return { state: 'sent', trackingApplied: false };
+        }
         if (!workingHours(new Date())) {
           // Re-arm the stage for the next working sweep. Holding this job until
           // morning would block unrelated cards/answers in the same chat.
           const operation = payload.operation;
-          const field = operation.stage === 24 ? 'slaReminder24SentAt' : operation.stage === 48 ? 'slaWarn24SentAt' : 'overdueNotifiedAt';
           await durable.prisma.$transaction(async tx => {
-            await tx.incident.updateMany({ where: { id: operation.incidentId }, data: { [field]: null } });
+            await tx.incident.updateMany({ where: { id: operation.incidentId }, data: { slaReminder24SentAt: null } });
             await tx.outboundMessage.delete({ where: { id: row.id } });
           });
           return { state: 'sent', trackingApplied: false };

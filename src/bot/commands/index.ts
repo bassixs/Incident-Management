@@ -115,7 +115,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
     const incident = await services.incidents.findByPublicCode(code);
     if (!incident) throw new AppError(`Обращение ${code.toUpperCase()} не найдено.`, 'NOT_FOUND');
     assertIncidentVisible(actor, incident, chatId);
-    await services.messages.send({ chatId }, { text: incidentLookupCard(incident, incident.status === 'DISTRIBUTION' ? incident.distributionClaimUntil && incident.distributionClaimUntil > new Date() ? { name: incident.distributionClaimedName ?? 'Сотрудник', until: incident.distributionClaimUntil } : null : ['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED', 'WAITING_REVIEW'].includes(incident.status) ? await leaseView(services.prisma, incident.id, incident.status === 'WAITING_REVIEW' ? 'review-queue' : 'sector-queue') : undefined, chatId === services.config.DISTRIBUTION_CHAT_ID) });
+    await services.messages.send({ chatId }, { text: incidentLookupCard(incident, incident.status === 'DISTRIBUTION' ? incident.distributionClaimUntil && incident.distributionClaimUntil > new Date() ? { name: incident.distributionClaimedName ?? 'Сотрудник', until: incident.distributionClaimUntil } : null : ['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED', 'WAITING_REVIEW'].includes(incident.status) ? await leaseView(services.prisma, incident.id, incident.status === 'WAITING_REVIEW' ? 'review-queue' : 'sector-queue') : undefined, chatId === services.config.DISTRIBUTION_CHAT_ID, [services.config.DISTRIBUTION_CHAT_ID, services.config.REVIEW_CHAT_ID, services.config.DELIVERY_ALERT_CHAT_ID].includes(chatId)) });
   },
 
   history: async ({ services, actor, chatId, isDialog, args }) => {
@@ -136,7 +136,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
       : [];
     await services.messages.send(
       { chatId },
-      { text: incidentHistoryText(incident, entries, users, services.config.APP_TIMEZONE) },
+      { text: incidentHistoryText(incident, entries, users, services.config.APP_TIMEZONE, [services.config.DISTRIBUTION_CHAT_ID, services.config.REVIEW_CHAT_ID, services.config.DELIVERY_ALERT_CHAT_ID].includes(chatId)) },
     );
   },
 
@@ -358,7 +358,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
     const result = await services.sla.sweep();
     await recordAudit(services, actor, {
       action: AuditAction.SLA_SWEEP,
-      summary: `Запущена ручная SLA-проверка: проверено ${result.checked}, просрочено ${result.overdue}`,
+      summary: `Запущена ручная SLA-проверка: проверено ${result.checked}, напоминаний ${result.warned24}`,
       metadata: result,
     });
     await reply(
@@ -370,8 +370,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
         'Проверка сроков выполнена.',
         `Проверено: ${result.checked}`,
         `Напоминаний через 24ч: ${result.warned24}`,
-        `Напоминаний через 48ч: ${result.warned48}`,
-        `Просрочено: ${result.overdue}`,
+        'Просрочка учитывается во внутренних отчётах без дополнительных уведомлений.',
         `Сессий очищено: ${result.sessionsPurged}`,
       ].join('\n'),
     );

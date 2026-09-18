@@ -99,6 +99,9 @@ describe('полные названия всех исполнителей', () =
     ['Комитет ветеринарии', 'Комитетом ветеринарии при Правительстве Калужской области'],
     ['Госстройнадзор', 'Инспекцией государственного строительного надзора Калужской области'],
     ['Калужская область', 'Администрацией Губернатора Калужской области'],
+    ['Администрация Губернатора', 'Администрацией Губернатора Калужской области'],
+    ['Фонд защитников Отечества', 'Фондом защитников Отечества'],
+    ['Социальный фонд', 'Социальным фондом'],
   ])('%s → %s', (name, expected) => {
     expect(answerSignature(name)).toBe(`Ответ подготовлен ${expected}.`);
     expect(answerSignature(expected)).toBe(`Ответ подготовлен ${expected}.`);
@@ -107,7 +110,7 @@ describe('полные названия всех исполнителей', () =
   it.each(RESPONSIBLE_GROUPS)('$code: одинаковая полная подпись в согласовании и ответе', group => {
     const authorityName = group.authorityName ?? group.name;
     const signature = answerSignature(authorityName)!;
-    expect(signature).toMatch(/^Ответ подготовлен (Администрацией|Министерством|Государственной жилищной инспекцией|Управлением|Комитетом|Инспекцией) .+\.$/);
+    expect(signature).toMatch(/^Ответ подготовлен (Администрацией|Министерством|Государственной жилищной инспекцией|Управлением|Комитетом|Инспекцией|Фондом|Социальным фондом)( .+)?\.$/);
     expect(signature).not.toMatch(/ГЖИ|УАТК|ЗАГС|ЖКХ|Госстройнадзор/);
     expect(finalAnswerToRequester(incident, answer, ANSWERED_AT, authorityName)).toContain(signature);
     expect(reviewCard({ ...incident, attachments: [], answers: [] } as unknown as IncidentWithRelations,

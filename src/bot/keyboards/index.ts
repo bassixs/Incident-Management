@@ -248,7 +248,7 @@ export function distributionTopicKeyboard(incidentId: string, categories: Catego
   }));
 }
 
-export type AssignmentBranch = 'local' | 'executive';
+export type AssignmentBranch = 'regional' | 'local' | 'executive';
 export const ASSIGNMENT_PAGE_SIZE = 6;
 
 /** First routing level: the regional team or one of two group families. */
@@ -259,11 +259,11 @@ export function assignmentBranchKeyboard(
 ): Button[][] {
   const rows: Button[][] = [];
   if (regionalGroup) {
-    const recommended = regionalGroup.id === recommendedGroup?.id;
+    const recommended = recommendedGroup?.kind === 'REGIONAL';
     rows.push([
       button.callback(
         recommended ? '⭐ Калужская область — рекомендуется' : 'Калужская область',
-        incidentCallback('assign-group', incidentId, regionalGroup.id),
+        incidentCallback('assign-branch', incidentId, 'regional'),
         { intent: recommended ? 'positive' : 'default' },
       ),
     ]);

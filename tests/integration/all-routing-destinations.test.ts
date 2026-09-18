@@ -4,6 +4,7 @@ import { type PrismaClient, type ResponsibleGroup } from '@prisma/client';
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { buildServices, type AppServices } from '../../src/app/container';
 import { handleCallbackUpdate } from '../../src/bot/callbacks';
+import { resolveActor } from '../../src/bot/handlers/helpers';
 import { assignmentBranchKeyboard, assignmentGroupKeyboard, assignmentPageCount } from '../../src/bot/keyboards';
 import { incidentCallback, parseCallbackPayload } from '../../src/max/callback-payload';
 import { MaxMessageService } from '../../src/max/max-message.service';
@@ -21,7 +22,7 @@ const snapshot = process.env.ROUTING_SNAPSHOT_PATH
   : undefined;
 type Sent = { target: bigint; text: string; extra?: SendMessageExtra; mid: string };
 
-describeIntegration('all 50 configured routing destinations', () => {
+describeIntegration('all 52 configured routing destinations', () => {
   let prisma: PrismaClient; let services: AppServices; let messages: MaxMessageService;
   let groups: ResponsibleGroup[]; let sent: Sent[]; let rejectTarget: bigint | undefined;
   beforeAll(() => { pushSchemaOnce(); prisma = createTestPrisma(); });
@@ -55,7 +56,7 @@ describeIntegration('all 50 configured routing destinations', () => {
 
   function pickerButtons(incidentId: string, recommendation: ResponsibleGroup | null = null) {
     const buttons = assignmentBranchKeyboard(incidentId, groups.find(g => g.kind === 'REGIONAL')!, recommendation).flat();
-    for (const [branch, kind] of [['local', 'LOCAL_GOVERNMENT'], ['executive', 'EXECUTIVE_AUTHORITY']] as const) {
+    for (const [branch, kind] of [['regional', 'REGIONAL'], ['local', 'LOCAL_GOVERNMENT'], ['executive', 'EXECUTIVE_AUTHORITY']] as const) {
       const subset = groups.filter(g => g.kind === kind && g.isActive);
       const recommended = recommendation?.kind === kind ? recommendation : null;
       for (let page = 0; page < assignmentPageCount(subset.length); page++) {
@@ -87,11 +88,11 @@ describeIntegration('all 50 configured routing destinations', () => {
   }
 
   it('covers every destination exactly once across pages and recommends the correct group for all 27 territories', async () => {
-    expect(groups).toHaveLength(50); expect(new Set(groups.map(g => g.maxChatId)).size).toBe(50);
+    expect(groups).toHaveLength(52); expect(new Set(groups.map(g => g.maxChatId)).size).toBe(52);
     const id = randomUUID(); const buttons = pickerButtons(id);
-    expect(buttons).toHaveLength(50);
+    expect(buttons).toHaveLength(52);
     const ids = buttons.map(b => { const p = parseCallbackPayload(b.payload); return p?.kind === 'incident' ? p.argument : null; });
-    expect(new Set(ids).size).toBe(50);
+    expect(new Set(ids).size).toBe(52);
     for (const g of groups) {
       const b = buttons.find(b => b.payload === incidentCallback('assign-group', id, g.id));
       expect(b?.text, g.code).toContain(g.name);
@@ -107,7 +108,29 @@ describeIntegration('all 50 configured routing destinations', () => {
     }
   });
 
-  it('routes 50 incidents with 100 photos through actual button handlers/outbox to their own chats, including concurrent clicks', async () => {
+  it('opens a regional submenu and preserves direct answers only for the Governor administration', async () => {
+    const regional = groups.filter(g => g.kind === 'REGIONAL');
+    expect(regional.map(g => [g.name, String(g.maxChatId), g.bypassReview])).toEqual([
+      ['Администрация Губернатора', '-78347547385914', true],
+      ['Фонд защитников Отечества', '-79091217342522', false],
+      ['Социальный фонд', '-79091264397370', false],
+    ]);
+    for (const [index, group] of regional.entries()) {
+      const incident = await create(index);
+      await click(incidentCallback('assign-branch', incident.id, 'regional'), index);
+      const menu = (services.max.editMessage as ReturnType<typeof vi.fn>).mock.calls.find(call => String(call[1]).includes(`Калужская область: куда направить ${incident.publicCode}`))!;
+      expect(menu).toBeDefined();
+      expect(menu[1]).toContain('Калужская область');
+      expect(JSON.stringify(menu[2])).toContain('Фонд защитников Отечества');
+      expect(JSON.stringify(menu[2])).toContain('Социальный фонд');
+      await click(incidentCallback('assign-group', incident.id, group.id), index);
+      const actor = (await resolveActor(services, { user_id: 91000 + index, name: 'Исполнитель', is_bot: false } as never, group.maxChatId!))!;
+      await services.answers.submit(incident.id, actor, 'Ответ подготовлен');
+      expect((await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).status).toBe(group.bypassReview ? 'RESOLVED' : 'WAITING_REVIEW');
+    }
+  });
+
+  it('routes 52 incidents with 104 photos through actual button handlers/outbox to their own chats, including concurrent clicks', async () => {
     const cases = [];
     for (const [index, group] of groups.entries()) {
       const incident = await create(index);
@@ -133,9 +156,9 @@ describeIntegration('all 50 configured routing destinations', () => {
       await click(c.button.payload, c.index);
     }
     await messages.flush();
-    expect(await prisma.incidentHistory.count({ where: { action: 'ASSIGNED' } })).toBe(50);
-    expect(await prisma.outboundMessage.count({ where: { trackingType: 'SECTOR_CARD' } })).toBe(50);
-    expect(sent.filter(m => groups.some(g => g.maxChatId === m.target))).toHaveLength(50);
+    expect(await prisma.incidentHistory.count({ where: { action: 'ASSIGNED' } })).toBe(52);
+    expect(await prisma.outboundMessage.count({ where: { trackingType: 'SECTOR_CARD' } })).toBe(52);
+    expect(sent.filter(m => groups.some(g => g.maxChatId === m.target))).toHaveLength(52);
     expect(await prisma.outboundMessage.count({ where: { status: { not: 'SENT' } } })).toBe(0);
   }, 120_000);
 

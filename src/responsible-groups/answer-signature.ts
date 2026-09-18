@@ -4,6 +4,8 @@ import { RESPONSIBLE_GROUPS } from './catalog';
 /** Full public names; routing buttons and editable group titles stay separate. */
 const FULL_AUTHORITIES: Record<string, string> = {
   REGION_KALUGA: 'Администрация Губернатора Калужской области',
+  REGION_DEFENDERS: 'Фонд защитников Отечества',
+  REGION_SOCIAL_FUND: 'Социальный фонд',
   EA_INTERNAL_POLICY: 'Министерство внутренней политики Калужской области',
   EA_TRANSPORT: 'Министерство транспорта Калужской области',
   EA_HEALTH: 'Министерство здравоохранения Калужской области',
@@ -36,6 +38,8 @@ const INSTRUMENTAL_PREFIXES = [
   ['Управление ', 'Управлением '],
   ['Комитет ', 'Комитетом '],
   ['Инспекция ', 'Инспекцией '],
+  ['Фонд ', 'Фондом '],
+  ['Социальный фонд', 'Социальным фондом'],
 ] as const;
 
 const signaturesByName = new Map<string, string>();
@@ -50,6 +54,8 @@ for (const group of RESPONSIBLE_GROUPS) {
     if (alias) signaturesByName.set(alias, instrumental);
   }
 }
+// Existing settings may still contain the original short regional name.
+signaturesByName.set('Калужская область', 'Администрацией Губернатора Калужской области');
 
 /** Respect disabled/custom signatures; only decline the known organization names. */
 export function answerSignature(authorityName?: string | null): string | null {

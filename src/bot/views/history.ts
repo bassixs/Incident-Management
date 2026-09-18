@@ -32,7 +32,7 @@ const ACTION_LABELS: Record<string, string> = {
   INCIDENT_REJECTED: 'Обращение отклонено',
   USER_BANNED: 'Автор обращения заблокирован',
   USER_UNBANNED: 'Блокировка автора снята',
-  SLA_REMINDER_24H: 'Напоминание поставлено в очередь: второй рабочий день',
+  SLA_REMINDER_24H: 'Напоминание об обращении поставлено в очередь',
   SLA_REMINDER_48H: 'Напоминание поставлено в очередь: третий рабочий день',
   SLA_WARNING_24H: 'Отправлено предупреждение: осталось 24 часа',
   SLA_WARNING_6H: 'Отправлено предупреждение: осталось 6 часов',
@@ -45,26 +45,29 @@ export function incidentHistoryText(
   entries: IncidentHistory[],
   users: Array<Pick<User, 'maxUserId' | 'displayName'>>,
   timeZone: string,
+  showSla = true,
 ): string {
   const names = new Map(users.map((user) => [user.maxUserId.toString(), user.displayName]));
   const lines = [
     `История ${incident.publicCode}`,
-    `Текущий статус: ${describeStatus(incident.status, incident.isOverdue)}`,
+    `Текущий статус: ${describeStatus(incident.status, showSla && incident.isOverdue)}`,
     `Создано: ${formatDateTime(incident.createdAt, timeZone)}`,
-    `Срок: ${formatDateTime(incident.deadlineAt, timeZone)}`,
+    ...(showSla ? [`Срок: ${formatDateTime(incident.deadlineAt, timeZone)}`] : []),
     '',
   ];
-  if (entries.length === 0) return [...lines, 'Записей истории пока нет.'].join('\n');
+  const visibleEntries = showSla ? entries : entries.filter(entry => !entry.action.startsWith('SLA_') || entry.action === 'SLA_REMINDER_24H');
+  if (visibleEntries.length === 0) return [...lines, 'Записей истории пока нет.'].join('\n');
 
-  for (const [index, entry] of entries.entries()) {
+  for (const [index, entry] of visibleEntries.entries()) {
     const metadata = asRecord(entry.metadata);
     const actor = actorOf(entry, metadata, names);
-    lines.push(`${index + 1}. ${formatDateTime(entry.createdAt, timeZone)} — ${ACTION_LABELS[entry.action] ?? entry.action}`);
+    const label = ACTION_LABELS[entry.action] ?? entry.action;
+    lines.push(`${index + 1}. ${formatDateTime(entry.createdAt, timeZone)} — ${showSla ? label : label.replace(/, срок .+$/, '')}`);
     if (entry.fromStatus || entry.toStatus) {
       lines.push(`   Статус: ${entry.fromStatus ? describeStatus(entry.fromStatus, false) : '—'} → ${entry.toStatus ? describeStatus(entry.toStatus, false) : '—'}`);
     }
     if (actor) lines.push(`   Выполнил: ${actor}`);
-    for (const detail of historyDetails(entry.action, metadata)) lines.push(`   ${detail}`);
+    for (const detail of historyDetails(entry.action, metadata, showSla)) lines.push(`   ${detail}`);
   }
   return lines.join('\n');
 }
@@ -96,7 +99,7 @@ function actorOf(
   return stringValue(metadata.dispatcher) ?? stringValue(metadata.responder) ?? stringValue(metadata.approver);
 }
 
-function historyDetails(action: string, metadata: Record<string, unknown>): string[] {
+function historyDetails(action: string, metadata: Record<string, unknown>, showSla: boolean): string[] {
   const details: string[] = [];
   if (action === 'TOPIC_CHANGED') details.push(`Тема: ${String(metadata.previousCategoryName)} → ${String(metadata.categoryName)}`);
   if (metadata.question) details.push(`Вопрос: ${String(metadata.question)}`);
@@ -108,7 +111,7 @@ function historyDetails(action: string, metadata: Record<string, unknown>): stri
   if (metadata.until) details.push(`Закреплено до: ${String(metadata.until)}`);
   if (metadata.reason) details.push(`Причина: ${String(metadata.reason)}`);
   if (metadata.targetMaxUserId) details.push(`Пользователь: ${String(metadata.targetMaxUserId)}`);
-  if (metadata.deadlineAt) details.push(`Срок ответа: ${String(metadata.deadlineAt)}`);
+  if (showSla && metadata.deadlineAt) details.push(`Срок ответа: ${String(metadata.deadlineAt)}`);
   if (action === 'ANSWER_RATED' && metadata.rating) {
     details.push(`Оценка: ${String(metadata.rating)} из 5`);
   }
