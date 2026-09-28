@@ -1,4 +1,5 @@
 import { reportActionError } from '../../utils/errors';
+import { messageContainsLink } from '../../utils/links';
 import type { Context } from '@maxhub/max-bot-api';
 
 import type { AppServices } from '../../app/container';
@@ -41,9 +42,10 @@ export async function handleMessageUpdate(services: AppServices, ctx: Context): 
 
   const command = parseCommand(message.body.text);
   const hasFile = message.body.attachments?.some(attachment => attachment.type === 'file');
+  const hasLink = messageContainsLink(message);
   // Staff drafts may contain files. Resolve the selected private workspace before
   // applying the resident-only file restriction, including command captions.
-  if (dialog && (!command || hasFile)) {
+  if (dialog && (!command || hasFile || hasLink)) {
     try {
       if (await withPersonalWorkLock(services, actor.maxUserId, () => receivePersonalText(services, actor, message))) return;
     } catch (error) {
@@ -56,6 +58,11 @@ export async function handleMessageUpdate(services: AppServices, ctx: Context): 
   // photos sent as files. Do not download them or change the current session.
   if (dialog && hasFile) {
     await services.messages.send({ userId: actor.maxUserId }, { text: REJECTION_MESSAGES.file });
+    return;
+  }
+
+  if (dialog && hasLink) {
+    await services.messages.send({ userId: actor.maxUserId }, { text: REJECTION_MESSAGES.link });
     return;
   }
 

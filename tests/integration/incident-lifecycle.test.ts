@@ -7,7 +7,7 @@ import { handleIncidentCallback } from '../../src/bot/callbacks/incident.callbac
 import { handleUserCallback } from '../../src/bot/callbacks/user.callbacks';
 import { handleRequesterMessage } from '../../src/bot/handlers/requester.handler';
 import type { Message } from '../../src/max/max-types';
-import { ConflictError, RateLimitError } from '../../src/utils/errors';
+import { ConflictError, RateLimitError, ValidationError } from '../../src/utils/errors';
 import * as configModule from '../../src/config';
 import { rulesText } from '../../src/bot/views/cards';
 import { IncidentRepository } from '../../src/incidents/incident.repository';
@@ -374,6 +374,9 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
 
   it('enforces the published three-message limit under concurrent submissions', async () => {
     vi.spyOn(configModule, 'getConfig').mockReturnValue({ ...configModule.getConfig(), DAILY_INCIDENT_LIMIT: 3 });
+    await expect(harness.services.incidents.create({ requester: requesterA(), text: 'Проблема https://example.org' })).rejects.toBeInstanceOf(ValidationError);
+    expect(await prisma.incident.count()).toBe(0);
+    expect(await harness.services.incidents.remainingDailyQuota(TEST_USERS.requesterA)).toBe(3);
     const results = await Promise.allSettled(Array.from({ length: 4 }, (_, i) =>
       harness.services.incidents.create({ requester: requesterA(), text: `Проблема ${i}` }),
     ));

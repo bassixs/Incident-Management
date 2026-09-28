@@ -12,6 +12,7 @@ import { computeDeadline, dayBoundaries } from '../utils/datetime';
 import { ConflictError, RateLimitError, ValidationError } from '../utils/errors';
 import { incidentLogFields, moduleLogger } from '../utils/logger';
 import { normaliseIncidentText, unicodeLength } from '../utils/text';
+import { containsLink } from '../utils/links';
 import { HistoryAction, type IncidentHistoryService } from './incident-history.service';
 import type { IncidentRepository, IncidentWithRelations } from './incident.repository';
 
@@ -68,6 +69,7 @@ export function normaliseRequesterPhone(raw: string): string {
 }
 
 export const REJECTION_MESSAGES = {
+  link: 'Ссылки отправлять нельзя. Опишите проблему текстом без ссылок. При необходимости приложите фотографию.',
   banned: 'Отправка обращений для вашей учётной записи временно недоступна.',
   file: 'Можно прикреплять только фотографии. Файлы не принимаются. Отправьте изображение как фото из галереи, а не как файл.',
   video:
@@ -113,6 +115,9 @@ export class IncidentService {
    */
   validateSubmission(text: string, media: IncomingMedia[] = []): { text: string } {
     const config = getConfig();
+    if (containsLink(text)) {
+      throw new ValidationError(REJECTION_MESSAGES.link, { reason: 'link' });
+    }
     if (media.some((item) => item.kind === 'VIDEO')) {
       throw new ValidationError(REJECTION_MESSAGES.video, { reason: 'video' });
     }
@@ -158,6 +163,9 @@ export class IncidentService {
   async create(input: CreateIncidentInput): Promise<Incident> {
     const config = getConfig();
     const { text } = this.validateSubmission(input.text, input.media ?? []);
+    if (containsLink(input.problemLocality)) {
+      throw new ValidationError(REJECTION_MESSAGES.link, { reason: 'link' });
+    }
     const requesterName = normaliseRequesterName(input.requester.name);
     const requesterPhone = normaliseRequesterPhone(input.requester.phone);
     await this.assertNotBanned(input.requester.maxUserId);

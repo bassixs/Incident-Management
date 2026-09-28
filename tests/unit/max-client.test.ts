@@ -1,4 +1,5 @@
 import { Bot } from '@maxhub/max-bot-api';
+import * as fs from 'node:fs/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MaxClient } from '../../src/max/max-client';
@@ -8,6 +9,19 @@ import { ValidationError } from '../../src/utils/errors';
 afterEach(() => vi.unstubAllGlobals());
 
 describe('updating card controls without losing photos', () => {
+  it('retains link previews and photos when refreshing an old card', async () => {
+    const bot = new Bot('test-token');
+    vi.spyOn(bot.api, 'getMessage').mockResolvedValue({ body: { attachments: [
+      { type: 'share', payload: { token: 'preview-token', url: 'https://example.org' } },
+      { type: 'image', payload: { token: 'photo-token' } },
+    ] } } as never);
+    const edit = vi.spyOn(bot.api, 'editMessage').mockResolvedValue({ success: true });
+    await new MaxClient(bot).editCardWithKeyboard('card', 'Распределено', []);
+    expect(edit).toHaveBeenCalledWith('card', { text: 'Распределено', attachments: [
+      { type: 'share', payload: { token: 'preview-token', url: 'https://example.org' } },
+      { type: 'image', payload: { token: 'photo-token' } },
+    ] });
+  });
   it('skips unchanged edits but repairs externally changed buttons on the next read', async () => {
     const bot = new Bot('test-token');
     const buttons = [[{ type: 'callback' as const, text: 'Согласовать', payload: 'current' }]];
@@ -58,6 +72,30 @@ describe('updating card controls without losing photos', () => {
     const edit = vi.spyOn(bot.api, 'editMessage').mockResolvedValue({ success: true });
     await expect(new MaxClient(bot).editCardWithKeyboard('card', 'Отработано', [])).rejects.toThrow('сохранить вложения');
     expect(edit).not.toHaveBeenCalled();
+  });
+});
+
+describe('file uploads', () => {
+  it.each([undefined, 'guide.pdf'])('uses the token-preserving SDK path and retries missing tokens for %s', async name => {
+    const bot = new Bot('test');
+    let stagedPath = '';
+    const upload = vi.spyOn(bot.api.upload, 'file').mockImplementation(async ({ source }) => {
+      expect(typeof source).toBe('string');
+      stagedPath = source as string;
+      expect((await fs.readFile(stagedPath)).toString()).toBe('document');
+      return (upload.mock.calls.length === 1 ? {} : { token: 'valid-token' }) as never;
+    });
+    expect(await new MaxClient(bot).uploadFile(Buffer.from('document'), name)).toEqual({ type: 'file', payload: { token: 'valid-token' } });
+    expect(upload).toHaveBeenCalledTimes(2);
+    await expect(fs.access(stagedPath)).rejects.toThrow();
+  });
+
+  it('fails after bounded retries instead of returning a file without a token', async () => {
+    const bot = new Bot('test');
+    const upload = vi.spyOn(bot.api.upload, 'file').mockResolvedValue({} as never);
+    await expect(new MaxClient(bot).uploadFile(Buffer.from('document'), 'guide.pdf')).rejects.toThrow('токен');
+    expect(upload).toHaveBeenCalledTimes(4);
+    await expect(fs.access(upload.mock.calls[0]![0].source as string)).rejects.toThrow();
   });
 });
 

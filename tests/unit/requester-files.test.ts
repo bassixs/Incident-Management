@@ -62,3 +62,19 @@ it('routes staff files in working chats to the operator handler', async () => {
   expect(handleOperatorMessage).toHaveBeenCalledWith(services, expect.objectContaining({ roles: ['RESPONDER'] }), -1010n, message, session);
   expect(services.messages.send).not.toHaveBeenCalled();
 });
+
+it.each(['https://max.ru/example', '/start https://example.org', 'Проблема: example.org'])('rejects resident links before routing: %s', async text => {
+  const { services, ctx } = setup([{ type: 'image', payload: { url: 'https://photo.test/a' } }], text);
+  await handleMessageUpdate(services as never, ctx as never);
+  expect(services.messages.send).toHaveBeenCalledWith({ userId: 5001n }, { text: REJECTION_MESSAGES.link });
+  expect(findCommand).not.toHaveBeenCalled();
+  expect(handleRequesterMessage).not.toHaveBeenCalled();
+  expect(services.sessions.find).not.toHaveBeenCalled();
+});
+
+it('keeps links available in staff working chats', async () => {
+  const { services, ctx, message, session } = setup([], 'Ответ: https://example.org', false);
+  await handleMessageUpdate(services as never, ctx as never);
+  expect(handleOperatorMessage).toHaveBeenCalledWith(services, expect.anything(), -1010n, message, session);
+  expect(services.messages.send).not.toHaveBeenCalled();
+});

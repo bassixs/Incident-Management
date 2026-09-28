@@ -145,7 +145,12 @@ export class MaxClient {
     const attachments: AttachmentRequest[] = [];
     for (const item of current.body.attachments ?? []) {
       if (item.type === 'inline_keyboard') continue;
-      if (['image', 'file', 'video', 'audio'].includes(item.type) && 'payload' in item && 'token' in item.payload && item.payload.token) {
+      if (item.type === 'share' && (item.payload?.token || item.payload?.url)) {
+        attachments.push({ type: 'share', payload: {
+          ...(item.payload.token ? { token: item.payload.token } : {}),
+          ...(item.payload.url ? { url: item.payload.url } : {}),
+        } });
+      } else if (['image', 'file', 'video', 'audio'].includes(item.type) && 'payload' in item && item.payload && 'token' in item.payload && item.payload.token) {
         attachments.push({ type: item.type as 'image' | 'file' | 'video' | 'audio', payload: { token: item.payload.token } });
       } else {
         // Never silently drop an unrecognised attachment while replacing buttons.
@@ -182,16 +187,21 @@ export class MaxClient {
    * `9f87…` with no extension.
    */
   async uploadFile(source: Buffer, fileName?: string | null): Promise<AttachmentRequest> {
-    if (!fileName) {
-      const { token } = await this.call('uploadFile', () => this.api.upload.file({ source }));
-      return { type: 'file', payload: { token } };
-    }
-    const safeName = path.basename(fileName).replace(/[\\/:*?"<>|]/g, '_') || 'file.bin';
+    // The SDK's Buffer path can discard the token returned by /uploads.
+    // Always use its file/stream path, also for unnamed documents.
+    const safeName = path.basename(fileName || 'file.bin').replace(/[\\/:*?"<>|]/g, '_') || 'file.bin';
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'max-upload-'));
     const filePath = path.join(directory, safeName);
     try {
       await fs.writeFile(filePath, source);
-      const { token } = await this.call('uploadFile', () => this.api.upload.file({ source: filePath }));
+      const token = await this.call('uploadFile', async () => {
+        const result = await this.api.upload.file({ source: filePath });
+        if (typeof result?.token !== 'string' || !result.token.trim()) {
+          // Retry the upload, never enqueue/send a malformed attachment.
+          throw new Error('MAX не вернул токен загруженного файла.');
+        }
+        return result.token;
+      });
       return { type: 'file', payload: { token } };
     } finally {
       await fs.rm(directory, { recursive: true, force: true }).catch(() => undefined);
