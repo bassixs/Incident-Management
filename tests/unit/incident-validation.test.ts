@@ -25,9 +25,8 @@ const video: IncomingMedia = { kind: 'VIDEO', url: 'https://example.test/a.mp4' 
 const audio: IncomingMedia = { kind: 'AUDIO', url: 'https://example.test/a.mp3' };
 
 describe('incident submission validation', () => {
-  it('rejects links during final submission, including saved drafts', async () => {
-    expect(() => service.validateSubmission('Описание https://example.org', [image])).toThrow(REJECTION_MESSAGES.link);
-    await expect(service.create({ text: 'Описание', problemLocality: 'max.ru/test', requester: { maxUserId: 1n, name: 'Иван Иванов', phone: '+79001234567' } })).rejects.toThrow(REJECTION_MESSAGES.link);
+  it('accepts links in text and photo captions', () => {
+    expect(service.validateSubmission('Описание https://example.org', [image]).text).toBe('Описание https://example.org');
   });
   it('accepts an ordinary request', () => {
     expect(service.validateSubmission('Не работает освещение возле входа.').text).toBe(

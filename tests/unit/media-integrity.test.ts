@@ -1,10 +1,21 @@
 import { expect, it, vi } from 'vitest';
-import { MediaService } from '../../src/media/media.service';
+import { MediaService, classifyAttachments } from '../../src/media/media.service';
 import { loadOutboundAttachments } from '../../src/media/attachment-loader';
 import { MaxMessageService } from '../../src/max/max-message.service';
 import { IncidentService } from '../../src/incidents/incident.service';
 import { AnswerService } from '../../src/answers/answer.service';
 import { ValidationError, isExpectedUserError } from '../../src/utils/errors';
+
+it('ignores automatic link previews without losing photos or accepting unsupported media', () => {
+  const media = classifyAttachments([
+    { type: 'share', payload: { url: 'https://example.org', token: 'preview' } },
+    { type: 'image', payload: { url: 'https://example.org/photo', token: 'photo' } },
+    { type: 'sticker', payload: {} },
+  ] as never);
+  expect(media).toEqual([{ kind: 'IMAGE', url: 'https://example.org/photo', token: 'photo' }, { kind: 'OTHER' }]);
+  expect(new IncidentService(null as never, null as never, null as never, null as never, null as never, null as never)
+    .validateSubmission('Описание https://example.org', media.slice(0, 1)).text).toContain('https://example.org');
+});
 
 it('refuses an image without a usable MAX token', async () => {
   const media = new MediaService({} as never, {} as never);

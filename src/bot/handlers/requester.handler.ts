@@ -1,5 +1,4 @@
 import { reportActionError } from '../../utils/errors';
-import { messageContainsLink } from '../../utils/links';
 import { hasPrivateWorkAccess } from '../../users/private-work-access';
 import { SessionType } from '@prisma/client';
 
@@ -45,10 +44,6 @@ export async function handleRequesterMessage(
   contactInfo?: { tel?: string; fullName?: string },
 ): Promise<void> {
   const target = { userId: actor.maxUserId } as const;
-  if (messageContainsLink(message)) {
-    await services.messages.send(target, { text: REJECTION_MESSAGES.link });
-    return;
-  }
   const sharedContact = message.body.attachments?.find((attachment) => attachment.type === 'contact');
   const sharedMaxUserId = sharedContact?.type === 'contact' ? sharedContact.payload.tam_info?.user_id : undefined;
   if (sharedMaxUserId !== undefined && BigInt(sharedMaxUserId) !== actor.maxUserId) {

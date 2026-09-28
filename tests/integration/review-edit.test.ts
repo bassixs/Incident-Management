@@ -49,6 +49,14 @@ describeIntegration('reviewer corrections', () => {
   async function preview() { await click('review-edit', originalId); await type(); return (await session())!; }
   const token = async () => reviewEditDraft((await session())!).editToken;
 
+  it('allows a reviewer to edit an answer containing a MAX link preview', async () => {
+    await click('review-edit', originalId);
+    const text = 'Подробности https://example.org';
+    await handleOperatorMessage(h.services, reviewer, TEST_CHATS.review, message(text, [{ type: 'share', payload: { url: 'https://example.org', token: 'preview' } }] as never), (await session())!);
+    await click('review-edit-save', await token());
+    expect((await fresh())!.answers.at(-1)!.text).toBe(text);
+  });
+
   it('shows reviewer edits and the matching return reason in repeated review and personal details', async () => {
     await preview(); await click('review-edit-save', await token());
     await h.services.review.requestRevision(id, 'Укажите дату ремонта.', reviewer);

@@ -49,10 +49,12 @@ describeIntegration('private employee workspace', () => {
   const run = (item: PrivateWorkItem, action: string, argument?: string) => personalAction(h.services, actor, item.id, 'run', `incident:${action}:${item.incidentId}${argument ? ':' + argument : ''}`);
   const confirm = async (item: PrivateWorkItem) => personalAction(h.services, actor, item.id, 'confirm', (await data(item)).draft?.nonce ?? (await data(item)).pending?.nonce);
 
-  it.each(['Подробности https://example.org', '/start https://example.org'])('accepts staff answer links through the private message router: %s', async text => {
+  it.each([false, true])('accepts staff answer links with MAX previews: %s', async hasPreview => {
+    const attachments: Message['body']['attachments'] = hasPreview ? [{ type: 'share', payload: { url: 'https://example.org', token: 'preview' } }] : [];
+    const text = 'Подробности https://example.org';
     const { item } = await open();
     await run(item, 'answer');
-    const message = { ...input(text), sender: { user_id: Number(actor.maxUserId), name: actor.displayName, is_bot: false }, recipient: { chat_type: 'dialog' } };
+    const message = { ...input(text, attachments as Message['body']['attachments']), sender: { user_id: Number(actor.maxUserId), name: actor.displayName, is_bot: false }, recipient: { chat_type: 'dialog' } };
     await handleMessageUpdate(h.services, { update: { message } } as never);
     expect((await data(item)).draft.text).toBe(text);
     expect(h.messages.toUser(actor.maxUserId).some(m => m.message.text.includes('Ссылки отправлять нельзя'))).toBe(false);

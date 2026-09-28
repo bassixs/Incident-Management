@@ -70,6 +70,15 @@ describeIntegration('staff action confirmations', () => {
     expect((await fresh())!.status).toBe(direct ? 'RESOLVED' : 'WAITING_REVIEW');
   });
 
+  it.each([false, true])('accepts an answer with a MAX link preview, direct=%s', async direct => {
+    const chat = await assigned(direct); await click(chat, 'answer');
+    const text = 'Подробности https://example.org';
+    await handleOperatorMessage(h.services, actor, chat, { body: { mid: randomUUID(), text, attachments: [{ type: 'share', payload: { url: 'https://example.org', token: 'preview' } }] } } as never, (await session(chat))!);
+    await click(chat, 'action-confirm', await token(chat));
+    expect((await fresh())!.answers.at(-1)!.text).toBe(text);
+    expect((await fresh())!.status).toBe(direct ? 'RESOLVED' : 'WAITING_REVIEW');
+  });
+
   it('cancels redistribution, then returns it only with confirmed reason', async () => {
     const chat = await assigned(); await click(chat, 'redistribute'); await input(chat, 'Другая организация.');
     const before = (await fresh())!; await click(chat, 'action-cancel', await token(chat));

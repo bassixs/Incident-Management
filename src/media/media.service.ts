@@ -52,6 +52,10 @@ export function classifyAttachments(attachments: Attachment[] | null | undefined
       case 'inline_keyboard':
         // Echoed back on edited messages; never user content.
         break;
+      case 'share':
+        // MAX automatically attaches a web preview to text containing a URL.
+        // The URL stays in the text; a preview is not an uploaded media file.
+        break;
       default:
         result.push({ kind: 'OTHER' });
         break;
