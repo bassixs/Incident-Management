@@ -59,8 +59,6 @@ const COLUMNS: Column[] = [
   { header: 'Количество доработок', width: 20, value: (incident) => incident.revisionCount },
   { header: 'Срок ответа', width: 20, value: (incident) => incident.slaPausedAt ? 'Срок приостановлен' : formatDateTime(incident.deadlineAt) },
   { header: 'Просрочено', width: 12, value: (incident) => (incident.slaPausedAt ? 'пауза' : incident.isOverdue ? 'да' : 'нет') },
-  { header: 'Пользователь', width: 28, value: (incident) => incident.requesterName },
-  { header: 'Телефон', width: 20, value: (incident) => incident.requesterPhone ?? '' },
   {
     header: 'MAX ID пользователя',
     width: 20,
@@ -117,8 +115,6 @@ function overdueColumns(now: Date): Column[] {
     { header: 'Обращение', width: 60, value: incident => incident.text },
     { header: 'Округ или город проблемы', width: 30, value: incident => incident.problemMunicipalityName ?? '' },
     { header: 'Населённый пункт', width: 24, value: incident => incident.problemLocality ?? '' },
-    { header: 'Пользователь', width: 28, value: incident => incident.requesterName },
-    { header: 'Телефон', width: 20, value: incident => incident.requesterPhone ?? '' },
   ];
 }
 

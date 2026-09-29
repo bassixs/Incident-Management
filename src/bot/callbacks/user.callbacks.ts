@@ -1,3 +1,4 @@
+import { PRIVACY_NOTICE } from '../../privacy/personal-data';
 import { SessionType } from '@prisma/client';
 
 import type { AppServices } from '../../app/container';
@@ -21,7 +22,6 @@ import {
   mainMenuKeyboard,
   personalDataConsentKeyboard,
   requesterCategoryKeyboard,
-  requesterContactKeyboard,
   requesterLocalityKeyboard,
   requesterMunicipalityKeyboard,
 } from '../keyboards';
@@ -85,15 +85,6 @@ export async function handleUserCallback(
     return 'Действие недоступно';
   }
 
-  if (
-    CONSENT_GATED_ACTIONS.has(payload.action) &&
-    !(await services.legal.hasCurrentAccess(actor.userId))
-  ) {
-    await services.sessions.clear(actor.maxUserId, context.chatId ?? actor.maxUserId);
-    await sendLegalGate(context);
-    return 'Сначала подтвердите документы';
-  }
-
   switch (payload.action) {
     case 'clarify-reply':
       return 'Ответ на уточнение больше не требуется. Статус обращения доступен в разделе «Мои обращения».';
@@ -108,15 +99,8 @@ export async function handleUserCallback(
     }
 
     case 'documents': {
-      const status = await services.legal.status(actor.userId);
-      await services.messages.send(target, {
-        text: legalDocumentsText(status),
-        keyboard: legalDocumentsKeyboard(services.legal.links(), {
-          acceptance: status.required && !status.ready && status.documentsAvailable
-            ? (status.agreementAccepted ? 'consent' : 'agreement') : undefined,
-        }),
-      });
-      return undefined;
+      await services.messages.send(target, { text: PRIVACY_NOTICE, keyboard: mainMenuKeyboard() });
+      return;
     }
 
     case 'my-incidents': {
@@ -130,11 +114,6 @@ export async function handleUserCallback(
     }
 
     case 'new': {
-      if (!(await services.legal.hasCurrentAccess(actor.userId))) {
-        await services.sessions.clear(actor.maxUserId, context.chatId ?? actor.maxUserId);
-        await sendLegalGate(context);
-        return 'Требуется подтверждение документов';
-      }
       await beginNewIncident(context);
       return undefined;
     }
@@ -154,81 +133,11 @@ export async function handleUserCallback(
       return `Оценка ${rating} из 5 сохранена`;
     }
 
-    case 'legal-continue': {
-      const status = await services.legal.status(actor.userId);
-      const links = services.legal.links();
-      if (!status.required) {
-        await services.messages.send(target, {
-          text: legalDocumentsText(status),
-          keyboard: legalDocumentsKeyboard(links),
-        });
-        return undefined;
-      }
-      if (!status.agreementAccepted) {
-        if (!links.userAgreement) throw new ValidationError('Документ временно недоступен.');
-        await services.messages.send(target, {
-          text: agreementAcceptanceText(services.legal.agreementVersion),
-          keyboard: agreementAcceptanceKeyboard(links.userAgreement),
-        });
-        return undefined;
-      }
-      if (!status.consentAccepted) {
-        if (!links.personalDataConsent) throw new ValidationError('Документ временно недоступен.');
-        await services.messages.send(target, {
-          text: personalDataConsentText(services.config.LEGAL_DOCUMENT_VERSION),
-          keyboard: personalDataConsentKeyboard(links.personalDataConsent),
-        });
-        return undefined;
-      }
-      await beginNewIncident(context);
-      return undefined;
-    }
-
-    case 'accept-agreement': {
-      const links = services.legal.links();
-      if (!links.personalDataConsent) throw new ValidationError('Документ временно недоступен.');
-      await services.legal.acceptUserAgreement({
-        userId: actor.userId,
-        maxUserId: actor.maxUserId,
-        sourceCallbackId: context.callbackId,
-        sourceMessageId: context.messageId,
-        sourceChatId: context.chatId,
-      });
-      if (context.messageId) {
-        await services.messages.finalizeCard(
-          context.messageId,
-          `Пользовательское соглашение редакции ${services.legal.agreementVersion} принято.`,
-        );
-      }
-      if ((await services.legal.status(actor.userId)).consentAccepted) {
-        await beginNewIncident(context);
-        return 'Соглашение принято';
-      }
-      await services.messages.send(target, {
-        text: personalDataConsentText(services.config.LEGAL_DOCUMENT_VERSION),
-        keyboard: personalDataConsentKeyboard(links.personalDataConsent),
-      });
-      return 'Соглашение принято';
-    }
-
-    case 'accept-consent': {
-      await services.legal.acceptPersonalDataConsent({
-        userId: actor.userId,
-        maxUserId: actor.maxUserId,
-        sourceCallbackId: context.callbackId,
-        sourceMessageId: context.messageId,
-        sourceChatId: context.chatId,
-      });
-      if (context.messageId) {
-        await services.messages.finalizeCard(
-          context.messageId,
-          `Согласие на обработку персональных данных редакции ${services.config.LEGAL_DOCUMENT_VERSION} предоставлено.`,
-        );
-      }
-      await services.messages.send(target, { text: legalAcceptanceCompleteText() });
-      await beginNewIncident(context);
-      return 'Согласие сохранено';
-    }
+    case 'legal-continue':
+    case 'accept-agreement':
+    case 'accept-consent':
+      await services.messages.send(target, { text: 'Подтверждать документы больше не нужно. '+PRIVACY_NOTICE, keyboard: mainMenuKeyboard() });
+      return;
 
     case 'draft-confirm': {
       const chatId = context.chatId ?? actor.maxUserId;
@@ -241,16 +150,12 @@ export async function handleUserCallback(
       const draft = requireCompleteIncidentDraft(data);
       let incident;
       try {
-        const requester = await services.users.requireByMaxId(actor.maxUserId);
         const draftSession = await services.sessions.find(actor.maxUserId, chatId);
         if (!draftSession) throw new ValidationError('Черновик устарел.');
         incident = await services.incidents.create({
           draftSessionId: draftSession.id,
           requester: {
             maxUserId: actor.maxUserId,
-            name: draft.requesterName,
-            phone: draft.requesterPhone,
-            username: requester.username,
           },
           text: draft.draftText,
           userSelectedCategoryId: draft.selectedCategoryId,
@@ -351,8 +256,6 @@ export async function handleUserCallback(
       );
       const draft = requireCompleteIncidentDraft(data);
       const fieldLabels: Record<string, string> = {
-        name: 'ФИО',
-        phone: 'номер телефона',
         category: 'сфера обращения',
         location: 'территория и населённый пункт',
         text: 'текст обращения',
@@ -364,27 +267,10 @@ export async function handleUserCallback(
         await services.messages.finalizeCard(context.messageId, `Исправляется: ${fieldLabel}.`);
       }
       switch (payload.argument) {
-        case 'name':
-        case 'phone':
         case 'text':
-          await services.sessions.start({
-            maxUserId: actor.maxUserId,
-            chatId,
-            type: SessionType.WAITING_INCIDENT_EDIT_VALUE,
-            data: { ...draft, draftEditField: payload.argument },
-          });
-          await services.messages.send(target, {
-            text:
-              payload.argument === 'name'
-                ? requesterNamePromptText()
-                : payload.argument === 'phone'
-                  ? requesterPhonePromptText()
-                  : 'Отправьте новый текст обращения одним сообщением.',
-            ...(payload.argument === 'phone'
-              ? { keyboard: requesterContactKeyboard() }
-              : {}),
-          });
-          return undefined;
+          await services.sessions.start({ maxUserId: actor.maxUserId, chatId, type: SessionType.WAITING_INCIDENT_EDIT_VALUE, data: { ...draft, draftEditField: 'text' } });
+          await services.messages.send(target, { text: 'Отправьте новый текст обращения без персональных данных.' });
+          return;
         case 'category': {
           const categories = await services.categories.listActive();
           await services.sessions.start({
@@ -668,23 +554,6 @@ export async function handleUserCallback(
   }
 }
 
-async function sendLegalGate(context: UserCallbackContext): Promise<void> {
-  const { services, actor } = context;
-  const status = await services.legal.status(actor.userId);
-  await services.messages.send(
-    { userId: actor.maxUserId },
-    {
-      text: status.agreementAccepted
-        ? personalDataConsentText(services.config.LEGAL_DOCUMENT_VERSION)
-        : legalGateText(),
-      keyboard: legalDocumentsKeyboard(services.legal.links(), {
-        acceptance: status.required && !status.ready && status.documentsAvailable
-          ? (status.agreementAccepted ? 'consent' : 'agreement') : undefined,
-      }),
-    },
-  );
-}
-
 async function beginNewIncident(context: UserCallbackContext): Promise<void> {
   const { services, actor } = context;
   const target = { userId: actor.maxUserId } as const;
@@ -697,58 +566,23 @@ async function beginNewIncident(context: UserCallbackContext): Promise<void> {
     return;
   }
   await services.sessions.clear(actor.maxUserId, context.chatId ?? actor.maxUserId);
-  const requester = await services.users.requireByMaxId(actor.maxUserId);
-  if (requester.requesterName && requester.requesterPhone) {
-    const categories = await services.categories.listActive();
-    await services.sessions.start({
-      maxUserId: actor.maxUserId,
-      chatId: context.chatId ?? actor.maxUserId,
-      type: SessionType.WAITING_INCIDENT_SELECTION,
-      data: {
-        requesterName: requester.requesterName,
-        requesterPhone: requester.requesterPhone,
-      },
-    });
-    await services.messages.send(target, {
-      text: [
-        'Использую сохранённые ФИО и телефон. Их можно проверить и при необходимости изменить в итоговой карточке.',
-        '',
-        categoryPromptText(categories.length),
-      ].join('\n'),
-      keyboard: requesterCategoryKeyboard(categories, 0),
-    });
-    return;
-  }
-  await services.sessions.start({
-    maxUserId: actor.maxUserId,
-    chatId: context.chatId ?? actor.maxUserId,
-    type: requester.requesterName ? SessionType.WAITING_REQUESTER_PHONE : SessionType.WAITING_REQUESTER_NAME,
-    data: {
-      ...(requester.requesterName ? { requesterName: requester.requesterName } : {}),
-      ...(requester.requesterPhone ? { requesterPhone: requester.requesterPhone } : {}),
-    },
-  });
-  await services.messages.send(target, {
-    text: requester.requesterName ? requesterPhonePromptText() : requesterNamePromptText(),
-    ...(requester.requesterName ? { keyboard: requesterContactKeyboard() } : {}),
-  });
+  const categories = await services.categories.listActive();
+  await services.sessions.start({ maxUserId: actor.maxUserId, chatId: context.chatId ?? actor.maxUserId, type: SessionType.WAITING_INCIDENT_SELECTION, data: {} });
+  await services.messages.send(target, { text: PRIVACY_NOTICE+'\n\n'+categoryPromptText(categories.length), keyboard: requesterCategoryKeyboard(categories, 0) });
 }
 
 async function requireSelectionDraft(
   services: AppServices,
   maxUserId: bigint,
   chatId: bigint | undefined,
-): Promise<SessionData & { requesterName: string; requesterPhone: string }> {
+): Promise<SessionData> {
   const data = await requireDraftForSession(
     services,
     maxUserId,
     chatId ?? maxUserId,
     SessionType.WAITING_INCIDENT_SELECTION,
   );
-  if (!data.requesterName || !data.requesterPhone) {
-    throw new ValidationError('Черновик устарел. Начните создание обращения заново.');
-  }
-  return { ...data, requesterName: data.requesterName, requesterPhone: data.requesterPhone };
+  return data;
 }
 
 async function requireDraftForSession(
@@ -788,8 +622,6 @@ async function startIncidentTextSession(
   maxUserId: bigint,
   chatId: bigint | undefined,
   data: SessionData & {
-    requesterName: string;
-    requesterPhone: string;
     selectedCategoryId: string | null;
     problemMunicipalityCode: string;
     problemMunicipalityName: string;

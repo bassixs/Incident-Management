@@ -22,11 +22,11 @@ export class UserService {
   async upsertFromMax(maxUser: Pick<MaxUser, 'user_id' | 'name' | 'username'>, tx?: PrismaLike): Promise<User> {
     const client = tx ?? this.prisma;
     const maxUserId = BigInt(maxUser.user_id);
-    const displayName = maxUser.name?.trim() || `User ${maxUser.user_id}`;
+    const displayName = 'Житель';
     return client.user.upsert({
       where: { maxUserId },
-      create: { maxUserId, displayName, username: maxUser.username ?? null },
-      update: { displayName, username: maxUser.username ?? null },
+      create: { maxUserId, displayName, username: null },
+      update: { username: null, requesterName: null, requesterPhone: null },
     });
   }
 
@@ -48,12 +48,15 @@ export class UserService {
   ): Promise<User> {
     return (tx ?? this.prisma).user.update({
       where: { maxUserId },
-      data: { requesterName, requesterPhone },
+      data: { requesterName: null, requesterPhone: null },
     });
   }
 
-  async identity(maxUser: Pick<MaxUser, 'user_id' | 'name' | 'username'>): Promise<ActorIdentity> {
-    const user = await this.upsertFromMax(maxUser);
+  async identity(maxUser: Pick<MaxUser, 'user_id' | 'name' | 'username'>, workingEmployee = false): Promise<ActorIdentity> {
+    let user = await this.upsertFromMax(maxUser);
+    if ((workingEmployee || resolveRoles(user.maxUserId, user.roles).some(role => role !== 'REQUESTER')) && maxUser.name && maxUser.name !== 'Житель') {
+      user = await this.prisma.user.update({ where: { id: user.id }, data: { displayName: maxUser.name.trim() } });
+    }
     return { user, roles: resolveRoles(user.maxUserId, user.roles) };
   }
 

@@ -1,4 +1,5 @@
 import { AsyncActivity } from '../utils/async-activity';
+import { minimiseInbound } from '../privacy/inbound-privacy';
 import { getConfig } from '../config';
 import { InboxStatus, Prisma, type PrismaClient } from '@prisma/client';
 
@@ -55,13 +56,15 @@ export class UpdateDispatcher {
     });
     if (legacy) return { key, fresh: false };
 
+    const minimalUpdate = await minimiseInbound(update, this.prisma);
+
     try {
       const row = await this.prisma.inboundUpdate.create({
         data: {
           externalUpdateKey: key,
           updateType: update.update_type,
           partitionKey: updatePartition(update),
-          payload: JSON.parse(JSON.stringify(update)) as Prisma.InputJsonValue,
+          payload: JSON.parse(JSON.stringify(minimalUpdate)) as Prisma.InputJsonValue,
         },
       });
       return { id: row.id, key, fresh: true };
@@ -172,6 +175,7 @@ export class UpdateDispatcher {
           processedAt: new Date(),
           lockedAt: null,
           lastError: null,
+          payload: {},
         },
       });
     } catch (error) {

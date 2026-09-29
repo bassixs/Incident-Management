@@ -1,4 +1,5 @@
 import { reportActionError } from '../../utils/errors';
+import { PRIVACY_REJECTION } from '../../privacy/personal-data';
 import type { Context } from '@maxhub/max-bot-api';
 
 import type { AppServices } from '../../app/container';
@@ -28,6 +29,10 @@ export async function handleMessageUpdate(services: AppServices, ctx: Context): 
   const message = update.message;
   const sender = message?.sender;
   if (!message || !sender || sender.is_bot) return;
+  if ((update as unknown as { privacyRejected?: boolean }).privacyRejected) {
+    await services.messages.send({ userId: BigInt(sender.user_id) }, { text: PRIVACY_REJECTION });
+    return;
+  }
 
   const dialog = isDialog(message);
   // In a dialog MAX may omit chat_id. The author's user id is then an
@@ -79,16 +84,7 @@ export async function handleMessageUpdate(services: AppServices, ctx: Context): 
   }
 
   if (dialog) {
-    let contactInfo: { tel?: string; fullName?: string } | undefined;
-    try {
-      contactInfo = ctx.contactInfo;
-    } catch (error) {
-      log.warn(
-        { maxUserId: actor.maxUserId.toString() },
-        `invalid MAX contact attachment: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-    await handleRequesterMessage(services, actor, chatId, message, contactInfo);
+    await handleRequesterMessage(services, actor, chatId, message);
     return;
   }
 

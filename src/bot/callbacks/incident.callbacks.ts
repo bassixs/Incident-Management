@@ -64,6 +64,20 @@ export async function handleIncidentCallback(
   );
 
   switch (payload.action) {
+    case 'privacy-pass': {
+      assertDispatcher(services, actor, chatId);
+      await services.distributionQueue.claim(actor, chatId, incident.id);
+      if (payload.argument !== 'confirm') {
+        await services.messages.send({ chatId }, {
+          text: `${incident.publicCode}: проверьте весь текст и каждую фотографию. Нет ФИО, телефонов, документов, лиц и других персональных данных? Если данные есть — выберите «Отклонить» и причину «Персональные данные».`,
+          keyboard: [[{ type: 'callback', text: 'Проверено, персональных данных нет', payload: `incident:privacy-pass:${incident.id}:confirm` }], [{ type: 'callback', text: 'Отмена', payload: `incident:cancel:${incident.id}` }]],
+        });
+        return;
+      }
+      await services.distribution.confirmPrivacyCheck(incident.id, actor);
+      await services.messages.send({ chatId }, { text: `${incident.publicCode}: проверка выполнена. Можно распределить обращение.` });
+      return 'Проверка сохранена';
+    }
     case 'personal':
       return withPersonalWorkLock(services, actor.maxUserId, () => invitePersonalWork(services, actor, chatId, incident.id));
     case 'review-take': {

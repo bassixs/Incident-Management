@@ -8,6 +8,7 @@
  */
 
 export const INCIDENT_ACTIONS = [
+  'privacy-pass',
   'personal',
   'action-confirm',
   'action-edit',

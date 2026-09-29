@@ -20,7 +20,7 @@ export function mainMenuKeyboard(): Button[][] {
   return [
     [button.callback('📝 Создать обращение', userCallback('new'))],
     [button.callback('🔎 Мои обращения', userCallback('my-incidents'))],
-    [button.callback('📄 Документы', userCallback('documents'))],
+    [button.callback('Об обработке данных', userCallback('documents'))],
     [button.callback('ℹ️ Правила', userCallback('rules'))],
   ];
 }
@@ -71,11 +71,6 @@ export function personalDataConsentKeyboard(url: string): Button[][] {
     ],
     [button.callback('Главное меню', userCallback('menu'))],
   ];
-}
-
-/** MAX asks the account owner before sending the contact bound to the account. */
-export function requesterContactKeyboard(): Button[][] {
-  return [[button.requestContact('📱 Поделиться контактом')]];
 }
 
 /** Сферы shown per page of the requester's picker. */
@@ -195,8 +190,6 @@ export function incidentDraftConfirmationKeyboard(): Button[][] {
 /** Choose exactly one draft field; changing it never clears the other fields. */
 export function incidentDraftEditKeyboard(hasPhoto: boolean): Button[][] {
   return [
-    [button.callback('ФИО', userCallback('draft-field', 'name'))],
-    [button.callback('Номер телефона', userCallback('draft-field', 'phone'))],
     [button.callback('Сфера обращения', userCallback('draft-field', 'category'))],
     [button.callback('Территория и населённый пункт', userCallback('draft-field', 'location'))],
     [button.callback('Текст обращения', userCallback('draft-field', 'text'))],
@@ -232,6 +225,7 @@ export function answerRatingKeyboard(incidentId: string): Button[][] {
 export function distributionKeyboard(incidentId: string): Button[][] {
   return [
     [button.callback('Работать лично', incidentCallback('personal', incidentId))],
+    [button.callback('Текст и фото проверены: персональных данных нет', incidentCallback('privacy-pass', incidentId))],
     [button.callback('Распределить', incidentCallback('assign', incidentId), { intent: 'positive' })],
     [button.callback('Изменить тему', incidentCallback('topic', incidentId))],
     [button.callback('Освободить обращение', `queue:release:${incidentId}`)],

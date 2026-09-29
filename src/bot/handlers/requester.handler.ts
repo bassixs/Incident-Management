@@ -1,3 +1,4 @@
+import { assertNoPersonalData, PRIVACY_REJECTION } from '../../privacy/personal-data';
 import { reportActionError } from '../../utils/errors';
 import { hasPrivateWorkAccess } from '../../users/private-work-access';
 import { SessionType } from '@prisma/client';
@@ -16,7 +17,6 @@ import {
   legalDocumentsKeyboard,
   mainMenuKeyboard,
   requesterCategoryKeyboard,
-  requesterContactKeyboard,
 } from '../keyboards';
 import {
   requireCompleteIncidentDraft,
@@ -44,12 +44,11 @@ export async function handleRequesterMessage(
   contactInfo?: { tel?: string; fullName?: string },
 ): Promise<void> {
   const target = { userId: actor.maxUserId } as const;
-  const sharedContact = message.body.attachments?.find((attachment) => attachment.type === 'contact');
-  const sharedMaxUserId = sharedContact?.type === 'contact' ? sharedContact.payload.tam_info?.user_id : undefined;
-  if (sharedMaxUserId !== undefined && BigInt(sharedMaxUserId) !== actor.maxUserId) {
-    // A manually forwarded contact may belong to someone else. Only the
-    // account owner's own contact is allowed to fill their profile.
-    contactInfo = undefined;
+  if (message.body.attachments?.some(a => a.type === 'contact')) {
+    await services.messages.send(target, { text: PRIVACY_REJECTION }); return;
+  }
+  try { assertNoPersonalData(message.body.text ?? ''); } catch {
+    await services.messages.send(target, { text: PRIVACY_REJECTION }); return;
   }
 
   if (await services.bans.isBanned(actor.maxUserId)) {
@@ -70,31 +69,6 @@ export async function handleRequesterMessage(
     return;
   }
 
-  if (
-    (session.type === SessionType.WAITING_REQUESTER_NAME ||
-      session.type === SessionType.WAITING_REQUESTER_PHONE ||
-      session.type === SessionType.WAITING_INCIDENT_SELECTION ||
-      session.type === SessionType.WAITING_CUSTOM_LOCALITY ||
-      session.type === SessionType.WAITING_INCIDENT_TEXT ||
-      session.type === SessionType.WAITING_INCIDENT_CONFIRMATION ||
-      session.type === SessionType.WAITING_INCIDENT_EDIT_SELECTION ||
-      session.type === SessionType.WAITING_INCIDENT_EDIT_VALUE) &&
-    !(await services.legal.hasCurrentAccess(actor.userId))
-  ) {
-    await services.sessions.clear(actor.maxUserId, chatId);
-    const legalStatus = await services.legal.status(actor.userId);
-    await services.messages.send(target, {
-      text: legalStatus.agreementAccepted
-        ? personalDataConsentText(services.config.LEGAL_DOCUMENT_VERSION)
-        : legalGateText(),
-      keyboard: legalDocumentsKeyboard(services.legal.links(), {
-        acceptance: legalStatus.required && !legalStatus.ready && legalStatus.documentsAvailable
-          ? (legalStatus.agreementAccepted ? 'consent' : 'agreement') : undefined,
-      }),
-    });
-    return;
-  }
-
   const data = services.sessions.readData(session);
   const media = classifyAttachments(message.body.attachments);
   const text = message.body.text ?? '';
@@ -109,75 +83,14 @@ export async function handleRequesterMessage(
     return;
   }
 
-  if (session.type === SessionType.WAITING_REQUESTER_NAME) {
-    try {
-      if (sharedContact || contactInfo || media.length > 0) {
-        throw new ValidationError('Сначала отправьте фамилию, имя и отчество (если есть) обычным текстом. Телефон укажете на следующем шаге.');
-      }
-      const requesterName = normaliseRequesterName(text);
-      await services.sessions.start({
-        maxUserId: actor.maxUserId,
-        chatId,
-        type: SessionType.WAITING_REQUESTER_PHONE,
-        data: { requesterName },
-      });
-      await services.messages.send(target, {
-        text: requesterPhonePromptText(),
-        keyboard: requesterContactKeyboard(),
-      });
-    } catch (error) {
-      await reportActionError(error, () => services.messages.send(target, {
-        text: error instanceof ValidationError ? error.message : 'Не удалось сохранить ФИО. Попробуйте ещё раз.',
-      }));
-    }
-    return;
+  if ([SessionType.WAITING_REQUESTER_NAME, SessionType.WAITING_REQUESTER_PHONE].includes(session.type as any)) {
+    await services.sessions.clear(actor.maxUserId, chatId); await sendMainMenu(services, actor); return;
   }
-
-  if (session.type === SessionType.WAITING_REQUESTER_PHONE) {
-    try {
-      if (!data.requesterName) throw new ValidationError('Черновик устарел. Начните создание обращения заново.');
-      if (!contactInfo?.tel && media.length > 0) {
-        throw new ValidationError('Введите номер текстом или нажмите «Поделиться контактом».');
-      }
-      const requesterPhone = normaliseRequesterPhone(contactInfo?.tel ?? text);
-      await continueToCategorySelection(
-        services,
-        actor.maxUserId,
-        chatId,
-        data.requesterName,
-        requesterPhone,
-      );
-    } catch (error) {
-      await reportActionError(error, () => services.messages.send(target, {
-        text: error instanceof ValidationError ? error.message : 'Не удалось сохранить номер. Попробуйте ещё раз.',
-      }));
-    }
-    return;
-  }
-
 
   if (session.type === SessionType.WAITING_INCIDENT_EDIT_VALUE) {
     try {
       const draft = requireCompleteIncidentDraft(data);
       switch (data.draftEditField) {
-        case 'name': {
-          if (sharedContact || contactInfo || media.length > 0) throw new ValidationError('Отправьте ФИО обычным текстовым сообщением.');
-          await showIncidentDraftPreview(services, actor.maxUserId, chatId, {
-            ...draft,
-            requesterName: normaliseRequesterName(text),
-          });
-          return;
-        }
-        case 'phone': {
-          if (!contactInfo?.tel && media.length > 0) {
-            throw new ValidationError('Введите номер текстом или нажмите «Поделиться контактом».');
-          }
-          await showIncidentDraftPreview(services, actor.maxUserId, chatId, {
-            ...draft,
-            requesterPhone: normaliseRequesterPhone(contactInfo?.tel ?? text),
-          });
-          return;
-        }
         case 'text': {
           if (media.length > 0) {
             throw new ValidationError('Отправьте только новый текст. Фотографии меняются отдельной кнопкой.');
@@ -223,8 +136,6 @@ export async function handleRequesterMessage(
       return;
     }
     if (
-      !data.requesterName ||
-      !data.requesterPhone ||
       !data.problemMunicipalityCode ||
       !data.problemMunicipalityName
     ) {
@@ -257,15 +168,6 @@ export async function handleRequesterMessage(
     return;
   }
 
-  if (!data.requesterName || !data.requesterPhone) {
-    await services.sessions.clear(actor.maxUserId, chatId);
-    await services.messages.send(target, {
-      text: 'Черновик устарел. Начните создание обращения заново.',
-      keyboard: mainMenuKeyboard(),
-    });
-    return;
-  }
-
   try {
     const validated = services.incidents.validateSubmission(text, media);
     await showIncidentDraftPreview(services, actor.maxUserId, chatId, {
@@ -287,29 +189,6 @@ export async function handleRequesterMessage(
       text: 'Не удалось сохранить черновик. Попробуйте ещё раз позже.',
     }));
   }
-}
-
-async function continueToCategorySelection(
-  services: AppServices,
-  maxUserId: bigint,
-  chatId: bigint,
-  requesterName: string,
-  requesterPhone: string,
-): Promise<void> {
-  const categories = await services.categories.listActive();
-  await services.sessions.start({
-    maxUserId,
-    chatId,
-    type: SessionType.WAITING_INCIDENT_SELECTION,
-    data: { requesterName, requesterPhone },
-  });
-  await services.messages.send(
-    { userId: maxUserId },
-    {
-      text: categoryPromptText(categories.length),
-      keyboard: requesterCategoryKeyboard(categories, 0),
-    },
-  );
 }
 
 /** `/start` and `bot_started`. */

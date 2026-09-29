@@ -1,3 +1,4 @@
+import { assertNoPersonalData } from '../privacy/personal-data';
 import { randomUUID } from 'node:crypto';
 import { queueDistribution, queueSubscriptionInvite } from '../delivery/workflow-outbox';
 import type { Tx } from '../database/prisma';
@@ -19,7 +20,7 @@ const log = moduleLogger('incidents');
 
 export type CreateIncidentInput = {
   draftSessionId?: string;
-  requester: { maxUserId: bigint; name: string; phone: string; username?: string | null };
+  requester: { maxUserId: bigint; name?: string; phone?: string; username?: string | null };
   text: string;
   userSelectedCategoryId?: string | null;
   problemMunicipalityCode?: string | null;
@@ -132,6 +133,7 @@ export class IncidentService {
     if (unicodeLength(normalised) > config.INCIDENT_MAX_LENGTH) {
       throw new ValidationError(tooLongMessage(config.INCIDENT_MAX_LENGTH), { reason: 'too_long' });
     }
+    assertNoPersonalData(normalised);
     return { text: normalised };
   }
 
@@ -158,8 +160,9 @@ export class IncidentService {
   async create(input: CreateIncidentInput): Promise<Incident> {
     const config = getConfig();
     const { text } = this.validateSubmission(input.text, input.media ?? []);
-    const requesterName = normaliseRequesterName(input.requester.name);
-    const requesterPhone = normaliseRequesterPhone(input.requester.phone);
+    const requesterName = 'Житель';
+    const requesterPhone = null;
+    assertNoPersonalData(input.problemLocality ?? '');
     await this.assertNotBanned(input.requester.maxUserId);
 
     const now = new Date();
@@ -186,12 +189,11 @@ export class IncidentService {
       const user = await this.users.upsertFromMax(
         {
           user_id: Number(input.requester.maxUserId),
-          name: input.requester.name,
-          username: input.requester.username ?? null,
+          name: 'Житель',
+          username: null,
         },
         tx,
       );
-      await this.users.saveRequesterProfile(user.maxUserId, requesterName, requesterPhone, tx);
 
       const publicCode = await this.repository.nextPublicCode(tx);
       const created = await this.repository.create(tx, {

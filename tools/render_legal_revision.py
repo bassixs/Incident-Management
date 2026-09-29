@@ -19,7 +19,7 @@ from reportlab.lib.pagesizes import A4
 
 ROOT = Path(__file__).resolve().parents[1]
 LEGAL = ROOT / 'legal'
-VERSION = '2.0'
+VERSION = '3.0'
 DOCUMENTS = ('user-agreement', 'privacy-policy', 'personal-data-consent')
 BRAND = 'На связи_регион40'
 

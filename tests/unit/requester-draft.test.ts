@@ -31,8 +31,8 @@ describe('requester incident draft', () => {
       'Благоустройство',
     );
 
-    expect(text).toContain('Иванов Иван Иванович');
-    expect(text).toContain('+7 900 123-45-67');
+    expect(text).not.toContain('Иванов Иван Иванович');
+    expect(text).not.toContain('+7 900 123-45-67');
     expect(text).toContain('Благоустройство');
     expect(text).toContain('Жуковский округ → Кременки');
     expect(text).toContain('Не работает фонарь');
@@ -47,8 +47,6 @@ describe('requester incident draft', () => {
 
     const edit = incidentDraftEditKeyboard(true);
     expect(labels(edit)).toEqual([
-      'ФИО',
-      'Номер телефона',
       'Сфера обращения',
       'Территория и населённый пункт',
       'Текст обращения',

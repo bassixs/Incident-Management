@@ -3,7 +3,7 @@ import { MaxError } from '@maxhub/max-bot-api';
 import { showIncidentDraftPreview } from '../../src/bot/requester-draft';
 
 const draft = {
-  requesterName: 'Иванов Иван', requesterPhone: '+7 900 111-22-33', selectedCategoryId: null,
+  selectedCategoryId: null,
   problemMunicipalityCode: 'KALUGA_CITY', problemMunicipalityName: 'Город Калуга',
   problemLocality: null, draftText: 'Не работает фонарь',
 };

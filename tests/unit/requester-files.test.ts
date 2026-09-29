@@ -52,7 +52,7 @@ it('rejects a mixed photo/file message with a command caption without executing 
 it.each(['image', 'contact'])('keeps normal %s messages available to the requester flow', async type => {
   const { services, ctx, message } = setup([{ type, payload: {} }]);
   await handleMessageUpdate(services as never, ctx as never);
-  expect(handleRequesterMessage).toHaveBeenCalledWith(services, expect.anything(), 5001n, message, ctx.contactInfo);
+  expect(handleRequesterMessage).toHaveBeenCalledWith(services, expect.anything(), 5001n, message);
   expect(services.messages.send).not.toHaveBeenCalled();
 });
 
@@ -66,7 +66,7 @@ it('routes staff files in working chats to the operator handler', async () => {
 it.each(['https://max.ru/example', 'Проблема: example.org'])('accepts resident links with MAX previews: %s', async text => {
   const { services, ctx, message } = setup([{ type: 'image', payload: { url: 'https://photo.test/a' } }, { type: 'share', payload: { url: 'https://example.org', token: 'preview' } }], text);
   await handleMessageUpdate(services as never, ctx as never);
-  expect(handleRequesterMessage).toHaveBeenCalledWith(services, expect.anything(), 5001n, message, ctx.contactInfo);
+  expect(handleRequesterMessage).toHaveBeenCalledWith(services, expect.anything(), 5001n, message);
   expect(services.messages.send).not.toHaveBeenCalled();
 });
 

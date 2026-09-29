@@ -14,8 +14,6 @@ import { incidentDraftPreview } from './views/cards';
 const log = moduleLogger('requester-draft');
 
 export type CompleteIncidentDraft = SessionData & {
-  requesterName: string;
-  requesterPhone: string;
   selectedCategoryId: string | null;
   problemMunicipalityCode: string;
   problemMunicipalityName: string;
@@ -26,8 +24,6 @@ export type CompleteIncidentDraft = SessionData & {
 
 export function requireCompleteIncidentDraft(data: SessionData): CompleteIncidentDraft {
   if (
-    !data.requesterName ||
-    !data.requesterPhone ||
     !data.problemMunicipalityCode ||
     !data.problemMunicipalityName ||
     !data.draftText
@@ -36,8 +32,6 @@ export function requireCompleteIncidentDraft(data: SessionData): CompleteInciden
   }
   return {
     ...data,
-    requesterName: data.requesterName,
-    requesterPhone: data.requesterPhone,
     selectedCategoryId: data.selectedCategoryId ?? null,
     problemMunicipalityCode: data.problemMunicipalityCode,
     problemMunicipalityName: data.problemMunicipalityName,
@@ -66,7 +60,8 @@ export async function showIncidentDraftPreview(
   chatId: bigint,
   data: SessionData,
 ): Promise<void> {
-  const draft = requireCompleteIncidentDraft(data);
+  const { requesterName: _name, requesterPhone: _phone, ...minimal } = data;
+  const draft = requireCompleteIncidentDraft(minimal);
   const { draftEditField: _draftEditField, draftPhotoRetry: _draftPhotoRetry, ...cleanDraft } = draft;
   const category = draft.selectedCategoryId
     ? await services.categories.findById(draft.selectedCategoryId)
@@ -75,7 +70,7 @@ export async function showIncidentDraftPreview(
   try {
     attachments = await loadPreviewPhotos(draft.draftMedia);
     await services.messages.send({ userId: maxUserId }, {
-      text: incidentDraftPreview({ requesterName: draft.requesterName, requesterPhone: draft.requesterPhone,
+      text: incidentDraftPreview({
         problemMunicipalityName: draft.problemMunicipalityName, problemLocality: draft.problemLocality,
         draftText: draft.draftText, photoCount: attachments.length }, category?.name),
       keyboard: incidentDraftConfirmationKeyboard(), immediatePreview: true,

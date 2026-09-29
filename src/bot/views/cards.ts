@@ -1,3 +1,4 @@
+import { PRIVACY_NOTICE } from '../../privacy/personal-data';
 import type { Incident, IncidentAnswer, ResponsibleGroup } from '@prisma/client';
 
 import { leaseText, type LeaseView } from '../../work-queues/leases';
@@ -66,9 +67,6 @@ export function distributionCard(incident: IncidentWithRelations): string {
     'Пользователь:',
     incident.requesterName,
     '',
-    'Телефон:',
-    incident.requesterPhone ?? 'не указан',
-    '',
     'Тема обращения:',
     incident.userSelectedCategory?.name ?? 'Иное',
     '',
@@ -97,12 +95,6 @@ export function distributionResolvedNotice(
     '',
     'Ответственная группа:',
     group.name,
-    '',
-    'Заявитель:',
-    incident.requesterName,
-    '',
-    'Телефон:',
-    incident.requesterPhone ?? 'не указан',
     '',
     'Распределил:',
     dispatcherName,
@@ -135,12 +127,6 @@ export function sectorCard(incident: IncidentWithRelations, group: ResponsibleGr
     '',
     'Ответственная группа:',
     group.name,
-    '',
-    'Заявитель:',
-    incident.requesterName,
-    '',
-    'Телефон:',
-    incident.requesterPhone ?? 'не указан',
     '',
     'Территория проблемы:',
     problemLocationText(incident),
@@ -186,12 +172,6 @@ export function reviewCard(
     '',
     'Ответственная группа:',
     group?.name ?? '—',
-    '',
-    'Заявитель:',
-    incident.requesterName,
-    '',
-    'Телефон:',
-    incident.requesterPhone ?? 'не указан',
     '',
     'Территория проблемы:',
     problemLocationText(incident),
@@ -302,10 +282,8 @@ export function incidentLookupCard(incident: IncidentWithRelations, lease?: Leas
     ...(incident.revisionReason ? ['', 'Последняя причина возврата:', incident.revisionReason] : []),
     '',
     'Автор:',
-    `${incident.requesterName} (${incident.requesterMaxUserId.toString()})`,
+    incident.requesterMaxUserId.toString(),
     '',
-    'Телефон:',
-    incident.requesterPhone ?? 'не указан',
   ].join('\n');
 }
 
@@ -317,7 +295,7 @@ export function rulesText(): string {
   return [
     '📋 Правила подачи сообщения через бота Калужской области по организации обратной связи с жителями:',
     '',
-    'Подача сообщения через бот означает согласие с данными правилами.',
+    'Не передавайте персональные данные. Правила приёма сообщений:',
     '',
     MESSAGE_LEGAL_NOTICE,
     '',
@@ -343,12 +321,12 @@ export function rulesText(): string {
     '7. Сообщения, несущие урон чести и достоинству других граждан.',
     '',
     '8. В сообщении отсутствует адрес проблемы.',
+    '9. Текст или фотографии содержат персональные данные: ФИО, телефоны, документы, лица или другие личные сведения.',
     '',
     'Как подать сообщение:',
     '',
-    '1. Перед первым обращением ознакомьтесь с документами и подтвердите согласие.',
-    '2. При первом обращении укажите фамилию, имя и действующий номер телефона — это обязательные поля.',
-    '   Номер можно ввести вручную или передать кнопкой «Поделиться контактом» в MAX.',
+    '1. Нажмите «Создать обращение».',
+    '2. Заполнять профиль и подтверждать документы не нужно.',
     '3. Выберите сферу. Если не уверены, нажмите «Иное».',
     '4. Укажите город или округ, где возникла проблема, и при необходимости населённый пункт.',
     `5. Опишите одну проблему понятным текстом — не более ${config.INCIDENT_MAX_LENGTH} символов. Укажите адрес (улицу, номер дома) или точное место, если адреса нет.`,
@@ -363,7 +341,7 @@ export function rulesText(): string {
     '• после регистрации бот выдаст номер обращения;',
     '• состояние обращения доступно в разделе «Мои обращения»;',
     '• итоговый ответ придёт в этот личный чат;',
-    '• ФИО и телефон сохраняются для следующих обращений; перед отправкой их всегда можно исправить.',
+    PRIVACY_NOTICE,
   ].join('\n');
 }
 
@@ -374,13 +352,13 @@ export function greetingText(): string {
     '',
     'Я помогу вам сообщить о проблеме в Калужской области и направить сообщение органам исполнительной власти и местного самоуправления региона.',
     '',
-    'Перед первым обращением ознакомьтесь с документами и отдельно подтвердите согласие на обработку персональных данных и их передачу компетентным органам и организациям, указанным в документах.',
+    PRIVACY_NOTICE,
     '',
     MESSAGE_LEGAL_NOTICE,
     '',
     'Как это работает:',
     '',
-    '1. При первом обращении вы укажете ФИО и номер телефона. Бот сохранит их для следующих обращений.',
+    '1. Нажмите «Создать обращение». Анкету заполнять не нужно.',
     '2. Выберете сферу и место, где возникла проблема.',
     '3. Опишете ситуацию и при необходимости приложите фотографии.',
     '4. Проверите итоговую карточку и сможете исправить любое поле.',
@@ -393,8 +371,8 @@ export function greetingText(): string {
 }
 
 export type IncidentDraftView = {
-  requesterName: string;
-  requesterPhone: string;
+  requesterName?: string;
+  requesterPhone?: string;
   problemMunicipalityName: string;
   problemLocality?: string | null;
   draftText: string;
@@ -405,12 +383,6 @@ export type IncidentDraftView = {
 export function incidentDraftPreview(draft: IncidentDraftView, categoryName?: string | null): string {
   return [
     '🔎 ПРОВЕРЬТЕ ОБРАЩЕНИЕ',
-    '',
-    'ФИО:',
-    draft.requesterName,
-    '',
-    'Телефон:',
-    draft.requesterPhone,
     '',
     'Сфера обращения:',
     categoryName ?? 'Иное',
@@ -425,6 +397,7 @@ export function incidentDraftPreview(draft: IncidentDraftView, categoryName?: st
     '',
     `Фотографии: ${draft.photoCount > 0 ? draft.photoCount : 'нет'}`,
     '',
+    PRIVACY_NOTICE,
     'Обращение ещё не отправлено. Если всё указано правильно, нажмите «Всё верно».',
   ].join('\n');
 }

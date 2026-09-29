@@ -165,6 +165,9 @@ export class DistributionService {
     await this.prisma.$transaction(async (tx) => {
       await acquireAdvisoryLock(tx, ...CLAIM_LOCK);
       assertClaimOwner(await tx.incident.findUniqueOrThrow({ where: { id: incidentId } }), actor.maxUserId);
+      if (!(await tx.incidentHistory.findFirst({ where: { incidentId, action: 'PRIVACY_CHECK_PASSED' }, select: { id: true } }))) {
+        throw new ConflictError('Сначала проверьте текст и все фотографии и подтвердите отсутствие персональных данных.');
+      }
       const claimed = await this.repository.transition(tx, incidentId, IncidentStatus.DISTRIBUTION, {
         status: IncidentStatus.ASSIGNED,
         assignedGroupId: group.id,
@@ -214,6 +217,18 @@ export class DistributionService {
   }
 
   /** Keep the routing indicator unchanged when the answer reaches the requester. */
+  async confirmPrivacyCheck(incidentId: string, actor: Actor): Promise<void> {
+    await this.prisma.$transaction(async tx => {
+      await acquireAdvisoryLock(tx, ...CLAIM_LOCK);
+      const incident = await tx.incident.findUniqueOrThrow({ where: { id: incidentId } });
+      if (incident.status !== IncidentStatus.DISTRIBUTION) throw new ConflictError('Обращение уже обработано.');
+      assertClaimOwner(incident, actor.maxUserId);
+      if (!await tx.incidentHistory.findFirst({ where: { incidentId, action: 'PRIVACY_CHECK_PASSED' } })) {
+        await tx.incidentHistory.create({ data: { incidentId, action: 'PRIVACY_CHECK_PASSED', actorMaxUserId: actor.maxUserId, actorRole: actor.role } });
+      }
+    }, TRANSACTION_OPTIONS);
+  }
+
   async markWorked(incident: IncidentWithRelations): Promise<void> {
     if (!incident.distributionMessageId || !incident.assignedGroup || !incident.answers.some(a => a.deliveredAt)) return;
     await this.messages.finalizeCard(
@@ -248,6 +263,8 @@ export class DistributionService {
       }
       const claimed = await this.repository.transition(tx, incidentId, IncidentStatus.DISTRIBUTION, {
         status: IncidentStatus.REJECTED,
+        text: 'Содержание отклонённого сообщения удалено.',
+        problemLocality: null,
         rejectionReason: reason,
         distributionClaimedBy: null, distributionClaimedName: null, distributionClaimUntil: null,
         answeredAt: new Date(),
@@ -266,6 +283,10 @@ export class DistributionService {
         actorRole: actor.role,
         metadata: { reason, dispatcher: actor.displayName },
       }, tx);
+      await tx.incidentAttachment.deleteMany({ where: { incidentId } });
+      await tx.privateWorkItem.deleteMany({ where: { incidentId } });
+      await tx.operatorSession.deleteMany({ where: { incidentId } });
+      await tx.outboundMessage.deleteMany({ where: { incidentId } });
       await queueRejection(tx, incidentId, reason);
       await queueDistributionRefresh(tx, incidentId, 'rejected', true);
     }, TRANSACTION_OPTIONS);

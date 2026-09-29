@@ -23,17 +23,17 @@ describe('requester-facing copy', () => {
   it('explains the current complete submission flow', () => {
     const greeting = greetingText();
     expect(greeting).toContain('чат-бот «На связи_регион40»');
-    expect(greeting).toContain('ФИО и номер телефона');
-    expect(greeting).toContain('сохранит');
+    expect(greeting).toContain('ФИО и телефон указывать не нужно');
+    expect(greeting).toContain('ID в MAX');
     expect(greeting).toContain('сферу и место');
     expect(greeting).toContain('исправить любое поле');
     expect(greeting).toContain('«Мои обращения»');
 
     const rules = rulesText();
-    expect(rules).toContain('ознакомьтесь с документами');
-    expect(rules).toContain('действующий номер телефона');
-    expect(rules).toContain('Поделиться контактом');
-    expect(rules).toContain('следующих обращений');
+    expect(rules).toContain('подтверждать документы не нужно');
+    expect(rules).toContain('Не передавайте персональные данные');
+    expect(rules).toContain('9. Текст или фотографии');
+    expect(rules).toContain('проверку сотрудником');
     expect(rules).toContain('Если не уверены, нажмите «Иное»');
     expect(rules).toContain('Любое поле и фотографии можно исправить');
     expect(rules).toContain('Только после этого обращение будет зарегистрировано');
@@ -42,8 +42,8 @@ describe('requester-facing copy', () => {
 
   it('includes the customer notice and describes explicit consent rather than automatic consent', () => {
     expect(greetingText()).toContain('органам исполнительной власти и местного самоуправления');
-    expect(greetingText()).toContain('отдельно подтвердите согласие');
-    expect(greetingText()).toContain('их передачу компетентным органам и организациям');
+    expect(greetingText()).toContain('ФИО и телефон указывать не нужно');
+    expect(greetingText()).toContain('служебные сведения о его обработке');
     for (const text of [greetingText(), rulesText()]) {
       expect(text).toContain('Чат-бот «На связи_регион40»');
       expect(text).toContain('дополнительный канал обратной связи');
@@ -51,7 +51,7 @@ describe('requester-facing copy', () => {
       expect(text).toContain('02.05.2006');
       expect(text).toContain('59-ФЗ');
     }
-    expect(rulesText()).toContain('Подача сообщения через бот означает согласие с данными правилами');
+    expect(rulesText()).toContain('Не передавайте персональные данные');
     expect(rulesText()).toContain('5. Текст обращения или сообщения не позволяет определить суть предложения, заявления или жалобы.');
     expect(rulesText()).toContain('8. В сообщении отсутствует адрес проблемы.');
     expect(rulesText()).toContain('при этом в сообщении не приводятся новые обстоятельства.');

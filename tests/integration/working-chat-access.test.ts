@@ -81,6 +81,7 @@ describeIntegration('automatic access in configured work chats', () => {
   it('runs assignment, answering and approval through real routers for employees without manual roles', async () => {
     const row = await incident();
     const group = (await h.services.responsibleGroups.findByCode(GROUP_CODES.facility))!;
+    await click(TEST_CHATS.distribution, incidentCallback('privacy-pass', row.id, 'confirm'));
     await click(TEST_CHATS.distribution, incidentCallback('assign-group', row.id, group.id));
     const assignment = (await h.services.sessions.find(86001n, TEST_CHATS.distribution))!.data as any;
     await click(TEST_CHATS.distribution, incidentCallback('action-confirm', row.id, assignment.confirmation.token));
@@ -176,6 +177,7 @@ describeIntegration('automatic access in configured work chats', () => {
   it('does not expose other sectors via lookup, history, resend or copied buttons', async () => {
     const row = await incident(); const group = (await h.services.responsibleGroups.findByCode(GROUP_CODES.facility))!;
     const actor = await resolveActor(h.services, person(), TEST_CHATS.distribution);
+    await h.services.distribution.confirmPrivacyCheck(row.id, actor);
     await h.services.distribution.assign(row.id, group.id, actor);
     for (const name of ['incident', 'history', 'resend']) {
       await command(TEST_CHATS.otherSector, `/${name} ${row.publicCode}`); expect(lastText()).toContain('только обращения');

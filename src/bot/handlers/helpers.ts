@@ -14,13 +14,13 @@ export type ResolvedActor = Actor & { roles: UserRole[]; workingChat?: WorkingCh
 
 /** Upsert the MAX profile and resolve effective roles for this update. */
 export async function resolveActor(services: AppServices, maxUser: MaxUser, workingChatId?: bigint): Promise<ResolvedActor> {
-  const { user, roles: storedRoles } = await services.users.identity(maxUser);
   const workingChat = workingChatId === undefined || maxUser.is_bot ? undefined : await workingChatFor(services, workingChatId);
+  const { user, roles: storedRoles } = await services.users.identity(maxUser, !!workingChat);
   const roles = [...new Set([...storedRoles, ...(workingChat?.roles ?? [])])];
   return {
     userId: user.id,
     maxUserId: user.maxUserId,
-    displayName: user.displayName,
+    displayName: maxUser.name && maxUser.name !== 'Житель' ? maxUser.name.trim() : user.displayName,
     role: roles.join('|'),
     roles,
     ...(workingChat ? { workingChat } : {}),

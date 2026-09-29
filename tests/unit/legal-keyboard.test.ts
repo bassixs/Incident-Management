@@ -21,7 +21,7 @@ describe('legal document keyboards', () => {
   };
 
   it('keeps the document centre permanently visible in the main menu', () => {
-    expect(mainMenuKeyboard().flat().map((button) => button.text)).toContain('📄 Документы');
+    expect(mainMenuKeyboard().flat().map((button) => button.text)).toContain('Об обработке данных');
   });
 
   it('shows three HTTPS documents and accepts the agreement directly', () => {
