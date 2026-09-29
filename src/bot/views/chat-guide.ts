@@ -38,8 +38,8 @@ export async function sendChatGuide(services: AppServices, actor: ResolvedActor,
     if (chat.delivery) guides.push({ name: 'analytics', title: 'Аналитика: отчёты и проблемы доставки' });
   }
   const attachments = await Promise.all(guides.map(async guide => {
-    const originalName = `iskra-${guide.name}-guide.pdf`;
-    const body = await readFile(resolve(__dirname, '../../../output/pdf', originalName));
+    const originalName = `na-svyazi-region40-${guide.name}-guide.pdf`;
+    const body = await readFile(resolve(__dirname, '../../../output/pdf', `iskra-${guide.name}-guide.pdf`));
     return { type: 'FILE' as const, body, originalName };
   }));
   await services.messages.send(dialog ? { userId: actor.maxUserId } : { chatId: chatId! }, {

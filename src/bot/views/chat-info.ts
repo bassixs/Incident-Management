@@ -4,7 +4,7 @@ import type { ResolvedActor } from '../handlers/helpers';
 
 export async function chatInfoText(services: AppServices, actor: ResolvedActor, chatId: bigint, dialog: boolean): Promise<string> {
   if (dialog) return [
-    '«Искра» — помощь с обращением', '',
+    '«На связи_регион40» — помощь с обращением', '',
     '1. Отправьте /start и нажмите «Создать обращение».',
     '2. Ответьте на вопросы бота. Можно добавить фото, файлы не принимаются.',
     '3. Проверьте данные и нажмите «Всё верно». Ответ придёт сюда.', '',

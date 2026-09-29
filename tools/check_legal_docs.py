@@ -1,82 +1,44 @@
-from __future__ import annotations
-
-import zipfile
+"""Check published legal sources, Word/PDF parity and publication hashes."""
 from pathlib import Path
-
+import hashlib
+import json
+import re
 from docx import Document
+from pypdf import PdfReader
 
+ROOT = Path(__file__).resolve().parents[1]
+LEGAL = ROOT / 'legal'
 
-EXPECTED = {
-    "Пользовательское_соглашение_Искра.docx": (
-        "Принимаю пользовательское соглашение",
-        "Согласие на обработку персональных данных запрашивается и фиксируется отдельно",
-        "муниципальный округ, на территории которого находится указанная в обращении проблема",
-    ),
-    "Согласие_на_обработку_ПДн_Искра.docx": (
-        "Даю согласие на обработку персональных данных",
-        "90 (девяноста) календарных дней после направления окончательного ответа",
-        "Распространение персональных данных неограниченному кругу лиц настоящим согласием не разрешается",
-        "серверной инфраструктуры, расположенной на территории Российской Федерации",
-        "Материалами обращения являются муниципальный округ возникновения проблемы, текст обращения",
-        "Эти материалы сами по себе не относятся к персональным данным Пользователя",
-    ),
-    "Политика_обработки_ПДн_Искра.docx": (
-        "Чат-бот не запрашивает округ проживания",
-        "90 (девяноста) календарных дней после его завершения",
-        "серверной инфраструктуры, расположенной на территории Российской Федерации",
-        "Состав обрабатываемых данных и материалов",
-        "Эти материалы сами по себе не относятся к персональным данным Пользователя",
-    ),
-}
+def normalized(text):
+    return re.sub(r'\s+', '', text)
 
+def main():
+    manifest = json.loads((LEGAL / 'manifest.json').read_text(encoding='utf-8'))
+    for name, meta in manifest.items():
+        source = (LEGAL / 'source' / f'{name}.md').read_text(encoding='utf-8')
+        doc = Document(LEGAL / f'{name}.docx')
+        word = '\n'.join(p.text for p in doc.paragraphs)
+        path = LEGAL / 'public' / f'{name}.pdf'
+        pdf = PdfReader(path)
+        text = '\n'.join(p.extract_text() or '' for p in pdf.pages)
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == meta['sha256']
+        assert (LEGAL / 'pdf' / path.name).read_bytes() == path.read_bytes()
+        assert meta['version'] == '2.0'
+        for block in source.strip().split('\n\n'):
+            if block == '<!-- pagebreak -->': continue
+            clean = block.removeprefix('## ').removeprefix('# ')
+            assert normalized(clean) in normalized(word), (name, 'Word text missing', clean[:70])
+            assert normalized(clean) in normalized(text), (name, 'PDF text missing', clean[:70])
+        for current in [word, text]:
+            assert 'На связи_регион40' in current
+            assert not re.search(r'искр[аыой]', current, re.I)
+            assert 'min_digital@adm.kaluga.ru' in current
+            assert '1194027000221' in current
+            assert 'Редакция 2.0 от 29.09.2026' in current
+            assert 'Защитники Отечества' in current
+            assert 'Социального фонда России' in current
+            assert 'сами по себе не относятся' not in current
+        assert all(len(p.extract_text() or '') > 100 for p in pdf.pages), 'Unexpected near-empty page'
+        print(f'OK {name}: {len(pdf.pages)} pages; source, Word, PDF and hash match')
 
-def all_text(doc: Document) -> str:
-    blocks = [p.text for p in doc.paragraphs]
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                blocks.extend(p.text for p in cell.paragraphs)
-    for section in doc.sections:
-        blocks.extend(p.text for p in section.header.paragraphs)
-        blocks.extend(p.text for p in section.footer.paragraphs)
-    return "\n".join(blocks)
-
-
-def main() -> None:
-    root = Path("legal")
-    actual = {p.name for p in root.glob("*.docx") if not p.name.startswith("~$")}
-    assert actual == set(EXPECTED), f"Unexpected DOCX set: {sorted(actual)}"
-
-    for name, required in EXPECTED.items():
-        path = root / name
-        doc = Document(path)
-        text = all_text(doc)
-        assert "Искра" in text and "MAX" in text
-        assert "Сайта" not in text
-        assert "Timeweb" not in text and "TimeWeb" not in text and "ТаймВэб" not in text
-        assert "8.ользователь" not in text
-        assert "ПРОЕКТ" not in text, f"Draft marker remains in {name}"
-        assert "[" not in text and "]" not in text, f"Visible placeholders remain in {name}"
-        assert "Министерство цифрового развития Калужской области" in text
-        assert "ИНН: 4027138814" in text
-        assert "1194027000221" in text and "11944027000221" not in text
-        assert "min_digital@adm.kaluga.ru" in text
-        if name == "Пользовательское_соглашение_Искра.docx":
-            assert "Редакция документа: 1.1" in text and "07.09.2026" in text
-            assert 'поданными через чат-бот «Искра»' in text and '№ 59-ФЗ' in text
-        else:
-            assert "04.09.2026" in text
-        for phrase in required:
-            assert phrase in text, f"Missing phrase in {name}: {phrase}"
-
-        with zipfile.ZipFile(path) as archive:
-            names = set(archive.namelist())
-            assert "word/comments.xml" not in names, f"Unexpected comments in {name}"
-            document_xml = archive.read("word/document.xml")
-            assert b"<w:ins" not in document_xml and b"<w:del" not in document_xml
-
-        print(f"OK {name}: paragraphs={len(doc.paragraphs)}, tables={len(doc.tables)}")
-
-
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__': main()

@@ -38,7 +38,7 @@ CLEANUP_PAGE = ('Очистка: две отдельные команды', [
 
 # Each entry is one page. H = subheading, P = paragraph, C = literal command.
 STAFF = [
-('Как работать с «Искрой»', [
+('Как работать с «На связи_регион40»', [
 ('P', 'Инструкция для сотрудников. Начните с раздела о своём чате. Для ежедневной работы обычно достаточно кнопок под карточкой обращения.'),
 ('H', 'Где что делать'),
 ('P', 'Стр. 2 - распределение: выбрать организацию.\nСтр. 3 - профильный чат: подготовить ответ.\nСтр. 4 - сроки работы.\nСтр. 5 - согласование и доработка.\nСтр. 6 - аналитика и Excel.\nСтр. 7 - проблемы доставки.'),
@@ -150,7 +150,7 @@ STAFF = [
 
 RESIDENT = [
 ('Как подать обращение', [
-('P', '«Искра» принимает обращения жителей в личном диалоге. Бот поможет заполнить сведения и передаст вопрос специалистам.'),
+('P', '«На связи_регион40» принимает обращения жителей в личном диалоге. Бот поможет заполнить сведения и передаст вопрос специалистам.'),
 ('H', '1. Откройте главное меню'),
 ('C', '/start'),
 ('P', 'Напишите эту команду в личном чате с ботом и отправьте. Нажмите «Создать обращение». Если бот предлагает прочитать документы и подтвердить согласие, сначала выполните эти шаги.'),
@@ -422,7 +422,7 @@ def build(name, pages, font_dir):
     }
     output = ROOT / 'output/pdf' / f'iskra-{name}-guide.pdf'
     output.parent.mkdir(parents=True, exist_ok=True)
-    doc = SimpleDocTemplate(str(output), pagesize=A4, rightMargin=42, leftMargin=42, topMargin=55, bottomMargin=43, title='Искра - ' + pages[0][0], author='Искра')
+    doc = SimpleDocTemplate(str(output), pagesize=A4, rightMargin=42, leftMargin=42, topMargin=55, bottomMargin=43, title='На связи_регион40 - ' + pages[0][0], author='На связи_регион40')
     story = []
     for idx, (title, blocks) in enumerate(pages):
         if idx: story.append(PageBreak())
@@ -436,7 +436,7 @@ def build(name, pages, font_dir):
         canvas.line(42, A4[1]-35, A4[0]-42, A4[1]-35)
         canvas.setFont('Guide', 8)
         canvas.setFillColor(colors.HexColor('#547078'))
-        canvas.drawString(42, A4[1]-26, 'ИСКРА  /  ПОНЯТНАЯ ИНСТРУКЦИЯ')
+        canvas.drawString(42, A4[1]-26, 'На связи_регион40  /  ПОНЯТНАЯ ИНСТРУКЦИЯ')
         revision = '18.09.2026' if name in ('distribution', 'admin') else '15.09.2026' if name in ('distribution', 'profile', 'profile-direct', 'review', 'analytics') else '11.09.2026'
         canvas.drawString(42, 23, f'Редакция {revision}  •  Актуальная памятка в боте: /info')
         canvas.drawRightString(A4[0]-42, 23, f'{document.page} / {len(pages)}')

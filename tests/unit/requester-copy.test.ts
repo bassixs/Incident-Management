@@ -22,7 +22,7 @@ describe('requester-facing copy', () => {
 
   it('explains the current complete submission flow', () => {
     const greeting = greetingText();
-    expect(greeting).toContain('чат-бот «Искра»');
+    expect(greeting).toContain('чат-бот «На связи_регион40»');
     expect(greeting).toContain('ФИО и номер телефона');
     expect(greeting).toContain('сохранит');
     expect(greeting).toContain('сферу и место');
@@ -43,10 +43,11 @@ describe('requester-facing copy', () => {
   it('includes the customer notice and describes explicit consent rather than automatic consent', () => {
     expect(greetingText()).toContain('органам исполнительной власти и местного самоуправления');
     expect(greetingText()).toContain('отдельно подтвердите согласие');
-    expect(greetingText()).toContain('их передачу в органы');
+    expect(greetingText()).toContain('их передачу компетентным органам и организациям');
     for (const text of [greetingText(), rulesText()]) {
-      expect(text).toContain('поданными через чат-бот «Искра»');
-      expect(text).toContain('не применяются положения Федерального закона');
+      expect(text).toContain('Чат-бот «На связи_регион40»');
+      expect(text).toContain('дополнительный канал обратной связи');
+      expect(text).toContain('Ваши права, предусмотренные законом, сохраняются');
       expect(text).toContain('02.05.2006');
       expect(text).toContain('59-ФЗ');
     }

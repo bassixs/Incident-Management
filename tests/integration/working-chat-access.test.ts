@@ -243,7 +243,7 @@ describeIntegration('automatic access in configured work chats', () => {
       expect(sent.target).toEqual({ chatId: chat });
       const file = sent.message.attachments![0]!;
       expect(sent.message.attachments).toHaveLength(1);
-      expect(file).toMatchObject({ type: 'FILE', originalName: `iskra-${guide}-guide.pdf` });
+      expect(file).toMatchObject({ type: 'FILE', originalName: `na-svyazi-region40-${guide}-guide.pdf` });
       if (!('body' in file) || !file.body) throw new Error('Missing guide body');
       expect(file.body.subarray(0, 5).toString()).toBe('%PDF-');
     }
@@ -254,18 +254,18 @@ describeIntegration('automatic access in configured work chats', () => {
     await prisma.responsibleGroup.updateMany({ where: { maxChatId: TEST_CHATS.sector }, data: { bypassReview: true } });
     await sendChatGuide(h.services, actor, TEST_CHATS.sector, false, 'guide');
     expect(h.messages.sent.at(-1)!.message.attachments).toEqual([
-      expect.objectContaining({ originalName: 'iskra-profile-direct-guide.pdf' }),
+      expect.objectContaining({ originalName: 'na-svyazi-region40-profile-direct-guide.pdf' }),
     ]);
     const combined = { ...h.services, config: { ...h.services.config, REVIEW_CHAT_ID: TEST_CHATS.distribution } };
     await sendChatGuide(combined, actor, TEST_CHATS.distribution, false, 'guide');
     expect(h.messages.sent.at(-1)!.message.attachments?.map(file => file.originalName)).toEqual([
-      'iskra-distribution-guide.pdf', 'iskra-review-guide.pdf',
+      'na-svyazi-region40-distribution-guide.pdf', 'na-svyazi-region40-review-guide.pdf',
     ]);
     // A manually assigned role must not add unrelated instructions to this chat.
     await prisma.user.update({ where: { maxUserId: 86001n }, data: { roles: [UserRole.ADMIN, UserRole.DISPATCHER] } });
     await click(TEST_CHATS.review, 'help:guide');
     expect(h.messages.sent.at(-1)!.message.attachments).toEqual([
-      expect.objectContaining({ originalName: 'iskra-review-guide.pdf' }),
+      expect.objectContaining({ originalName: 'na-svyazi-region40-review-guide.pdf' }),
     ]);
   });
 
@@ -277,7 +277,7 @@ describeIntegration('automatic access in configured work chats', () => {
     await click(86001n, 'help:guide', 86001, true);
     const sent = h.messages.sent.at(-1)!;
     expect(sent.target).toEqual({ userId: 86001n });
-    expect(sent.message.attachments![0]).toMatchObject({ type: 'FILE', originalName: 'iskra-resident-guide.pdf' });
+    expect(sent.message.attachments![0]).toMatchObject({ type: 'FILE', originalName: 'na-svyazi-region40-resident-guide.pdf' });
     expect((await h.services.sessions.find(86001n, 86001n))?.id).toBe(before?.id);
   });
 
@@ -292,7 +292,7 @@ describeIntegration('automatic access in configured work chats', () => {
     await command(TEST_CHATS.sector, '/info');
     expect(h.messages.sent.at(-1)!.message.keyboard?.flat()).toContainEqual(expect.objectContaining({ payload: 'help:admin' }));
     await click(TEST_CHATS.sector, 'help:admin');
-    expect(h.messages.sent.at(-1)!.message.attachments![0]).toMatchObject({ type: 'FILE', originalName: 'iskra-admin-guide.pdf' });
+    expect(h.messages.sent.at(-1)!.message.attachments![0]).toMatchObject({ type: 'FILE', originalName: 'na-svyazi-region40-admin-guide.pdf' });
     await prisma.responsibleGroup.updateMany({ where: { maxChatId: TEST_CHATS.sector }, data: { isActive: false } });
     const count = h.messages.sent.length;
     await click(TEST_CHATS.sector, 'help:guide');
