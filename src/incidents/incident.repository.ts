@@ -37,7 +37,7 @@ export class IncidentRepository {
       RETURNING "lastNumber"
     `;
     const next = rows[0]?.lastNumber;
-    if (next === undefined) throw new ConflictError('Шестизначные номера обращений закончились. Обратитесь к администратору.');
+    if (next === undefined) throw new ConflictError('Шестизначные номера сообщений закончились. Обратитесь к администратору.');
     return `INC-${String(next).padStart(6, '0')}`;
   }
 

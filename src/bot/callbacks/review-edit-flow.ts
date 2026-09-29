@@ -54,7 +54,7 @@ export async function startReviewEdit(services: AppServices, actor: ResolvedActo
   const existing = await services.sessions.find(actor.maxUserId, chatId);
   if (existing) {
     if ((existing.data as { reviewEdit?: boolean } | null)?.reviewEdit) { await resumeReviewEdit(services, existing); return; }
-    throw new ConflictError('Сначала завершите или отмените текущее действие с обращением.');
+    throw new ConflictError('Сначала завершите или отмените текущее действие с сообщением.');
   }
   await services.workQueues.claimReview(actor, chatId, incident.id);
   const owned = await services.prisma.actionLock.findUniqueOrThrow({ where: { key: `review-queue:${incident.id}` } });

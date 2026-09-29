@@ -129,7 +129,7 @@ describe('editing a published card', () => {
     const { client, edits } = fakeMax();
     const service = new MaxMessageService(client as never);
 
-    await service.finalizeCard('mid-1', 'обращение распределено');
+    await service.finalizeCard('mid-1', 'сообщение распределено');
 
     expect(edits).toHaveLength(1);
     expect(edits[0]!.attachments).toEqual([]);
@@ -199,7 +199,7 @@ describe('attachment grouping', () => {
 describe('answer templates', () => {
   it('fills known placeholders and leaves the rest for the operator', () => {
     const rendered = renderTemplate(
-      'Обращение № {{incidentCode}}\nРезультат:\n{{result}}\nДетали: {{ details }}',
+      'Сообщение № {{incidentCode}}\nРезультат:\n{{result}}\nДетали: {{ details }}',
       { incidentCode: 'INC-20260823-0001' },
     );
     expect(rendered).toContain('INC-20260823-0001');

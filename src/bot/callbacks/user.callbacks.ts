@@ -87,7 +87,7 @@ export async function handleUserCallback(
 
   switch (payload.action) {
     case 'clarify-reply':
-      return 'Ответ на уточнение больше не требуется. Статус обращения доступен в разделе «Мои обращения».';
+      return 'Ответ на уточнение больше не требуется. Статус сообщения доступен в разделе «Мои сообщения».';
     case 'menu': {
       await services.messages.send(target, { text: greetingText(), keyboard: mainMenuKeyboard() });
       return undefined;
@@ -126,7 +126,7 @@ export async function handleUserCallback(
       }
       const incident = await services.incidents.rateAnswer(incidentId, actor.maxUserId, rating);
       await services.messages.send(target, {
-        text: `Спасибо! Вы оценили ответ по обращению ${incident.publicCode} на ${rating} из 5.`,
+        text: `Спасибо! Вы оценили ответ по сообщению ${incident.publicCode} на ${rating} из 5.`,
         keyboard: mainMenuKeyboard(),
         delivery: { dedupeKey: `rating-confirmation:${incident.id}` },
       });
@@ -179,7 +179,7 @@ export async function handleUserCallback(
           `incident registration failed: ${error instanceof Error ? error.message : String(error)}`,
         );
         await services.messages.send(target, {
-          text: 'Не удалось зарегистрировать обращение. Попробуйте ещё раз позже.',
+          text: 'Не удалось зарегистрировать сообщение. Попробуйте ещё раз позже.',
         });
         return 'Не удалось зарегистрировать';
       }
@@ -206,7 +206,7 @@ export async function handleUserCallback(
         keyboard: mainMenuKeyboard(),
         delivery: { dedupeKey: `registration:${incident.id}` },
       });
-      return 'Обращение зарегистрировано';
+      return 'Сообщение зарегистрировано';
     }
 
     case 'draft-edit': {
@@ -230,7 +230,7 @@ export async function handleUserCallback(
       if (context.messageId && allowed.includes(SessionType.WAITING_INCIDENT_CONFIRMATION)) {
         await services.messages.finalizeCard(
           context.messageId,
-          '✏️ Обращение пока не отправлено. Выберите поле для исправления ниже.',
+          '✏️ Сообщение пока не отправлено. Выберите поле для исправления ниже.',
         );
       }
       await services.sessions.start({
@@ -256,20 +256,20 @@ export async function handleUserCallback(
       );
       const draft = requireCompleteIncidentDraft(data);
       const fieldLabels: Record<string, string> = {
-        category: 'сфера обращения',
+        category: 'сфера сообщения',
         location: 'территория и населённый пункт',
-        text: 'текст обращения',
+        text: 'текст сообщения',
         photo: 'фотографии',
       };
       const fieldLabel = payload.argument ? fieldLabels[payload.argument] : undefined;
-      if (!fieldLabel) throw new ValidationError('Кнопка устарела. Вернитесь к проверке обращения.');
+      if (!fieldLabel) throw new ValidationError('Кнопка устарела. Вернитесь к проверке сообщения.');
       if (context.messageId) {
         await services.messages.finalizeCard(context.messageId, `Исправляется: ${fieldLabel}.`);
       }
       switch (payload.argument) {
         case 'text':
           await services.sessions.start({ maxUserId: actor.maxUserId, chatId, type: SessionType.WAITING_INCIDENT_EDIT_VALUE, data: { ...draft, draftEditField: 'text' } });
-          await services.messages.send(target, { text: 'Отправьте новый текст обращения без персональных данных.' });
+          await services.messages.send(target, { text: 'Отправьте новый текст сообщения без персональных данных.' });
           return;
         case 'category': {
           const categories = await services.categories.listActive();
@@ -308,7 +308,7 @@ export async function handleUserCallback(
           });
           return undefined;
         default:
-          throw new ValidationError('Кнопка устарела. Вернитесь к проверке обращения.');
+          throw new ValidationError('Кнопка устарела. Вернитесь к проверке сообщения.');
       }
     }
 
@@ -319,11 +319,11 @@ export async function handleUserCallback(
       const retryingPhotos = session?.type === SessionType.WAITING_INCIDENT_EDIT_VALUE &&
         data.draftEditField === 'photo' && data.draftPhotoRetry === true;
       if (!session || (session.type !== SessionType.WAITING_INCIDENT_EDIT_SELECTION && !retryingPhotos)) {
-        throw new ValidationError('Кнопка устарела. Вернитесь к проверке обращения.');
+        throw new ValidationError('Кнопка устарела. Вернитесь к проверке сообщения.');
       }
       const draft = requireCompleteIncidentDraft(data);
       if (payload.argument !== 'remove' && payload.argument !== 'replace') {
-        throw new ValidationError('Кнопка устарела. Вернитесь к проверке обращения.');
+        throw new ValidationError('Кнопка устарела. Вернитесь к проверке сообщения.');
       }
       if (context.messageId) {
         await services.messages.finalizeCard(
@@ -403,7 +403,7 @@ export async function handleUserCallback(
 
       // Retire the picker so a stale page cannot be tapped again later.
       if (context.messageId) {
-        await services.messages.finalizeCard(context.messageId, `Сфера обращения: ${chosenName}`);
+        await services.messages.finalizeCard(context.messageId, `Сфера сообщения: ${chosenName}`);
       }
 
       if (draft.draftEditField === 'category') {
@@ -593,7 +593,7 @@ async function requireDraftForSession(
 ): Promise<SessionData> {
   const session = await services.sessions.find(maxUserId, chatId);
   if (!session || !allowedTypes.includes(session.type)) {
-    throw new ValidationError('Кнопка устарела. Начните создание обращения заново.');
+    throw new ValidationError('Кнопка устарела. Начните создание сообщения заново.');
   }
   return services.sessions.readData(session);
 }
@@ -603,7 +603,7 @@ function parseLocationArgument(raw: string | undefined, expectedParts: 3): [stri
 function parseLocationArgument(raw: string | undefined, expectedParts: 2 | 3): string[] {
   const parts = raw?.split('~') ?? [];
   if (parts.length !== expectedParts || parts.some((part) => part.length === 0)) {
-    throw new ValidationError('Кнопка устарела. Начните создание обращения заново.');
+    throw new ValidationError('Кнопка устарела. Начните создание сообщения заново.');
   }
   return parts;
 }
@@ -612,7 +612,7 @@ async function requireActiveCategory(services: AppServices, token: string): Prom
   if (token === 'none') return null;
   const category = await services.categories.findById(token);
   if (!category?.isActive) {
-    throw new ValidationError('Выбранная тема больше недоступна. Начните создание обращения заново.');
+    throw new ValidationError('Выбранная тема больше недоступна. Начните создание сообщения заново.');
   }
   return category.id;
 }

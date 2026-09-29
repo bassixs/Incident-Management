@@ -110,7 +110,7 @@ export async function seedCategories(prisma: PrismaClient): Promise<void> {
         name: 'IT-группа',
         kind: 'EXECUTIVE_AUTHORITY',
         maxChatId: TEST_CHATS.otherSector,
-        answerTemplate: 'Обращение № {{incidentCode}}\n{{result}}',
+        answerTemplate: 'Сообщение № {{incidentCode}}\n{{result}}',
         sortOrder: 20,
       },
       {

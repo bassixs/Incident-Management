@@ -95,8 +95,8 @@ describeIntegration('incident history and administrator audit', () => {
     });
     const text = messages.toChat(TEST_CHATS.distribution).at(-1)?.message.text;
     expect(text).toContain('История INC-20260902-0099');
-    expect(text).toContain('Обращение создано');
-    expect(text).toContain('Обращение распределено');
+    expect(text).toContain('Сообщение создано');
+    expect(text).toContain('Сообщение распределено');
     expect(text).toContain('Администратор');
     expect(text).toContain('Сфера: TEST_AREA');
   });

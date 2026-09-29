@@ -121,7 +121,7 @@ describeIntegration('automatic access in configured work chats', () => {
 
   it('existing members get suitable info and working commands on their first message without rejoining', async () => {
     await command(TEST_CHATS.distribution, '/info');
-    expect(lastText()).toContain('Распределение обращений'); expect(lastText()).toContain('/queue');
+    expect(lastText()).toContain('Распределение сообщений'); expect(lastText()).toContain('/queue');
     expect(lastText()).toContain('/report'); expect(lastText()).not.toContain('/role');
     await command(TEST_CHATS.distribution, '/report');
     expect(lastText()).toContain('За какой период');
@@ -165,7 +165,7 @@ describeIntegration('automatic access in configured work chats', () => {
       const attachment = file.message.attachments![0]!;
       if (!('body' in attachment)) throw new Error('Missing report body');
       const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(attachment.body as never);
-      expect(workbook.worksheets.map(s => s.name)).toEqual(['Обращения', 'Просроченные']);
+      expect(workbook.worksheets.map(s => s.name)).toEqual(['Сообщения', 'Просроченные']);
       expect(workbook.worksheets[1]!.getCell(4, 1).value).toBe(row.publicCode);
     }
     expect((await resolveActor(h.services, person())).roles).toEqual([UserRole.REQUESTER]);
@@ -180,7 +180,7 @@ describeIntegration('automatic access in configured work chats', () => {
     await h.services.distribution.confirmPrivacyCheck(row.id, actor);
     await h.services.distribution.assign(row.id, group.id, actor);
     for (const name of ['incident', 'history', 'resend']) {
-      await command(TEST_CHATS.otherSector, `/${name} ${row.publicCode}`); expect(lastText()).toContain('только обращения');
+      await command(TEST_CHATS.otherSector, `/${name} ${row.publicCode}`); expect(lastText()).toContain('только сообщения');
     }
     await command(TEST_CHATS.sector, `/incident ${row.publicCode}`);
     expect(lastText()).toContain(row.publicCode); expect(lastText()).toContain('Хозяйственная группа');
@@ -221,7 +221,7 @@ describeIntegration('automatic access in configured work chats', () => {
     const combined = { ...h.services, config: { ...h.services.config, REVIEW_CHAT_ID: TEST_CHATS.distribution } };
     const actor = await resolveActor(combined, person(), TEST_CHATS.distribution);
     const text = await chatInfoText(combined, actor, TEST_CHATS.distribution, false);
-    expect(text).toContain('Распределение обращений'); expect(text).toContain('Согласование ответов');
+    expect(text).toContain('Распределение сообщений'); expect(text).toContain('Согласование ответов');
     expect(actor.roles).toEqual(expect.arrayContaining([UserRole.DISPATCHER, UserRole.APPROVER]));
     const assigned = { assignedGroup: { maxChatId: TEST_CHATS.regional, bypassReview: true }, publicCode: 'test' };
     const regionalActor = await resolveActor(h.services, person(), TEST_CHATS.regional);

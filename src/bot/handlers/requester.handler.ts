@@ -33,7 +33,7 @@ import {
 } from '../views/cards';
 import type { ResolvedActor } from './helpers';
 
-const NO_SESSION_HINT = 'Чтобы создать новое обращение, нажмите «Создать обращение».';
+const NO_SESSION_HINT = 'Чтобы создать новое сообщение, нажмите «Создать сообщение».';
 
 /** §7-§12, §56 — everything a requester does in their private dialog. */
 export async function handleRequesterMessage(
@@ -65,7 +65,7 @@ export async function handleRequesterMessage(
 
   if (session.type === SessionType.WAITING_CLARIFICATION_REPLY) {
     await services.prisma.operatorSession.deleteMany({ where: { id: session.id } });
-    await services.messages.send(target, { text: 'Ответ на уточнение больше не требуется. Статус обращения доступен в разделе «Мои обращения».', keyboard: mainMenuKeyboard() });
+    await services.messages.send(target, { text: 'Ответ на уточнение больше не требуется. Статус сообщения доступен в разделе «Мои сообщения».', keyboard: mainMenuKeyboard() });
     return;
   }
 
@@ -113,7 +113,7 @@ export async function handleRequesterMessage(
           return;
         }
         default:
-          throw new ValidationError('Черновик устарел. Начните создание обращения заново.');
+          throw new ValidationError('Черновик устарел. Начните создание сообщения заново.');
       }
     } catch (error) {
       await reportActionError(error, () => services.messages.send(target, {
@@ -141,7 +141,7 @@ export async function handleRequesterMessage(
     ) {
       await services.sessions.clear(actor.maxUserId, chatId);
       await services.messages.send(target, {
-        text: 'Черновик устарел. Начните создание обращения заново.',
+        text: 'Черновик устарел. Начните создание сообщения заново.',
         keyboard: mainMenuKeyboard(),
       });
       return;

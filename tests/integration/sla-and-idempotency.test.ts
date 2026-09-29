@@ -173,7 +173,7 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
   });
 
   it('waits for 24 elapsed hours even when the next working morning has started', async () => {
-    const original = await routedIncident('Позднее обращение');
+    const original = await routedIncident('Позднее сообщение');
     const previous = new Date(Date.now() - 86_400_000); previous.setUTCHours(13, 59, 0, 0);
     await prisma.incident.update({ where: { id: original.id }, data: { createdAt: previous, deadlineAt: computeDeadline(previous, 3) } });
     const now = new Date(); now.setUTCHours(5, 0, 0, 0);
@@ -216,7 +216,7 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
     expect(workingHours(new Date())).toBe(true);
     await harness.services.sla.sweep(); await worker.flush();
     expect(max.sendToChat).toHaveBeenCalledTimes(2);
-    expect(max.sendToChat.mock.calls[1]![1]).toContain('Напоминание об обращении');
+    expect(max.sendToChat.mock.calls[1]![1]).toContain('Напоминание об сообщении');
   });
 
 
@@ -287,7 +287,7 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
 
   it('does not create a second incident when the same message arrives twice', async () => {
     const requester = { maxUserId: TEST_USERS.requesterB, name: 'Пётр Петров', phone: '+7 900 444-55-66' } as const;
-    await harness.services.incidents.create({ requester, text: 'Единственное обращение' });
+    await harness.services.incidents.create({ requester, text: 'Единственное сообщение' });
     expect(await prisma.incident.count()).toBe(1);
 
     // Simulate the guard the webhook applies before any handler runs.
@@ -299,7 +299,7 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
         sender: { user_id: 5002, name: 'Пётр', username: null, is_bot: false, last_activity_time: 0 },
         recipient: { chat_id: 5002, chat_type: 'dialog' },
         timestamp: 1,
-        body: { mid: 'mid-once', seq: 1, text: 'Единственное обращение', attachments: null },
+        body: { mid: 'mid-once', seq: 1, text: 'Единственное сообщение', attachments: null },
       },
     } as unknown as Update;
 
@@ -313,7 +313,7 @@ describeIntegration('SLA and webhook idempotency (PostgreSQL)', () => {
       Array.from({ length: 5 }, (_, index) =>
         harness.services.incidents.create({
           requester: { maxUserId: BigInt(6000 + index), name: 'Тестовый Пользователь', phone: `+7 901 000-00-0${index}` },
-          text: `Обращение ${index}`,
+          text: `Сообщение ${index}`,
         }),
       ),
     );

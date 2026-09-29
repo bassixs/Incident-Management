@@ -18,8 +18,8 @@ const { button } = Keyboard;
 /** Requester main menu (§53). */
 export function mainMenuKeyboard(): Button[][] {
   return [
-    [button.callback('📝 Создать обращение', userCallback('new'))],
-    [button.callback('🔎 Мои обращения', userCallback('my-incidents'))],
+    [button.callback('📝 Создать сообщение', userCallback('new'))],
+    [button.callback('🔎 Мои сообщения', userCallback('my-incidents'))],
     [button.callback('Об обработке данных', userCallback('documents'))],
     [button.callback('ℹ️ Правила', userCallback('rules'))],
   ];
@@ -119,7 +119,7 @@ export function municipalityPageCount(total: number): number {
   return Math.max(1, Math.ceil(total / MUNICIPALITY_PAGE_SIZE));
 }
 
-/** Территории на этапе создания обращения, по шесть кнопок на странице. */
+/** Территории на этапе создания сообщения, по шесть кнопок на странице. */
 export function requesterMunicipalityKeyboard(
   categoriesSelection: string | null,
   municipalities: ProblemMunicipality[],
@@ -190,9 +190,9 @@ export function incidentDraftConfirmationKeyboard(): Button[][] {
 /** Choose exactly one draft field; changing it never clears the other fields. */
 export function incidentDraftEditKeyboard(hasPhoto: boolean): Button[][] {
   return [
-    [button.callback('Сфера обращения', userCallback('draft-field', 'category'))],
+    [button.callback('Сфера сообщения', userCallback('draft-field', 'category'))],
     [button.callback('Территория и населённый пункт', userCallback('draft-field', 'location'))],
-    [button.callback('Текст обращения', userCallback('draft-field', 'text'))],
+    [button.callback('Текст сообщения', userCallback('draft-field', 'text'))],
     [button.callback(hasPhoto ? 'Фотографии' : 'Добавить фотографию', userCallback('draft-field', 'photo'))],
     [button.callback('⬅️ Назад к проверке', userCallback('draft-edit', 'back'))],
   ];
@@ -228,7 +228,7 @@ export function distributionKeyboard(incidentId: string): Button[][] {
     [button.callback('Текст и фото проверены: персональных данных нет', incidentCallback('privacy-pass', incidentId))],
     [button.callback('Распределить', incidentCallback('assign', incidentId), { intent: 'positive' })],
     [button.callback('Изменить тему', incidentCallback('topic', incidentId))],
-    [button.callback('Освободить обращение', `queue:release:${incidentId}`)],
+    [button.callback('Освободить сообщение', `queue:release:${incidentId}`)],
     [button.callback('Отклонить', incidentCallback('reject', incidentId), { intent: 'negative' })],
     [button.callback('Заблокировать автора', incidentCallback('ban', incidentId), { intent: 'negative' })],
   ];
@@ -340,7 +340,7 @@ export function sectorKeyboard(incidentId: string, options: { hasTemplate: boole
     rows.push([button.callback('Использовать шаблон', incidentCallback('template', incidentId))]);
   }
   rows.push([button.callback('Вернуть на перераспределение', incidentCallback('redistribute', incidentId))]);
-  rows.push([button.callback('Освободить обращение', `work:release:${incidentId}`)]);
+  rows.push([button.callback('Освободить сообщение', `work:release:${incidentId}`)]);
   rows.push([button.callback('Работать лично', incidentCallback('personal', incidentId))]);
   return rows;
 }
@@ -351,7 +351,7 @@ export function reviewKeyboard(incidentId: string, answerId: string): Button[][]
     [button.callback('Работать лично', incidentCallback('personal', incidentId))],
     [button.callback('Взять на согласование', incidentCallback('review-take', incidentId, answerId))],
     [button.callback('✏️ Исправить ответ', incidentCallback('review-edit', incidentId, answerId))],
-    [button.callback('Освободить обращение', `work:release:${incidentId}`)],
+    [button.callback('Освободить сообщение', `work:release:${incidentId}`)],
     [button.callback('✅ Согласовать', incidentCallback('approve', incidentId, answerId), { intent: 'positive' })],
     [button.callback('↩️ На доработку', incidentCallback('revision', incidentId, answerId), { intent: 'negative' })],
   ];
@@ -361,7 +361,7 @@ export function reviewKeyboard(incidentId: string, answerId: string): Button[][]
 export function revisionKeyboard(incidentId: string): Button[][] {
   return [[button.callback('Исправить ответ', incidentCallback('fix', incidentId), { intent: 'positive' })],
     [button.callback('Вернуть на перераспределение', incidentCallback('redistribute', incidentId))],
-    [button.callback('Освободить обращение', `work:release:${incidentId}`)],
+    [button.callback('Освободить сообщение', `work:release:${incidentId}`)],
     [button.callback('Работать лично', incidentCallback('personal', incidentId))]];
 }
 

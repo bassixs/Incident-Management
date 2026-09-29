@@ -91,7 +91,7 @@ describeIntegration('staff reservations and redistribution', () => {
     const i = await reviewing(); const fresh = (await services.repository.findById(i.id))!;
     await handleIncidentCallback({ services, actor, chatId: TEST_CHATS.review }, { kind: 'incident', action: 'revision', incidentId: i.id, argument: fresh.answers.at(-1)!.id });
     expect(lastEdit(fresh.reviewMessageId!)[1]).toContain(actor.displayName);
-    expect(lastEdit(fresh.reviewMessageId!)[2].flat().some((b: any) => b.text === 'Освободить обращение')).toBe(true);
+    expect(lastEdit(fresh.reviewMessageId!)[2].flat().some((b: any) => b.text === 'Освободить сообщение')).toBe(true);
     await services.workQueues.list(colleague, TEST_CHATS.review);
     expect(sent.at(-1)!.text).toContain(`Закреплено за: ${actor.displayName}`);
     await services.workQueues.release(actor, TEST_CHATS.review, i.id);
@@ -110,7 +110,7 @@ describeIntegration('staff reservations and redistribution', () => {
     for (const mid of [before.sectorMessageId, ...copies.map(c => c.firstMessageId)]) expect(lastEdit(mid!)[2]).toEqual([]);
     expect(lastEdit(before.distributionMessageId!)[1]).toContain('ВОЗВРАЩЕНО');
     expect(sent.filter(m => m.text.includes('ВОЗВРАЩЕНО НА ПЕРЕРАСПРЕДЕЛЕНИЕ')).length).toBeGreaterThan(0);
-    await services.incidents.create({ requester: { maxUserId: 7101n, name: 'Иван Иванов', phone: '+79001112233' }, text: 'Новое обращение' });
+    await services.incidents.create({ requester: { maxUserId: 7101n, name: 'Иван Иванов', phone: '+79001112233' }, text: 'Новое сообщение' });
     expect((await services.distributionQueue.claim(actor, TEST_CHATS.distribution))!.id).toBe(i.id);
     await services.distribution.assign(i.id, group.id, actor);
     const returnNotice = await prisma.outboundMessage.findFirstOrThrow({ where: { incidentId: i.id, dedupeKey: { startsWith: 'redistribution-notice:' } } });

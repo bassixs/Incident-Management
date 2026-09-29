@@ -107,7 +107,7 @@ describeIntegration('review, revision and delivery (PostgreSQL)', () => {
     expect(stored!.deliveredAt).not.toBeNull();
 
     const delivered = harness.messages.toUser(TEST_USERS.requesterA);
-    expect(delivered.at(-1)!.message.text).toContain('Получен ответ по вашему обращению');
+    expect(delivered.at(-1)!.message.text).toContain('Получен ответ по вашему сообщению');
     expect(delivered.at(-1)!.message.text).toContain(incident.publicCode);
     expect(harness.messages.edits).toContainEqual({
       messageId: 'distribution-mid',
@@ -117,7 +117,7 @@ describeIntegration('review, revision and delivery (PostgreSQL)', () => {
   });
 
   it('stores only the requester first rating and includes it in the Excel report', async () => {
-    const { incident } = await incidentAwaitingReview(TEST_USERS.requesterA, 'Текст обращения', 'Итоговый ответ');
+    const { incident } = await incidentAwaitingReview(TEST_USERS.requesterA, 'Текст сообщения', 'Итоговый ответ');
     const approver = await actorFor(prisma, TEST_USERS.approver, 'Согласующий', [UserRole.APPROVER]);
     await harness.services.review.approve(incident.id, approver);
 
@@ -139,7 +139,7 @@ describeIntegration('review, revision and delivery (PostgreSQL)', () => {
     const report = await harness.services.reports.build({ title: 'за всё время', slug: 'all' });
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(report.buffer as never);
-    const sheet = workbook.getWorksheet('Обращения')!;
+    const sheet = workbook.getWorksheet('Сообщения')!;
     const headers = (sheet.getRow(1).values as unknown[]).map(String);
     const ratingColumn = headers.indexOf('Оценка ответа (1–5)');
     expect(ratingColumn).toBeGreaterThan(0);

@@ -127,8 +127,8 @@ export class DistributionService {
     await this.prisma.$transaction(async tx => {
       await acquireAdvisoryLock(tx, ...CLAIM_LOCK);
       const incident = await this.repository.findById(incidentId, tx);
-      if (!incident) throw new NotFoundError('Обращение не найдено.');
-      if (incident.status !== 'DISTRIBUTION') throw new ConflictError('Тему можно изменить только до распределения обращения.');
+      if (!incident) throw new NotFoundError('Сообщение не найдено.');
+      if (incident.status !== 'DISTRIBUTION') throw new ConflictError('Тему можно изменить только до распределения сообщения.');
       assertClaimOwner(incident, actor.maxUserId);
       const category = categoryId ? await tx.category.findFirst({ where: { id: categoryId, isActive: true } }) : null;
       if (categoryId && !category) throw new NotFoundError('Выбранная тема больше недоступна. Откройте список заново.');
@@ -221,7 +221,7 @@ export class DistributionService {
     await this.prisma.$transaction(async tx => {
       await acquireAdvisoryLock(tx, ...CLAIM_LOCK);
       const incident = await tx.incident.findUniqueOrThrow({ where: { id: incidentId } });
-      if (incident.status !== IncidentStatus.DISTRIBUTION) throw new ConflictError('Обращение уже обработано.');
+      if (incident.status !== IncidentStatus.DISTRIBUTION) throw new ConflictError('Сообщение уже обработано.');
       assertClaimOwner(incident, actor.maxUserId);
       if (!await tx.incidentHistory.findFirst({ where: { incidentId, action: 'PRIVACY_CHECK_PASSED' } })) {
         await tx.incidentHistory.create({ data: { incidentId, action: 'PRIVACY_CHECK_PASSED', actorMaxUserId: actor.maxUserId, actorRole: actor.role } });
@@ -258,7 +258,7 @@ export class DistributionService {
         if (!session || session.type !== 'WAITING_REJECTION_REASON' || session.maxUserId !== actor.maxUserId || session.chatId !== draft.chatId ||
           session.incidentId !== incidentId || session.expiresAt <= new Date() || data?.rejectionToken !== draft.token || data.rejectionStage !== 'preview' || data.reason !== reason ||
           current.distributionClaimedBy !== actor.maxUserId || !current.distributionClaimUntil || current.distributionClaimUntil <= new Date() ||
-          current.distributionClaimUntil.toISOString() !== data.distributionLeaseUntil) throw new ConflictError('Карточка отклонения устарела. Откройте обращение через /queue.');
+          current.distributionClaimUntil.toISOString() !== data.distributionLeaseUntil) throw new ConflictError('Карточка отклонения устарела. Откройте сообщение через /queue.');
         await tx.operatorSession.delete({ where: { id: session.id } });
       }
       const claimed = await this.repository.transition(tx, incidentId, IncidentStatus.DISTRIBUTION, {
@@ -334,15 +334,15 @@ export class DistributionService {
 
   private alreadyHandledMessage(incident: IncidentWithRelations): string {
     if (incident.status === IncidentStatus.REJECTED) {
-      return `Обращение ${incident.publicCode} уже отклонено.`;
+      return `Сообщение ${incident.publicCode} уже отклонено.`;
     }
     const who = incident.assignedBy?.displayName;
     const where = incident.assignedGroup?.name;
     if (who || where) {
-      return `Обращение ${incident.publicCode} уже распределено${where ? ` в «${where}»` : ''}${
+      return `Сообщение ${incident.publicCode} уже распределено${where ? ` в «${where}»` : ''}${
         who ? ` пользователем ${who}` : ''
       }.`;
     }
-    return `Обращение ${incident.publicCode} уже обработано.`;
+    return `Сообщение ${incident.publicCode} уже обработано.`;
   }
 }

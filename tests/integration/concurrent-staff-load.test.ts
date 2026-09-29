@@ -80,7 +80,7 @@ describeIntegration('concurrent employee load with arriving incidents', () => {
         // Keep arrivals going after every staff lane has started, even on a fast producer.
         while (n >= lanes && joined < lanes && !stop) { checkTime(); await delay(10); }
         if (stop) return;
-        await services.incidents.create({ requester: { maxUserId: BigInt(100000 + n), name: 'Тестовый Житель', phone: '+79001112233' }, text: `Обращение нагрузки ${n}` });
+        await services.incidents.create({ requester: { maxUserId: BigInt(100000 + n), name: 'Тестовый Житель', phone: '+79001112233' }, text: `Сообщение нагрузки ${n}` });
         created++; if (active) arrivalsDuringWork++;
         await delay(150);
       }
@@ -121,7 +121,7 @@ describeIntegration('concurrent employee load with arriving incidents', () => {
             active--; continue;
           }
           const author = branch === 7 ? dispatcher : executor;
-          let current = await answer(author, destination.maxChatId!, id, `Ответ обращения ${n}, версия 1`);
+          let current = await answer(author, destination.maxChatId!, id, `Ответ сообщения ${n}, версия 1`);
           if (branch !== 7) {
             await services.workQueues.claimReview(reviewer, TEST_CHATS.review, id);
             await expect(services.review.approve(id, outsider, current.id)).rejects.toThrow();
@@ -131,14 +131,14 @@ describeIntegration('concurrent employee load with arriving incidents', () => {
                 await input(reviewer, TEST_CHATS.review, `Замечание ${n}, круг ${cycle}`);
                 await confirm(reviewer, TEST_CHATS.review, id);
                 const old = current;
-                current = await answer(executor, destination.maxChatId!, id, `Ответ обращения ${n}, версия ${cycle + 1}`);
+                current = await answer(executor, destination.maxChatId!, id, `Ответ сообщения ${n}, версия ${cycle + 1}`);
                 await expect(services.review.approve(id, reviewer, old.id)).rejects.toThrow();
                 await services.workQueues.claimReview(reviewer, TEST_CHATS.review, id);
               }
             }
             if (branch === 6) {
               await click(reviewer, TEST_CHATS.review, id, 'review-edit', current.id);
-              await input(reviewer, TEST_CHATS.review, `Ответ обращения ${n}, правка куратора`);
+              await input(reviewer, TEST_CHATS.review, `Ответ сообщения ${n}, правка куратора`);
               const session = (await services.sessions.find(reviewer.maxUserId, TEST_CHATS.review))!;
               await click(reviewer, TEST_CHATS.review, id, 'review-edit-save', reviewEditDraft(session).editToken);
               current = (await services.repository.findById(id))!.answers.at(-1)!;
@@ -175,7 +175,7 @@ describeIntegration('concurrent employee load with arriving incidents', () => {
     expect(new Set(incidents.map(i => i.publicCode)).size).toBe(total);
     for (const i of incidents) {
       const n = Number(i.text.split(' ').at(-1));
-      const delivered = [...sent.values()].filter(s => s.target === i.requesterMaxUserId && s.text.includes('Получен ответ по вашему обращению'));
+      const delivered = [...sent.values()].filter(s => s.target === i.requesterMaxUserId && s.text.includes('Получен ответ по вашему сообщению'));
       if (n % 8 === 0) { expect(i.status).toBe('REJECTED'); expect(delivered).toHaveLength(0); }
       else {
         expect(i.status).toBe('RESOLVED'); expect(i.responseRating).toBe(5);

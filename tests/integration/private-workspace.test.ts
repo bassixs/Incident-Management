@@ -249,7 +249,7 @@ describeIntegration('private employee workspace', () => {
   it('separates resident mode and serializes private operations for one employee', async () => {
     const { item } = await open(); await run(item, 'answer'); await receivePersonalText(h.services, actor, input('Черновик сотрудника'));
     await exitPersonalWork(h.services, actor.maxUserId);
-    expect(await receivePersonalText(h.services, actor, input('Обращение жителя'))).toBe(false);
+    expect(await receivePersonalText(h.services, actor, input('Сообщение жителя'))).toBe(false);
     expect((await data(item)).draft.text).toBe('Черновик сотрудника');
     await withPersonalWorkLock(h.services, actor.maxUserId, async () => { await expect(withPersonalWorkLock(h.services, actor.maxUserId, async () => undefined)).rejects.toThrow('ещё выполняется'); });
   });

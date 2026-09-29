@@ -52,7 +52,7 @@ export class WorkQueueService {
     }
     if (id) await this.open(actor, chatId, id);
     await this.refresh(actor, chatId);
-    return id ? 'Обращение взято в работу. Карточка отправлена в чат.' : 'Свободных обращений нет.';
+    return id ? 'Сообщение взято в работу. Карточка отправлена в чат.' : 'Свободных сообщений нет.';
   }
   async claimReview(actor: ResolvedActor, chatId: bigint, incidentId?: string): Promise<string | undefined> {
     const scope = await this.authorize(actor, chatId);
@@ -63,12 +63,12 @@ export class WorkQueueService {
       const waiting = await tx.incident.findMany({ where: scope.where, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], select: { id: true, publicCode: true } });
       const locks = await tx.actionLock.findMany({ where: { action: REVIEW_LEASE_ACTION, lockedUntil: { gt: now }, incidentId: { in: waiting.map(i => i.id) } } });
       const own = locks.find(l => l.maxUserId === actor.maxUserId);
-      if (own?.incidentId && incidentId && own.incidentId !== incidentId) throw new ConflictError('Сначала завершите или освободите своё обращение на согласовании.');
+      if (own?.incidentId && incidentId && own.incidentId !== incidentId) throw new ConflictError('Сначала завершите или освободите своё сообщение на согласовании.');
       if (own?.incidentId && (!incidentId || own.incidentId === incidentId)) return own.incidentId;
       const candidate = incidentId ? waiting.find(i => i.id === incidentId) : waiting.find(i => !locks.some(l => l.incidentId === i.id));
-      if (!candidate) { if (incidentId) throw new ConflictError('Обращение уже вышло из очереди согласования.'); return undefined; }
+      if (!candidate) { if (incidentId) throw new ConflictError('Сообщение уже вышло из очереди согласования.'); return undefined; }
       const occupied = locks.find(l => l.incidentId === candidate.id);
-      if (occupied) throw new ConflictError(`Обращение уже закреплено. ${leaseText(await leaseView(tx, candidate.id, REVIEW_LEASE_ACTION))}`);
+      if (occupied) throw new ConflictError(`Сообщение уже закреплено. ${leaseText(await leaseView(tx, candidate.id, REVIEW_LEASE_ACTION))}`);
       const key = `review-queue:${candidate.id}`;
       const data = { incidentId: candidate.id, maxUserId: actor.maxUserId, action: REVIEW_LEASE_ACTION, lockedUntil: new Date(now.getTime() + LEASE_MS) };
       await tx.actionLock.upsert({ where: { key }, create: { key, ...data }, update: data });
@@ -84,7 +84,7 @@ export class WorkQueueService {
     if (scope.kind === 'sector') { await this.sector.release(id, actor, chatId); await this.refresh(actor, chatId); return; }
     await this.prisma.$transaction(async tx => {
       await acquireAdvisoryLock(tx, ...REVIEW_LOCK);
-      if (!await tx.incident.count({ where: { AND: [scope.where, { id }] } })) throw new ConflictError('Обращение уже вышло из очереди.');
+      if (!await tx.incident.count({ where: { AND: [scope.where, { id }] } })) throw new ConflictError('Сообщение уже вышло из очереди.');
       const deleted = await tx.actionLock.deleteMany({ where: { incidentId: id, action: REVIEW_LEASE_ACTION, maxUserId: actor.maxUserId } });
       if (!deleted.count) throw new ConflictError('Закрепление уже завершено или принадлежит другому сотруднику.');
       await tx.operatorSession.deleteMany({ where: { incidentId: id, maxUserId: actor.maxUserId, type: 'WAITING_REVISION_REASON' } });
@@ -96,7 +96,7 @@ export class WorkQueueService {
   async open(actor: ResolvedActor, chatId: bigint, id: string) {
     const scope = await this.authorize(actor, chatId);
     const incident = await this.prisma.incident.findFirst({ where: { AND: [scope.where, { id }] }, include: INCIDENT_INCLUDE });
-    if (!incident) throw new ConflictError('Обращение уже вышло из очереди. Обновите список.');
+    if (!incident) throw new ConflictError('Сообщение уже вышло из очереди. Обновите список.');
     const answer = incident.answers.at(-1);
     const review = scope.kind === 'review';
     if (review && !answer) throw new ConflictError('Ответ для согласования не найден.');
@@ -144,12 +144,12 @@ export class WorkQueueService {
     const notDistributed = counts.filter(r => ['DISTRIBUTION', 'REJECTED'].includes(r.status)).reduce((sum, r) => sum + r._count, 0);
     const delivered = today ? await this.prisma.incident.count({ where: { AND: [where, { status: 'RESOLVED', answers: { some: { deliveredAt: { not: null } } } }] } }) : 0;
     const ownership = new Map(await Promise.all(items.map(async i => [i.id, i.status === 'DISTRIBUTION' ? leaseText(i.distributionClaimUntil && i.distributionClaimUntil > new Date() ? { name: i.distributionClaimedName ?? 'Сотрудник', until: i.distributionClaimUntil } : null) : ['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED', 'WAITING_REVIEW'].includes(i.status) ? leaseText(await leaseView(this.prisma, i.id, i.status === 'WAITING_REVIEW' ? REVIEW_LEASE_ACTION : SECTOR_LEASE_ACTION)) : ''] as const)));
-    await this.messages.send({ chatId }, { text: [today ? '📅 ОБРАЩЕНИЯ ЗА СЕГОДНЯ · МСК' : mine ? '📋 МОИ В РАБОТЕ' : '📋 ОЧЕРЕДЬ ОБРАЩЕНИЙ',
+    await this.messages.send({ chatId }, { text: [today ? '📅 СООБЩЕНИЯ ЗА СЕГОДНЯ · МСК' : mine ? '📋 МОИ В РАБОТЕ' : '📋 ОЧЕРЕДЬ СООБЩЕНИЙ',
       `Всего: ${total}. Страница ${page + 1} из ${Math.max(1, Math.ceil(total / 8))}.`,
       ...(today && distribution ? [`🔴 Не распределено: ${notDistributed}`, `🟢 Распределено: ${total - notDistributed}`] : today ? ['Зарегистрированы сегодня; показан текущий статус.', ...counts.flatMap(r => r.status === 'RESOLVED'
         ? [`Отработано: ${delivered}`, `Ожидает доставки: ${r._count - delivered}`] : [`${statuses[r.status]}: ${r._count}`])] : []), '',
-      ...items.map(i => `${i.publicCode} — ${distribution ? distributionStatus(i) : i.status === 'RESOLVED' && i.answers.at(-1)?.deliveredAt ? 'Отработано' : statuses[i.status]}${ownership.get(i.id) && (!distribution || i.status === 'DISTRIBUTION') ? `\n${distribution ? ownership.get(i.id)!.replace(/^🟢 /, '') : ownership.get(i.id)}` : ''}${distribution && i.status === 'REJECTED' ? '\nОбращение отклонено.' : ''}`),
-      ...(!total ? ['Обращений нет.'] : []), ...(today ? ['', 'Подробности: /incident НОМЕР_ОБРАЩЕНИЯ'] : []),
+      ...items.map(i => `${i.publicCode} — ${distribution ? distributionStatus(i) : i.status === 'RESOLVED' && i.answers.at(-1)?.deliveredAt ? 'Отработано' : statuses[i.status]}${ownership.get(i.id) && (!distribution || i.status === 'DISTRIBUTION') ? `\n${distribution ? ownership.get(i.id)!.replace(/^🟢 /, '') : ownership.get(i.id)}` : ''}${distribution && i.status === 'REJECTED' ? '\nСообщение отклонено.' : ''}`),
+      ...(!total ? ['Сообщений нет.'] : []), ...(today ? ['', 'Подробности: /incident НОМЕР_СООБЩЕНИЯ'] : []),
     ].join('\n'), keyboard: [
       ...(!today ? items.map(i => [{ type: 'callback' as const, text: `Открыть ${i.publicCode}`, payload: `work:open:${i.id}` }]) : []),
       [{ type: 'callback', text: '←', payload: `work:${action}:${Math.max(0, page - 1)}` }, { type: 'callback', text: 'Обновить', payload: `work:${action}:${page}` }, { type: 'callback', text: '→', payload: `work:${action}:${page + 1}` }],

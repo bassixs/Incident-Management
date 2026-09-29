@@ -331,7 +331,7 @@ describeIntegration('transactional workflow and recovery', () => {
 
   it('does not offer channel subscriptions after a rejection', async () => {
     const incident = await create();
-    await h.services.distribution.reject(incident.id, 'Обращение не относится к компетенции', await actor());
+    await h.services.distribution.reject(incident.id, 'Сообщение не относится к компетенции', await actor());
     const texts: string[] = [];
     const max = {
       sendToUser: async (_id: bigint, text: string) => { texts.push(text); return { body: { mid: 'user' } }; },

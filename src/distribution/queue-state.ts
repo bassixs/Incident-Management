@@ -10,7 +10,7 @@ export const CLAIM_LOCK = ['distribution-queue', 'claims'] as const;
 export const panelSettingKey = (chatId: bigint) => `distribution-panel:${chatId}`;
 export const queueKeyboard = (): Button[][] => [
   [{ type: 'callback', text: 'Моя работа в личном диалоге', payload: 'personal:home' }],
-  [{ type: 'callback', text: 'Следующее обращение', payload: 'queue:next' }],
+  [{ type: 'callback', text: 'Следующее сообщение', payload: 'queue:next' }],
   [{ type: 'callback', text: 'Посмотреть список', payload: 'queue:list:0' },
     { type: 'callback', text: 'Обновить', payload: 'queue:refresh' }],
   [{ type: 'callback', text: 'За сегодня', payload: 'work:today:0' }],
@@ -18,7 +18,7 @@ export const queueKeyboard = (): Button[][] => [
 
 export function assertClaimOwner(incident: Incident, userId: bigint, now = new Date()): void {
   if (incident.distributionClaimUntil && incident.distributionClaimUntil > now && incident.distributionClaimedBy !== userId) {
-    throw new ConflictError(`Обращение распределяет ${incident.distributionClaimedName ?? 'другой оператор'}. Дождитесь завершения или освобождения обращения.`);
+    throw new ConflictError(`Сообщение распределяет ${incident.distributionClaimedName ?? 'другой оператор'}. Дождитесь завершения или освобождения сообщения.`);
   }
 }
 
@@ -43,8 +43,8 @@ export function queuePanelText(s: QueueSnapshot): string {
     `Свободны: ${s.total - s.reserved} · У операторов: ${s.reserved}`,
     `Более 30 минут: ${s.delayed30} · Более часа: ${s.delayed60}`,
     `Самое старое ожидает: ${waitLabel(s.oldestMinutes)}`, '',
-    '«Следующее обращение» — самое старое свободное. Закрепление за оператором на 15 минут.',
-    'Обращение остаётся в очереди до распределения или отклонения.',
+    '«Следующее сообщение» — самое старое свободное. Закрепление за оператором на 15 минут.',
+    'Сообщение остаётся в очереди до распределения или отклонения.',
     'Панель обновляется каждую минуту. Напоминания: пн–пт, 08:00–17:00 МСК.',
   ].join('\n');
 }

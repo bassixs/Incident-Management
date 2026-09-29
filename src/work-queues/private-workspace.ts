@@ -60,7 +60,7 @@ async function actorInChat(services: AppServices, actor: ResolvedActor, chatId: 
   if (!workingChat) throw new ForbiddenError('Рабочий чат больше не подключён.');
   const result = await services.max.api.getChatMembers(Number(chatId), { user_ids: [Number(actor.maxUserId)] });
   if (!result.members.some(member => BigInt(member.user_id) === actor.maxUserId && !member.is_bot)) {
-    throw new ForbiddenError('Вы больше не участник рабочего чата. Доступ к обращению закрыт.');
+    throw new ForbiddenError('Вы больше не участник рабочего чата. Доступ к сообщению закрыт.');
   }
   return { ...actor, workingChat, roles: [...new Set([...actor.roles, ...workingChat.roles])], role: [...new Set([...actor.roles, ...workingChat.roles])].join('|') };
 }
@@ -70,10 +70,10 @@ async function scope(services: AppServices, actor: ResolvedActor, id: string): P
   if (!item) throw new ForbiddenError('Это рабочее пространство другого сотрудника или оно уже удалено.');
   const scoped = await actorInChat(services, actor, item.originChatId);
   const incident = await services.repository.findById(item.incidentId);
-  if (!incident) throw new ConflictError('Обращение уже удалено.');
+  if (!incident) throw new ConflictError('Сообщение уже удалено.');
   if (scoped.workingChat!.distribution) return { item, actor: scoped, incident, kind: 'distribution', active: incident.status === 'DISTRIBUTION' };
   if (scoped.workingChat!.review) return { item, actor: scoped, incident, kind: 'review', active: incident.status === 'WAITING_REVIEW' };
-  if (incident.assignedGroup?.maxChatId !== item.originChatId) throw new ForbiddenError('Обращение передано в другую организацию. Откройте «Моя работа».');
+  if (incident.assignedGroup?.maxChatId !== item.originChatId) throw new ForbiddenError('Сообщение передано в другую организацию. Откройте «Моя работа».');
   return { item, actor: scoped, incident, kind: 'sector', active: ['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status) };
 }
 
@@ -138,18 +138,18 @@ function personalServices(services: AppServices, item: PrivateWorkItem, code: st
 }
 
 async function take(services: AppServices, s: Scope) {
-  if (!s.active) throw new ConflictError('Обращение уже перешло на другой этап.');
+  if (!s.active) throw new ConflictError('Сообщение уже перешло на другой этап.');
   const oldData = dataOf(s.item);
-  if (oldData.cycle && oldData.cycle !== cycleOf(s.incident) && (oldData.draft || oldData.session)) throw new ConflictError('По обращению уже появился новый ответ или новое назначение. Старый черновик не отправлен. Отмените старое действие и начните заново.');
+  if (oldData.cycle && oldData.cycle !== cycleOf(s.incident) && (oldData.draft || oldData.session)) throw new ConflictError('По сообщению уже появился новый ответ или новое назначение. Старый черновик не отправлен. Отмените старое действие и начните заново.');
   if (s.kind === 'distribution') await services.distributionQueue.claim(s.actor, s.item.originChatId, s.item.incidentId);
   else if (s.kind === 'review') await services.workQueues.claimReview(s.actor, s.item.originChatId, s.item.incidentId);
   else if ((await lease(services, s))?.owner !== s.actor.maxUserId) await services.sector.takeInWork(s.item.incidentId, s.actor);
   const fresh = await scope(services, s.actor, s.item.id);
   const owned = await lease(services, fresh);
-  if (owned?.owner !== s.actor.maxUserId) throw new ConflictError('Не удалось закрепить обращение.');
+  if (owned?.owner !== s.actor.maxUserId) throw new ConflictError('Не удалось закрепить сообщение.');
   const data = dataOf(fresh.item);
   if (data.cycle && data.cycle !== cycleOf(fresh.incident) && (data.draft || data.session)) {
-    throw new ConflictError('По обращению уже появился новый ответ или новое назначение. Старый черновик не отправлен. Отмените старое действие и начните заново.');
+    throw new ConflictError('По сообщению уже появился новый ответ или новое назначение. Старый черновик не отправлен. Отмените старое действие и начните заново.');
   }
   const next: WorkData = { ...data, cycle: cycleOf(fresh.incident), leaseUntil: owned.until.toISOString() };
   const live = await services.sessions.find(s.actor.maxUserId, s.item.originChatId);
@@ -172,7 +172,7 @@ export async function invitePersonalWork(services: AppServices, actor: ResolvedA
   let title = `${actor.displayName}, откройте свою работу в личном диалоге с ботом.`;
   if (incidentId) {
     const incident = await services.repository.findById(incidentId);
-    if (!incident) throw new ConflictError('Обращение не найдено.');
+    if (!incident) throw new ConflictError('Сообщение не найдено.');
     if (chatId === services.config.DISTRIBUTION_CHAT_ID) assertDispatcher(services, actor, chatId);
     else if (chatId === services.config.REVIEW_CHAT_ID) assertApprover(services, actor, chatId);
     else { assertResponder(actor, incident, chatId); if (incident.assignedGroup?.maxChatId !== chatId) throw new ForbiddenError('Откройте текущий профильный чат.'); }
@@ -204,7 +204,7 @@ export async function showPersonalWork(services: AppServices, actor: ResolvedAct
   }
   const active = owned?.owner === actor.maxUserId;
   let rows: Button[][] = [];
-  let text = `💼 ${s.incident.publicCode}\n${s.kind === 'distribution' ? 'Распределение' : s.kind === 'review' ? 'Согласование' : 'Подготовка ответа'}\n${leaseText(owned)}\n\n${active ? stage(data) : 'Закрепление завершено или обращение занято коллегой. Сохранённый черновик не отправлен. Для продолжения заново возьмите обращение.'}`;
+  let text = `💼 ${s.incident.publicCode}\n${s.kind === 'distribution' ? 'Распределение' : s.kind === 'review' ? 'Согласование' : 'Подготовка ответа'}\n${leaseText(owned)}\n\n${active ? stage(data) : 'Закрепление завершено или сообщение занято коллегой. Сохранённый черновик не отправлен. Для продолжения заново возьмите сообщение.'}`;
   if (data.draft) {
     text += `\n\nПодготовленный текст:\n${data.draft.text}\nВложений: ${data.draft.attachments?.length ?? 0}`;
     if (active && data.draft.nonce) rows.push([button('Верно — отправить', 'confirm', id, data.draft.nonce), button('Исправить', 'back', id)]);
@@ -230,8 +230,8 @@ export async function showPersonalWork(services: AppServices, actor: ResolvedAct
       : sectorKeyboard(s.incident.id, { status: s.incident.status, hasTemplate: !!s.incident.assignedGroup?.answerTemplate }), s.item);
   }
   if (details) text += `\n\n${s.kind === 'review' ? reviewCard(s.incident, s.incident.answers.at(-1)!, s.incident.assignedGroup, owned) : incidentLookupCard(s.incident, owned, s.kind === 'distribution', s.kind !== 'sector')}`;
-  else text += `\n\nОбращение:\n${s.incident.text}`;
-  rows.push([button('Показать обращение', 'details', id), button('Обновить состояние', 'show', id)]);
+  else text += `\n\nСообщение:\n${s.incident.text}`;
+  rows.push([button('Показать сообщение', 'details', id), button('Обновить состояние', 'show', id)]);
   rows.push(active ? [button('Освободить', 'release', id), button('Отменить действие', 'cancel', id)] : [button('Взять и продолжить', 'resume', id), button('Отменить старое действие', 'cancel', id)]);
   await services.messages.send({ userId: actor.maxUserId }, { text, keyboard: [...rows, ...navigation()],
     ...(details ? { attachments: await loadOutboundAttachments(services.media, s.kind === 'review' ? s.incident.answers.at(-1)!.attachments : s.incident.attachments) } : {}) });
@@ -257,8 +257,8 @@ export async function personalHome(services: AppServices, actor: ResolvedActor, 
   page = Math.min(Math.max(0, page), Math.max(0, Math.ceil(visible.length / 8) - 1));
   const slice = visible.slice(page * 8, page * 8 + 8);
   const current = visible.find(s => s.item.selected);
-  const currentStage = current && (await lease(services, current))?.owner === actor.maxUserId ? stage(dataOf(current!.item)) : 'Закрепление завершено. Для продолжения заново возьмите обращение.';
-  await services.messages.send({ userId: actor.maxUserId }, { text: `💼 МОЯ РАБОТА\n\n${current ? `Сейчас выбрано: ${current.incident.publicCode}.\n${currentStage}\n\n` : ''}${visible.length ? `Доступных обращений: ${visible.length}. Выберите, с каким продолжить.` : 'Доступных обращений нет. Возьмите обращение в рабочем чате и нажмите «Работать лично». Если доступ недавно менялся, обновите список.'}`, keyboard: [
+  const currentStage = current && (await lease(services, current))?.owner === actor.maxUserId ? stage(dataOf(current!.item)) : 'Закрепление завершено. Для продолжения заново возьмите сообщение.';
+  await services.messages.send({ userId: actor.maxUserId }, { text: `💼 МОЯ РАБОТА\n\n${current ? `Сейчас выбрано: ${current.incident.publicCode}.\n${currentStage}\n\n` : ''}${visible.length ? `Доступных сообщений: ${visible.length}. Выберите, с каким продолжить.` : 'Доступных сообщений нет. Возьмите сообщение в рабочем чате и нажмите «Работать лично». Если доступ недавно менялся, обновите список.'}`, keyboard: [
     ...slice.map(s => [button(`${s.incident.publicCode} · ${s.kind === 'distribution' ? 'распределение' : s.kind === 'review' ? 'согласование' : 'исполнение'}${dataOf(s.item).draft ? ' · черновик' : ''}`, 'open', s.item.id)]),
     ...(visible.length > 8 ? [[button('←', 'home', undefined, String(Math.max(0, page - 1))), button('→', 'home', undefined, String(page + 1))]] : []), ...navigation(),
   ] });
@@ -267,7 +267,7 @@ export async function personalHome(services: AppServices, actor: ResolvedActor, 
 export async function enterPersonalWork(services: AppServices, actor: ResolvedActor, id: string) {
   const s = await scope(services, actor, id);
   await select(services, s.item);
-  if (s.active) await take(services, s).catch(async error => services.messages.send({ userId: actor.maxUserId }, { text: error instanceof Error ? error.message : 'Не удалось взять обращение.', keyboard: navigation() }));
+  if (s.active) await take(services, s).catch(async error => services.messages.send({ userId: actor.maxUserId }, { text: error instanceof Error ? error.message : 'Не удалось взять сообщение.', keyboard: navigation() }));
   await showPersonalWork(services, actor, id, true);
 }
 
@@ -277,7 +277,7 @@ export async function exitPersonalWork(services: AppServices, maxUserId: bigint)
 
 async function requireOwnLease(services: AppServices, s: Scope) {
   if (!s.active || (await lease(services, s))?.owner !== s.actor.maxUserId) throw new ConflictError('Закрепление завершено. Черновик сохранён. Нажмите «Взять и продолжить».');
-  if (dataOf(s.item).cycle !== cycleOf(s.incident)) throw new ConflictError('Этап обращения изменился. Старый черновик не отправлен.');
+  if (dataOf(s.item).cycle !== cycleOf(s.incident)) throw new ConflictError('Этап сообщения изменился. Старый черновик не отправлен.');
 }
 
 async function run(services: AppServices, s: Scope, raw: string, messageId?: string, confirmed = false) {
@@ -293,7 +293,7 @@ async function run(services: AppServices, s: Scope, raw: string, messageId?: str
 export async function personalAction(services: AppServices, actor: ResolvedActor, id: string, action: string, argument?: string, messageId?: string) {
   const s = await scope(services, actor, id);
   if (action === 'open') { await enterPersonalWork(services, actor, id); return; }
-  if (!s.item.selected) throw new ConflictError('Сейчас выбрано другое обращение. Откройте нужное через «Моя работа».');
+  if (!s.item.selected) throw new ConflictError('Сейчас выбрано другое сообщение. Откройте нужное через «Моя работа».');
   if (action === 'show' || action === 'details') { await showPersonalWork(services, actor, id, action === 'details'); return; }
   if (action === 'resume') { await take(services, s); await showPersonalWork(services, actor, id); return; }
   if (action === 'cancel') {
@@ -330,17 +330,17 @@ export async function personalAction(services: AppServices, actor: ResolvedActor
     const latest = await services.repository.findById(s.item.incidentId);
     const expected = data.session.type === 'WAITING_FOR_ANSWER' ? ['WAITING_REVIEW', 'RESOLVED'] : data.session.data.redistribution ? ['DISTRIBUTION'] : ['REVISION_REQUIRED'];
     if (!after && latest && expected.includes(latest.status)) await save(services, s.item, { cycle: data.cycle });
-    else if (!after) await services.messages.send({ userId: actor.maxUserId }, { text: `${s.incident.publicCode}: действие не завершено. Черновик сохранён; заново возьмите обращение.`, keyboard: [[button('Открыть черновик', 'show', id)], ...navigation()] });
+    else if (!after) await services.messages.send({ userId: actor.maxUserId }, { text: `${s.incident.publicCode}: действие не завершено. Черновик сохранён; заново возьмите сообщение.`, keyboard: [[button('Открыть черновик', 'show', id)], ...navigation()] });
     else await snapshot(services, s.item);
     return;
   }
   if (action === 'run' && argument) {
     const p = parseCallbackPayload(argument);
-    if (p?.kind !== 'incident' || p.incidentId !== s.item.incidentId) throw new ForbiddenError('Кнопка другого обращения.');
+    if (p?.kind !== 'incident' || p.incidentId !== s.item.incidentId) throw new ForbiddenError('Кнопка другого сообщения.');
     if (['assign-group', 'approve'].includes(p.action)) {
       if (data.session?.data.reviewEdit) throw new ConflictError('Сначала сохраните или отмените правку ответа.');
       const group = p.action === 'assign-group' && p.argument ? await services.prisma.responsibleGroup.findUnique({ where: { id: p.argument } }) : null;
-      const title = p.action === 'approve' ? `Согласовать этот ответ и отправить жителю?\n\n${s.incident.answers.at(-1)?.text ?? ''}\n\nВложений: ${s.incident.answers.at(-1)?.attachments.length ?? 0}.` : `Направить обращение в организацию «${group?.name ?? 'не найдена'}»?`;
+      const title = p.action === 'approve' ? `Согласовать этот ответ и отправить жителю?\n\n${s.incident.answers.at(-1)?.text ?? ''}\n\nВложений: ${s.incident.answers.at(-1)?.attachments.length ?? 0}.` : `Направить сообщение в организацию «${group?.name ?? 'не найдена'}»?`;
       await save(services, s.item, { ...data, pending: { raw: argument, title, nonce: randomUUID() } });
       await showPersonalWork(services, actor, id); return;
     }
@@ -355,7 +355,7 @@ export async function receivePersonalText(services: AppServices, actor: Resolved
   if (!item) return false;
   const s = await scope(services, actor, item.id); const data = dataOf(item);
   if (!s.active || !data.session) {
-    await services.messages.send({ userId: actor.maxUserId }, { text: `${s.incident.publicCode}: бот пока не ждёт текст. Выберите действие в рабочей карточке.`, keyboard: [[button('Текущее обращение', 'show', item.id)], ...navigation()] }); return true;
+    await services.messages.send({ userId: actor.maxUserId }, { text: `${s.incident.publicCode}: бот пока не ждёт текст. Выберите действие в рабочей карточке.`, keyboard: [[button('Текущее сообщение', 'show', item.id)], ...navigation()] }); return true;
   }
   const text = (message.body.text ?? '').trim();
   if (data.session.data.confirmation) throw new ValidationError('Сначала подтвердите, исправьте или отмените действие кнопками в карточке.');
@@ -403,8 +403,8 @@ export async function sweepPersonalWork(services: AppServices) {
       const s = await scope(services, actor, item.id); const owned = await lease(services, s);
       if (!owned || owned.owner !== actor.maxUserId || owned.until.getTime() - Date.now() > 120_000) continue;
       await services.prisma.$transaction(tx => queueMessage(tx, { userId: actor.maxUserId }, {
-        text: `⏳ ${s.incident.publicCode}: закрепление заканчивается в ${formatDateTime(owned.until)} (МСК). Сохранённый черновик останется доступен. После окончания срока потребуется заново взять обращение.`,
-        keyboard: [[button('Вернуться к обращению', 'open', item.id)]], delivery: { dedupeKey: `private-warning:${item.id}:${owned.until.getTime()}` },
+        text: `⏳ ${s.incident.publicCode}: закрепление заканчивается в ${formatDateTime(owned.until)} (МСК). Сохранённый черновик останется доступен. После окончания срока потребуется заново взять сообщение.`,
+        keyboard: [[button('Вернуться к сообщению', 'open', item.id)]], delivery: { dedupeKey: `private-warning:${item.id}:${owned.until.getTime()}` },
       }, item.incidentId), TRANSACTION_OPTIONS);
     } catch { /* Never notify from a cached permission when MAX is unavailable. */ }
   }

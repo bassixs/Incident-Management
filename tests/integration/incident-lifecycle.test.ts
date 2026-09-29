@@ -387,18 +387,18 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
   it('allows two incidents a day and refuses the third', async () => {
     const first = await harness.services.incidents.create({
       requester: requesterA(),
-      text: 'Первое обращение',
+      text: 'Первое сообщение',
     });
     const second = await harness.services.incidents.create({
       requester: requesterA(),
-      text: 'Второе обращение',
+      text: 'Второе сообщение',
     });
 
     expect(first.publicCode).toBe('INC-000001');
     expect(second.publicCode).toBe('INC-000002');
 
     await expect(
-      harness.services.incidents.create({ requester: requesterA(), text: 'Третье обращение' }),
+      harness.services.incidents.create({ requester: requesterA(), text: 'Третье сообщение' }),
     ).rejects.toBeInstanceOf(RateLimitError);
 
     expect(await prisma.incident.count()).toBe(2);
@@ -415,7 +415,7 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
   });
 
   it('starts the new series at one while preserving dated codes and counters', async () => {
-    const old = await harness.services.incidents.create({ requester: requesterA(), text: 'Старое обращение' });
+    const old = await harness.services.incidents.create({ requester: requesterA(), text: 'Старое сообщение' });
     await prisma.incident.update({ where: { id: old.id }, data: { publicCode: 'INC-20260914-0123' } });
     await prisma.incidentCounter.update({ where: { day: 'global' }, data: { day: '20260914', lastNumber: 123 } });
     const created = await harness.services.incidents.create({ requester: requesterA(), text: 'Новая серия' });
@@ -438,7 +438,7 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     await prisma.incidentCounter.create({ data: { day: 'global', lastNumber: 999998 } });
     const last = await harness.services.incidents.create({ requester: requesterA(), text: 'Последний номер' });
     expect(last.publicCode).toBe('INC-999999');
-    await expect(harness.services.incidents.create({ requester: requesterA(), text: 'Номер за пределами' })).rejects.toThrow('номера обращений закончились');
+    await expect(harness.services.incidents.create({ requester: requesterA(), text: 'Номер за пределами' })).rejects.toThrow('номера сообщений закончились');
     expect(await prisma.incident.count()).toBe(1);
     expect((await prisma.incidentCounter.findUniqueOrThrow({ where: { day: 'global' } })).lastNumber).toBe(999999);
   });

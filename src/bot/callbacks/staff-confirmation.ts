@@ -13,7 +13,7 @@ import { assertApprover, assertDispatcher, assertResponder, requirePermission } 
 type Pending = { token: string; action: 'approve' | 'assign-group' | 'input'; argument?: string; title: string;
   text: string; employee: string; body?: Message['body']; sourceMessageId?: string };
 export const pendingConfirmation = (session: OperatorSession) => (session.data as { confirmation?: Pending } | null)?.confirmation;
-const stale = () => new ConflictError('Подтверждение устарело или отменено. Откройте актуальную карточку обращения.');
+const stale = () => new ConflictError('Подтверждение устарело или отменено. Откройте актуальную карточку сообщения.');
 
 /** Serializes confirm, edit, new preview and cancellation, including across workers. */
 export async function withConfirmationLock<T>(services: AppServices, userId: bigint, chatId: bigint, operation: () => Promise<T>): Promise<T> {
@@ -58,7 +58,7 @@ export async function prepareButtonConfirmation(services: AppServices, actor: Re
       const current = await services.repository.findById(incident.id);
       if (!group?.isActive || !current || current.status !== 'DISTRIBUTION' || current.distributionClaimedBy !== actor.maxUserId || !current.distributionClaimUntil || current.distributionClaimUntil <= new Date()) throw stale();
       data = { distributionLeaseUntil: current.distributionClaimUntil.toISOString() };
-      title = 'Направить обращение в выбранную организацию?'; text = `${group.name}\n\nОбращение:\n${incident.text}`;
+      title = 'Направить сообщение в выбранную организацию?'; text = `${group.name}\n\nСообщение:\n${incident.text}`;
     }
     const pending: Pending = { token: randomUUID(), action, argument, title, text, employee: actor.displayName, sourceMessageId };
     const session = await services.sessions.start({ maxUserId: actor.maxUserId, chatId, incidentId: incident.id,
@@ -87,7 +87,7 @@ export async function prepareInputConfirmation(services: AppServices, actor: Res
       } else if (data.redistribution) {
         assertResponder(actor, incident, chatId);
         if (text.length > 1000) throw new ValidationError('Причина перераспределения должна быть не длиннее 1000 символов.');
-        title = 'Вернуть обращение в очередь распределения?\nСрок ответа не изменится. Причина:';
+        title = 'Вернуть сообщение в очередь распределения?\nСрок ответа не изменится. Причина:';
       } else { assertApprover(services, actor, chatId); title = 'Вернуть ответ исполнителю на доработку?\nСрок ответа не изменится. Замечания:'; }
     }
     const body = { ...message.body, text, attachments: (message.body.attachments ?? []).filter(a => ['image', 'file'].includes(a.type)) };
@@ -105,12 +105,12 @@ export async function handleStaffConfirmation(services: AppServices, actor: Reso
     if (!session || session.incidentId !== incidentId) throw stale();
     const pending = pendingConfirmation(session);
     if (!pending || pending.token !== token) throw stale();
-    const code = (await services.repository.findById(incidentId))?.publicCode ?? 'Обращение';
+    const code = (await services.repository.findById(incidentId))?.publicCode ?? 'Сообщение';
     if ((session.data as { privateWorkspaceId?: string } | null)?.privateWorkspaceId && !privateExecution) throw new ForbiddenError('Продолжите действие в личном диалоге с ботом.');
     if (action === 'action-cancel') {
       await services.prisma.operatorSession.deleteMany({ where: { id: session.id } });
-      if (messageId) await services.messages.finalizeCard(messageId, `${code}: действие отменено. Обращение не изменено.`);
-      return `${code}: действие отменено. Обращение не изменено.`;
+      if (messageId) await services.messages.finalizeCard(messageId, `${code}: действие отменено. Сообщение не изменено.`);
+      return `${code}: действие отменено. Сообщение не изменено.`;
     }
     if (await discardObsoleteSession(services, session)) throw stale();
     if (action === 'action-edit' && pending.action === 'input') {

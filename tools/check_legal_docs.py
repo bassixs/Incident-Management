@@ -32,11 +32,13 @@ def main():
         for current in [word, text]:
             assert 'На связи_регион40' in current
             assert not re.search(r'искр[аыой]', current, re.I)
-            assert 'min_digital@adm.kaluga.ru' in current
-            assert '1194027000221' in current
+            if name != 'user-agreement':
+                assert 'min_digital@adm.kaluga.ru' in current
+                assert '1194027000221' in current
             assert f"Редакция {meta['version']} от 29.09.2026" in current
-            assert normalized('Защитники Отечества') in normalized(current)
-            assert normalized('Социального фонда России') in normalized(current)
+            if name != 'user-agreement':
+                assert normalized('Защитники Отечества') in normalized(current)
+                assert normalized('Социального фонда России') in normalized(current)
             assert 'сами по себе не относятся' not in current
         assert all(len(p.extract_text() or '') > 100 for p in pdf.pages), 'Unexpected near-empty page'
         print(f'OK {name}: {len(pdf.pages)} pages; source, Word, PDF and hash match')

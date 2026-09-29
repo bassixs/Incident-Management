@@ -141,7 +141,7 @@ export class RetentionService {
           });
 
           if (deleted.count !== 1) {
-            throw new Error('обращение перестало соответствовать условиям очистки');
+            throw new Error('сообщение перестало соответствовать условиям очистки');
           }
           result.deletedIncidents += 1;
           result.deletedFiles += files.length;
@@ -297,23 +297,23 @@ function emptyRun(preview: RetentionPreview, skippedBecauseLocked: boolean): Ret
 
 export function formatRetentionPreview(preview: RetentionPreview): string {
   const lines = [
-    `Хранение завершённых обращений: ${preview.retentionDays} дней.`,
+    `Хранение завершённых сообщений: ${preview.retentionDays} дней.`,
     `Удалению подлежат завершённые до: ${formatDateTime(preview.cutoff)}.`,
-    `Обращений: ${preview.incidents}.`,
+    `Сообщений: ${preview.incidents}.`,
     `Файлов заявителей и ответов: ${preview.files} (${formatBytes(preview.bytes)}).`,
     `Связанных служебных сообщений: ${preview.outboundMessages}.`,
     `Уже неиспользуемых профилей заявителей: ${preview.orphanRequesterProfiles}.`,
   ];
   if (preview.requesterProfilesAfterDeletionUpTo > 0) {
     lines.push(
-      `После удаления обращений могут освободиться ещё до ${preview.requesterProfilesAfterDeletionUpTo} профилей заявителей.`,
+      `После удаления сообщений могут освободиться ещё до ${preview.requesterProfilesAfterDeletionUpTo} профилей заявителей.`,
     );
   }
   if (preview.oldestCompletion) lines.push(`Самое старое завершение: ${formatDateTime(preview.oldestCompletion)}.`);
   if (preview.sampleCodes.length) lines.push(`Примеры: ${preview.sampleCodes.join(', ')}.`);
   if (preview.terminalWithoutCompletionDate > 0) {
     lines.push(
-      `Внимание: завершённых обращений без даты завершения — ${preview.terminalWithoutCompletionDate}; они не удаляются автоматически.`,
+      `Внимание: завершённых сообщений без даты завершения — ${preview.terminalWithoutCompletionDate}; они не удаляются автоматически.`,
     );
   }
   return lines.join('\n');
@@ -322,8 +322,8 @@ export function formatRetentionPreview(preview: RetentionPreview): string {
 export function formatRetentionRun(result: RetentionRunResult): string {
   if (result.skippedBecauseLocked) return 'Очистка уже выполняется другим процессом. Повторный запуск пропущен.';
   const lines = [
-    'Очистка завершённых обращений завершена.',
-    `Удалено обращений: ${result.deletedIncidents}.`,
+    'Очистка завершённых сообщений завершена.',
+    `Удалено сообщений: ${result.deletedIncidents}.`,
     `Удалено файлов: ${result.deletedFiles} (${formatBytes(result.deletedBytes)}).`,
     `Удалено неиспользуемых профилей заявителей: ${result.deletedRequesterProfiles}.`,
     `Ошибок: ${result.failures.length}.`,

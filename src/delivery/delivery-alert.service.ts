@@ -99,7 +99,7 @@ export class DeliveryAlertService {
     if (outbound.length > 0) {
       lines.push('', 'Не доставлены:');
       for (const row of outbound.slice(0, 5)) {
-        const label = row.incidentId ? (codes.get(row.incidentId) ?? 'обращение') : 'служебное сообщение';
+        const label = row.incidentId ? (codes.get(row.incidentId) ?? 'сообщение') : 'служебное сообщение';
         lines.push(`• ${label}, попыток: ${row.attempts}`);
       }
       if (outbound.length > 5) lines.push(`• и ещё ${outbound.length - 5}`);

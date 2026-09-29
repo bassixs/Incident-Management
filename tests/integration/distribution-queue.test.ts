@@ -137,8 +137,8 @@ describeIntegration('persistent distribution queue', () => {
     max.editMessage.mockImplementation(async (mid: string) => {
       if (mid === old.firstMessageId) throw new MaxError(404, { code: 'message.not.found', message: 'Deleted' });
     });
-    await services.distribution.reject(incident.id, 'Дублирующее обращение', colleague);
-    expect(max.editMessage).toHaveBeenCalledWith(current.firstMessageId, expect.stringContaining('Дублирующее обращение'), []);
+    await services.distribution.reject(incident.id, 'Дублирующее сообщение', colleague);
+    expect(max.editMessage).toHaveBeenCalledWith(current.firstMessageId, expect.stringContaining('Дублирующее сообщение'), []);
     expect(await prisma.outboundMessage.count({ where: { incidentId: incident.id, status: { in: ['PENDING', 'FAILED'] } } })).toBe(0);
   });
 

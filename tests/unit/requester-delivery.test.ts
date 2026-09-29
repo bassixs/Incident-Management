@@ -125,7 +125,7 @@ describe('RequesterDeliveryService', () => {
   });
 
   it('routes plain notifications by incident as well', async () => {
-    await service.notify('incident-b', 'Обращение отклонено.');
+    await service.notify('incident-b', 'Сообщение отклонено.');
     expect(messages.toUser(TEST_USERS.requesterB)).toHaveLength(1);
     expect(messages.toUser(TEST_USERS.requesterA)).toHaveLength(0);
   });

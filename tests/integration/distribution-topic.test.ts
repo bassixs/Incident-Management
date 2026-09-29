@@ -42,7 +42,7 @@ describeIntegration('topic correction during distribution', () => {
     }
     const history = await services.history.listForIncident(i.id);
     expect(history.find(h => h.action === 'TOPIC_CHANGED')?.metadata).toMatchObject({ previousCategoryId: i.userSelectedCategoryId, categoryId: category.id });
-    expect(incidentHistoryText(fresh, history, [], 'Europe/Moscow')).toContain('Тема обращения изменена');
+    expect(incidentHistoryText(fresh, history, [], 'Europe/Moscow')).toContain('Тема сообщения изменена');
     await click(i.id, 'topic-set', category.id);
     expect(await prisma.incidentHistory.count({ where: { incidentId: i.id, action: 'TOPIC_CHANGED' } })).toBe(1);
   });

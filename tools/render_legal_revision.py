@@ -71,9 +71,11 @@ def build_docx(name):
             continue
         elif block.startswith('# '): p = doc.add_paragraph(block[2:], 'Title')
         elif block.startswith('## '): p = doc.add_paragraph(block[3:], 'Heading 1')
+        elif block in ('Правила приёма сообщений:', 'Как подать сообщение:', 'Важно:'):
+            p = doc.add_paragraph(block, 'Heading 1')
         else:
             p = doc.add_paragraph(block)
-            p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            p.alignment = WD_ALIGN_PARAGRAPH.LEFT if '\n' in block else WD_ALIGN_PARAGRAPH.JUSTIFY
         if next_page:
             p.paragraph_format.page_break_before = True
             next_page = False
@@ -96,7 +98,9 @@ def build_pdf(name):
         if block == '<!-- pagebreak -->': story.append(PageBreak())
         elif block.startswith('# '): story.append(Paragraph(escape(block[2:]), styles['title']))
         elif block.startswith('## '): story.append(Paragraph(escape(block[3:]), styles['heading']))
-        else: story.append(Paragraph(escape(block), styles['body']))
+        elif block in ('Правила приёма сообщений:', 'Как подать сообщение:', 'Важно:'):
+            story.append(Paragraph(escape(block), styles['heading']))
+        else: story.append(Paragraph(escape(block).replace('\n', '<br/>'), styles['body']))
     def page(canvas, _doc):
         canvas.saveState()
         canvas.setFont('Legal', 8)

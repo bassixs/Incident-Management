@@ -50,7 +50,7 @@ describeIntegration('Excel overdue worksheet', () => {
     expect(result.overdueRows).toBe(7);
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(result.buffer as never);
-    expect(workbook.worksheets.map(sheet => sheet.name)).toEqual(['Обращения', 'Просроченные']);
+    expect(workbook.worksheets.map(sheet => sheet.name)).toEqual(['Сообщения', 'Просроченные']);
     expect(workbook.worksheets[0]!.getCell(2, 3).value).toBe('TODAY');
     const sheet = workbook.worksheets[1]!;
     expect(sheet.getCell(1, 1).value).toContain('05.09.2026 15:00');
@@ -71,7 +71,7 @@ describeIntegration('Excel overdue worksheet', () => {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(result.buffer as never);
     expect(result.overdueRows).toBe(0);
-    expect(workbook.worksheets[1]!.getCell(4, 1).value).toBe('Нерешённых обращений с истекшим сроком нет.');
+    expect(workbook.worksheets[1]!.getCell(4, 1).value).toBe('Нерешённых сообщений с истекшим сроком нет.');
   });
 
   it('shows the resident selected topic next to the overdue number and uses Иное on both sheets for no selection', async () => {
@@ -82,12 +82,12 @@ describeIntegration('Excel overdue worksheet', () => {
     const report = await h.services.reports.build({ ...TODAY, from: new Date(NOW.getTime() - 7 * 24 * HOUR) }, NOW);
     const workbook = new ExcelJS.Workbook(); await workbook.xlsx.load(report.buffer as never);
     const overdue = workbook.getWorksheet('Просроченные')!;
-    expect(overdue.getCell(3, 2).value).toBe('Тема обращения');
+    expect(overdue.getCell(3, 2).value).toBe('Тема сообщения');
     expect(overdue.getCell(4, 2).value).toBe(category.name);
     expect(overdue.getCell(5, 2).value).toBe('Иное');
     expect(overdue.getColumn(5).numFmt).toBe('0.0');
-    const all = workbook.getWorksheet('Обращения')!;
-    expect(all.getCell(1, 7).value).toBe('Тема обращения');
+    const all = workbook.getWorksheet('Сообщения')!;
+    expect(all.getCell(1, 7).value).toBe('Тема сообщения');
     const topics = [all.getCell(2, 7).value, all.getCell(3, 7).value];
     expect(topics).toEqual(expect.arrayContaining([category.name, 'Иное']));
   });
@@ -98,7 +98,7 @@ describeIntegration('Excel overdue worksheet', () => {
     vi.spyOn(h.services.reports, 'build').mockImplementation(range => build(range, NOW));
     await sendReport(h.services, TEST_CHATS.distribution, TODAY, TEST_USERS.admin);
     const delivered = h.messages.toChat(TEST_CHATS.distribution).find(entry => entry.message.attachments?.length);
-    expect(delivered?.message.text).toContain('Обращений за период: 0');
+    expect(delivered?.message.text).toContain('Сообщений за период: 0');
     expect(delivered?.message.text).toContain('Текущих просроченных: 1');
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(delivered!.message.attachments![0]!.body as never);

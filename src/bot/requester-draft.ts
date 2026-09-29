@@ -28,7 +28,7 @@ export function requireCompleteIncidentDraft(data: SessionData): CompleteInciden
     !data.problemMunicipalityName ||
     !data.draftText
   ) {
-    throw new ValidationError('Черновик устарел. Начните создание обращения заново.');
+    throw new ValidationError('Черновик устарел. Начните создание сообщения заново.');
   }
   return {
     ...data,
@@ -90,7 +90,7 @@ export async function showIncidentDraftPreview(
       ? error.message
       : 'Не удалось показать фотографии через MAX.';
     await services.messages.send({ userId: maxUserId }, {
-      text: `${reason}\n\nТекст обращения и остальные данные сохранены. Отправьте все нужные фотографии заново, при необходимости уменьшив их размер, или нажмите «Продолжить без фотографий».`,
+      text: `${reason}\n\nТекст сообщения и остальные данные сохранены. Отправьте все нужные фотографии заново, при необходимости уменьшив их размер, или нажмите «Продолжить без фотографий».`,
       keyboard: incidentDraftPhotoRetryKeyboard(),
     });
     return;

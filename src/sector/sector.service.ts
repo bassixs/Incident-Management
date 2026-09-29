@@ -47,7 +47,7 @@ export class SectorService {
     const incident = await this.repository.findById(incidentId);
     if (!incident) throw new NotFoundError(`Incident ${incidentId} not found`);
     if (!incident.assignedGroup) {
-      throw new ValidationError('Обращение ещё не распределено.');
+      throw new ValidationError('Сообщение ещё не распределено.');
     }
     const chatId = this.groups.requireChatId(incident.assignedGroup);
 
@@ -107,8 +107,8 @@ export class SectorService {
     await this.prisma.$transaction(async tx => {
       await assertSectorReservation(tx, incidentId, actor.maxUserId);
       const incident = await this.repository.findById(incidentId, tx);
-      if (!incident) throw new NotFoundError('Обращение не найдено.');
-      if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)) throw new ConflictError('Обращение уже перешло на другой этап.');
+      if (!incident) throw new NotFoundError('Сообщение не найдено.');
+      if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)) throw new ConflictError('Сообщение уже перешло на другой этап.');
       const active = await tx.actionLock.findFirst({ where: { incidentId, action: SECTOR_LEASE_ACTION, lockedUntil: { gt: new Date() } } });
       if (active) throw new ConflictError(`${incident.publicCode} уже у вас в работе.`);
       const key = `sector-queue:${incidentId}`;
@@ -129,12 +129,12 @@ export class SectorService {
     await this.prisma.$transaction(async tx => {
       await assertSectorReservation(tx, incidentId, actor.maxUserId);
       const incident = await this.repository.findById(incidentId, tx);
-      if (!incident) throw new NotFoundError('Обращение не найдено.');
-      if (incident.assignedGroup?.maxChatId !== chatId) throw new ConflictError('Откройте текущий профильный чат обращения.');
+      if (!incident) throw new NotFoundError('Сообщение не найдено.');
+      if (incident.assignedGroup?.maxChatId !== chatId) throw new ConflictError('Откройте текущий профильный чат сообщения.');
       assertResponder(actor, incident, chatId);
-      if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)) throw new ConflictError('Обращение уже перешло на другой этап.');
+      if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)) throw new ConflictError('Сообщение уже перешло на другой этап.');
       const removed = await tx.actionLock.deleteMany({ where: { incidentId, action: SECTOR_LEASE_ACTION, maxUserId: actor.maxUserId } });
-      if (!removed.count) throw new ConflictError('Обращение уже свободно или закреплено за другим сотрудником.');
+      if (!removed.count) throw new ConflictError('Сообщение уже свободно или закреплено за другим сотрудником.');
       await tx.incident.update({ where: { id: incidentId }, data: { currentResponderId: null, status: incident.revisionReason ? 'REVISION_REQUIRED' : 'ASSIGNED' } });
       await tx.operatorSession.deleteMany({ where: { incidentId, maxUserId: actor.maxUserId, chatId } });
       await this.history.record({ incidentId, action: 'SECTOR_RELEASED', actorMaxUserId: actor.maxUserId, actorRole: actor.role }, tx);
@@ -150,10 +150,10 @@ export class SectorService {
       await acquireAdvisoryLock(tx, ...CLAIM_LOCK);
       await assertSectorReservation(tx, incidentId, actor.maxUserId);
       const incident = await this.repository.findById(incidentId, tx);
-      if (!incident) throw new NotFoundError('Обращение не найдено.');
-      if (incident.assignedGroup?.maxChatId !== chatId) throw new ConflictError('Откройте текущий профильный чат обращения.');
+      if (!incident) throw new NotFoundError('Сообщение не найдено.');
+      if (incident.assignedGroup?.maxChatId !== chatId) throw new ConflictError('Откройте текущий профильный чат сообщения.');
       assertResponder(actor, incident, chatId);
-      if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status) || (expectedGroupId && expectedGroupId !== incident.assignedGroupId)) throw new ConflictError('Обращение уже перешло на другой этап или в другую организацию.');
+      if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status) || (expectedGroupId && expectedGroupId !== incident.assignedGroupId)) throw new ConflictError('Сообщение уже перешло на другой этап или в другую организацию.');
       this.state.assertTransition(incident.status, 'DISTRIBUTION');
       const event = await tx.incidentHistory.create({ data: { incidentId, action: 'REDISTRIBUTION_REQUESTED', fromStatus: incident.status,
         toStatus: 'DISTRIBUTION', actorMaxUserId: actor.maxUserId, actorRole: actor.role,
@@ -166,7 +166,7 @@ export class SectorService {
       await queueDistributionRefresh(tx, incidentId, event.id, true);
       await queueStaffRefresh(tx, incidentId, event.id);
       await queueMessage(tx, { chatId: getConfig().DISTRIBUTION_CHAT_ID! }, {
-        text: `↩️ ВОЗВРАЩЕНО НА ПЕРЕРАСПРЕДЕЛЕНИЕ\n${incident.publicCode}\nОт: ${incident.assignedGroup!.name}\nСотрудник: ${actor.displayName}\nПричина: ${reason.trim()}\n\nОбращение в общей очереди по первоначальной дате. Срок ответа сохранён.`,
+        text: `↩️ ВОЗВРАЩЕНО НА ПЕРЕРАСПРЕДЕЛЕНИЕ\n${incident.publicCode}\nОт: ${incident.assignedGroup!.name}\nСотрудник: ${actor.displayName}\nПричина: ${reason.trim()}\n\nСообщение в общей очереди по первоначальной дате. Срок ответа сохранён.`,
         keyboard: [[{ type: 'callback', text: 'Взять на распределение', payload: `queue:open:${incidentId}` }]],
         delivery: { dedupeKey: `redistribution-notice:${event.id}` },
       }, incidentId);

@@ -37,7 +37,7 @@ export class DistributionQueueService {
         ? await tx.incident.findUnique({ where: { id: incidentId } })
         : own ?? await tx.incident.findFirst({ where: { status: 'DISTRIBUTION', OR: [{ distributionClaimUntil: null }, { distributionClaimUntil: { lte: now } }] }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
       if (!candidate) return null;
-      if (candidate.status !== 'DISTRIBUTION') throw new ConflictError('Обращение уже распределено или отклонено.');
+      if (candidate.status !== 'DISTRIBUTION') throw new ConflictError('Сообщение уже распределено или отклонено.');
       assertClaimOwner(candidate, actor.maxUserId, now);
       const until = own?.id === candidate.id ? own.distributionClaimUntil! : new Date(now.getTime() + CLAIM_MINUTES * 60_000);
       const updated = await tx.incident.update({ where: { id: candidate.id }, data: {
@@ -67,7 +67,7 @@ export class DistributionQueueService {
       await acquireAdvisoryLock(tx, ...CLAIM_LOCK);
       const released = await tx.incident.updateMany({ where: { id, status: 'DISTRIBUTION', distributionClaimedBy: actor.maxUserId },
         data: { distributionClaimedBy: null, distributionClaimedName: null, distributionClaimUntil: null } });
-      if (!released.count) throw new ConflictError('Обращение уже обработано, свободно или закреплено за другим оператором.');
+      if (!released.count) throw new ConflictError('Сообщение уже обработано, свободно или закреплено за другим оператором.');
       await tx.incidentHistory.create({ data: { incidentId: id, action: 'DISTRIBUTION_RELEASED', actorMaxUserId: actor.maxUserId } });
       await tx.operatorSession.deleteMany({ where: { incidentId: id, maxUserId: actor.maxUserId, chatId } });
       await queueDistributionRefresh(tx, id, undefined, true);

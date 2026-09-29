@@ -25,7 +25,7 @@ export async function sendReport(
   if (rows === 0 && overdueRows === 0) {
     await services.messages.send(
       { chatId },
-      { text: `За этот период обращений нет (${range.title}), текущих просроченных тоже нет. Файл не формировался.` },
+      { text: `За этот период сообщений нет (${range.title}), текущих просроченных тоже нет. Файл не формировался.` },
     );
     return;
   }
@@ -33,7 +33,7 @@ export async function sendReport(
   await services.messages.send(
     { chatId },
     {
-      text: `📊 Отчёт ${range.title}\nОбращений за период: ${rows}\nТекущих просроченных: ${overdueRows} — на втором листе`,
+      text: `📊 Отчёт ${range.title}\nСообщений за период: ${rows}\nТекущих просроченных: ${overdueRows} — на втором листе`,
       attachments: [{ type: 'FILE', body: buffer, originalName: fileName }],
     },
   );

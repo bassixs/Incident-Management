@@ -11,8 +11,8 @@ const log = moduleLogger('bot');
 /** Commands advertised in the MAX client UI. */
 const BOT_COMMANDS = [
   { name: 'start', description: 'Главное меню' },
-  { name: 'my', description: 'Мои обращения' },
-  { name: 'rules', description: 'Правила подачи обращения' },
+  { name: 'my', description: 'Мои сообщения' },
+  { name: 'rules', description: 'Правила подачи сообщения' },
   { name: 'whoami', description: 'Ваш MAX ID и ID чата' },
   { name: 'help', description: 'Список команд' },
   { name: 'info', description: 'О чате, правах и порядке работы' },

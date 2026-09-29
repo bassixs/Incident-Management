@@ -47,13 +47,13 @@ describe('requester incident draft', () => {
 
     const edit = incidentDraftEditKeyboard(true);
     expect(labels(edit)).toEqual([
-      'Сфера обращения',
+      'Сфера сообщения',
       'Территория и населённый пункт',
-      'Текст обращения',
+      'Текст сообщения',
       'Фотографии',
       '⬅️ Назад к проверке',
     ]);
-    expect(callback(edit, 'Текст обращения')).toEqual({
+    expect(callback(edit, 'Текст сообщения')).toEqual({
       kind: 'user',
       action: 'draft-field',
       argument: 'text',

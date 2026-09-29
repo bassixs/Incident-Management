@@ -23,6 +23,6 @@ export async function assertSectorReservation(tx: Tx, id: string, maxUserId: big
   const lock = await tx.actionLock.findFirst({ where: { incidentId: id, action: SECTOR_LEASE_ACTION, lockedUntil: { gt: new Date() } } });
   if (lock && lock.maxUserId !== maxUserId) {
     const owner = await tx.user.findUnique({ where: { maxUserId: lock.maxUserId } });
-    throw new ConflictError(`Обращение закреплено за ${owner?.displayName ?? 'другим сотрудником'} до ${formatDateTime(lock.lockedUntil)}. Дождитесь освобождения.`);
+    throw new ConflictError(`Сообщение закреплено за ${owner?.displayName ?? 'другим сотрудником'} до ${formatDateTime(lock.lockedUntil)}. Дождитесь освобождения.`);
   }
 }

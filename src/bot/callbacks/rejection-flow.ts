@@ -25,11 +25,11 @@ export type RejectionDraft = {
 
 export function rejectionDraft(session: OperatorSession): RejectionDraft {
   const data = session.data as unknown as RejectionDraft | null;
-  if (!data?.rejectionToken || !data.rejectionStage) throw new ConflictError('Начните отклонение заново через карточку обращения.');
+  if (!data?.rejectionToken || !data.rejectionStage) throw new ConflictError('Начните отклонение заново через карточку сообщения.');
   return data;
 }
 
-const expired = () => new ConflictError('Эта карточка отклонения устарела. Откройте актуальное обращение через /queue.');
+const expired = () => new ConflictError('Эта карточка отклонения устарела. Откройте актуальное сообщение через /queue.');
 
 /** CAS and the distribution lock prevent editing/cancelling a draft during confirmation. */
 async function replaceDraft(services: AppServices, session: OperatorSession, next: RejectionDraft | null) {
@@ -103,7 +103,7 @@ export async function handleRejectionAction(services: AppServices, actor: Resolv
   }
   if (action === 'reject-cancel') {
     await replaceDraft(services, session, null);
-    if (messageId) await services.messages.finalizeCard(messageId, `${incident.publicCode}: отклонение отменено. Обращение остаётся в работе.`);
+    if (messageId) await services.messages.finalizeCard(messageId, `${incident.publicCode}: отклонение отменено. Сообщение остаётся в работе.`);
     return 'Отклонение отменено';
   }
   let next: RejectionDraft = { ...data, rejectionToken: randomUUID() };

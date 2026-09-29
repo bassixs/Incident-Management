@@ -41,7 +41,7 @@ export async function handleOperatorMessage(
 
   try {
     await assertWorkingChat(services, chatId);
-    if (await discardObsoleteSession(services, session)) throw new ValidationError('Обращение уже перешло на другой этап. Незавершённое действие сброшено. Откройте актуальную карточку через /queue или проверьте статус через /today.');
+    if (await discardObsoleteSession(services, session)) throw new ValidationError('Сообщение уже перешло на другой этап. Незавершённое действие сброшено. Откройте актуальную карточку через /queue или проверьте статус через /today.');
     if (!options.confirmed && pendingConfirmation(session)) throw new ValidationError('Бот ждёт подтверждения кнопкой. Нажмите «Подтвердить», «Исправить» или «Отмена» в предварительном просмотре.');
     if (!options.confirmed && ['WAITING_FOR_ANSWER', 'WAITING_REVISION_REASON', 'WAITING_BAN_REASON'].includes(session.type) && !(session.data as { reviewEdit?: boolean } | null)?.reviewEdit) {
       await prepareInputConfirmation(services, actor, chatId, session, message); return;
@@ -50,7 +50,7 @@ export async function handleOperatorMessage(
       case SessionType.WAITING_CLARIFICATION_QUESTION:
       case SessionType.WAITING_CLARIFICATION_REPLY:
         await services.prisma.operatorSession.deleteMany({ where: { id: session.id } });
-        throw new ValidationError('Запросы уточнений у жителей больше не используются. Продолжите работу с карточкой обращения.');
+        throw new ValidationError('Запросы уточнений у жителей больше не используются. Продолжите работу с карточкой сообщения.');
       case SessionType.WAITING_REJECTION_REASON:
         await acceptRejectionText(services, actor, chatId, session, text);
         break;
@@ -101,13 +101,13 @@ export async function handleOperatorMessage(
 }
 
 function requireIncidentId(session: OperatorSession): string {
-  if (!session.incidentId) throw new AppError('Действие не привязано к обращению.', 'SESSION_BROKEN');
+  if (!session.incidentId) throw new AppError('Действие не привязано к сообщению.', 'SESSION_BROKEN');
   return session.incidentId;
 }
 
 async function loadIncident(services: AppServices, incidentId: string) {
   const incident = await services.repository.findById(incidentId);
-  if (!incident) throw new AppError('Обращение не найдено.', 'NOT_FOUND');
+  if (!incident) throw new AppError('Сообщение не найдено.', 'NOT_FOUND');
   return incident;
 }
 
@@ -122,7 +122,7 @@ async function applyRevision(
   if (returnData?.redistribution) {
     await services.sector.returnToDistribution(requireIncidentId(session), actor, chatId, reason, returnData.assignedGroupId);
     await services.prisma.operatorSession.deleteMany({ where: { id: session.id } });
-    await services.messages.send({ chatId }, { text: '↩️ Обращение возвращено в очередь распределения. Причина сохранена.' });
+    await services.messages.send({ chatId }, { text: '↩️ Сообщение возвращено в очередь распределения. Причина сохранена.' });
     return;
   }
   assertApprover(services, actor, chatId);

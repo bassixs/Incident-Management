@@ -47,7 +47,7 @@ async function alertFailure(result: RetentionRunResult): Promise<void> {
   await max
     .sendToChat(
       config.DELIVERY_ALERT_CHAT_ID,
-      ['🚨 Ошибка автоматического удаления обращений', '', `Не удалено: ${result.failures.length}`, `Обращения: ${codes}`, '', 'Проверка на сервере: npm run retention:preview'].join('\n'),
+      ['🚨 Ошибка автоматического удаления сообщений', '', `Не удалено: ${result.failures.length}`, `Сообщения: ${codes}`, '', 'Проверка на сервере: npm run retention:preview'].join('\n'),
     )
     .catch((error) =>
       logger().error({ err: error instanceof Error ? error.message : String(error) }, 'failed to send retention alert'),
@@ -63,7 +63,7 @@ main().catch(async (error) => {
       const bot = new Bot(config.BOT_TOKEN, { clientOptions: { baseUrl: config.MAX_API_BASE_URL } });
       await createMaxClient(bot).sendToChat(
         config.DELIVERY_ALERT_CHAT_ID,
-        '🚨 Автоматическое удаление обращений не запустилось. Проверьте журнал incident-bot-retention.service.',
+        '🚨 Автоматическое удаление сообщений не запустилось. Проверьте журнал incident-bot-retention.service.',
       );
     }
   } catch {

@@ -69,30 +69,30 @@ export function normaliseRequesterPhone(raw: string): string {
 }
 
 export const REJECTION_MESSAGES = {
-  banned: 'Отправка обращений для вашей учётной записи временно недоступна.',
+  banned: 'Отправка сообщений для вашей учётной записи временно недоступна.',
   file: 'Можно прикреплять только фотографии. Файлы не принимаются. Отправьте изображение как фото из галереи, а не как файл.',
   video:
-    'Видео к обращениям прикреплять нельзя.\n\n' +
+    'Видео к сообщениям прикреплять нельзя.\n\n' +
     'Отправьте описание проблемы текстом и, при необходимости, приложите фотографию.',
   audio:
-    'Аудиосообщения не принимаются как обращение.\n\n' +
+    'Аудиосообщения не принимаются как сообщение.\n\n' +
     'Отправьте описание проблемы текстом и, при необходимости, приложите фотографию.',
   empty:
-    'Обращение должно содержать текст.\n\n' +
+    'Сообщение должно содержать текст.\n\n' +
     'Опишите проблему одним сообщением — при необходимости можно приложить фотографию.',
 } as const;
 
 export function tooLongMessage(maxLength: number): string {
   return (
     'Сообщение слишком длинное.\n\n' +
-    `Максимальная длина обращения — ${maxLength} символов.\n` +
+    `Максимальная длина сообщения — ${maxLength} символов.\n` +
     'Сократите текст и отправьте его ещё раз.'
   );
 }
 
 export function dailyLimitMessage(limit: number): string {
   return (
-    `Вы уже отправили ${limit} обращения сегодня.\n\n` + 'Новый запрос можно будет отправить завтра.'
+    `Вы уже отправили ${limit} сообщения сегодня.\n\n` + 'Новый запрос можно будет отправить завтра.'
   );
 }
 
@@ -124,7 +124,7 @@ export class IncidentService {
       throw new ValidationError(REJECTION_MESSAGES.file, { reason: 'file' });
     }
     if (media.some(item => item.kind !== 'IMAGE')) {
-      throw new ValidationError('К обращению можно приложить только фотографии. Удалите другие вложения и повторите отправку.');
+      throw new ValidationError('К сообщению можно приложить только фотографии. Удалите другие вложения и повторите отправку.');
     }
     const normalised = normaliseIncidentText(text ?? '');
     if (normalised.length === 0) {
@@ -335,7 +335,7 @@ export class IncidentService {
       if (incident?.responseRating !== null && incident?.responseRating !== undefined) {
         throw new ConflictError(`Вы уже оценили этот ответ на ${incident.responseRating} из 5.`);
       }
-      throw new ValidationError('Оценить можно только полученный ответ по своему обращению.');
+      throw new ValidationError('Оценить можно только полученный ответ по своему сообщению.');
     }
 
     return this.prisma.incident.findUniqueOrThrow({ where: { id: incidentId } });

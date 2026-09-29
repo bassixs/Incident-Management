@@ -35,7 +35,7 @@ describeIntegration('manual cleanup with separate data and profile commands', ()
   }
   async function incident(user: Awaited<ReturnType<typeof resident>>, suffix: string, createdAt = since) {
     return prisma.incident.create({ data: { publicCode: `INC-20260907-${suffix}`, requesterId: user.id, requesterMaxUserId: user.maxUserId,
-      requesterName: 'Имя в обращении', requesterPhone: '+79990000000', text: 'Проблема', deadlineAt: new Date(Date.now() + 72 * 3_600_000), createdAt } });
+      requesterName: 'Имя в сообщении', requesterPhone: '+79990000000', text: 'Проблема', deadlineAt: new Date(Date.now() + 72 * 3_600_000), createdAt } });
   }
   async function consent(userId: string, id: bigint) {
     return prisma.legalAcceptance.create({ data: { userId, maxUserId: id, type: 'PERSONAL_DATA_CONSENT', documentVersion: '1.0', documentUrl: 'https://example.test/consent',
@@ -105,7 +105,7 @@ describeIntegration('manual cleanup with separate data and profile commands', ()
     await confirm(plan);
     expect(await prisma.user.findUnique({ where: { id: orphan.id } })).toBeNull();
     expect(await prisma.user.findUniqueOrThrow({ where: { id: linked.id } })).toMatchObject({ requesterName: null, requesterPhone: null, username: null });
-    expect(await prisma.incident.findUniqueOrThrow({ where: { id: kept.id } })).toMatchObject({ requesterName: 'Имя в обращении', requesterPhone: '+79990000000' });
+    expect(await prisma.incident.findUniqueOrThrow({ where: { id: kept.id } })).toMatchObject({ requesterName: 'Имя в сообщении', requesterPhone: '+79990000000' });
     expect(await prisma.legalAcceptance.count()).toBe(0); expect(await prisma.ban.count()).toBe(1);
     expect(await prisma.operatorSession.count()).toBe(1); expect(await prisma.user.findUnique({ where: { id: storedStaff.id } })).not.toBeNull();
   });

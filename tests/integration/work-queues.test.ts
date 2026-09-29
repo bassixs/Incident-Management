@@ -127,10 +127,10 @@ describeIntegration('working chat queues and obsolete actions', () => {
     await prisma.incidentAnswer.updateMany({ where: { incidentId: b.id }, data: { deliveredAt: null } });
     await services.workQueues.list(actor, TEST_CHATS.review, 0, false, true);
     await services.messages.flush();
-    const summary = sent.findLast(s => s.chat === TEST_CHATS.review && s.text.includes('ОБРАЩЕНИЯ ЗА СЕГОДНЯ'))!;
+    const summary = sent.findLast(s => s.chat === TEST_CHATS.review && s.text.includes('СООБЩЕНИЯ ЗА СЕГОДНЯ'))!;
     expect(summary.text).toContain('Отработано: 1'); expect(summary.text).toContain('Ожидает доставки: 1');
     await services.workQueues.list(actor, TEST_CHATS.distribution, 0, false, true); await services.messages.flush();
-    const routing = sent.findLast(s => s.chat === TEST_CHATS.distribution && s.text.includes('ОБРАЩЕНИЯ ЗА СЕГОДНЯ'))!.text;
+    const routing = sent.findLast(s => s.chat === TEST_CHATS.distribution && s.text.includes('СООБЩЕНИЯ ЗА СЕГОДНЯ'))!.text;
     expect(routing).toContain('🟢 Распределено: 2'); expect(routing).toContain('🔴 Не распределено: 0');
     expect(routing).not.toMatch(/Отработано|Ожидает доставки|На согласовании/);
   });

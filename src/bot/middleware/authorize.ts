@@ -47,7 +47,7 @@ export function assertIncidentVisible(actor: ResolvedActor, incident: IncidentWi
   const chat = actor.workingChat;
   if (!chat || actor.roles.includes(UserRole.ADMIN) || chat.distribution || chat.review || chat.delivery) return;
   if (incident.assignedGroup?.maxChatId !== chatId) {
-    throw new ForbiddenError('В этом профильном чате доступны только обращения, назначенные его группе.');
+    throw new ForbiddenError('В этом профильном чате доступны только сообщения, назначенные его группе.');
   }
 }
 
@@ -69,10 +69,10 @@ export function assertResponder(
   const group = incident.assignedGroup;
   const sectorChatId = group?.maxChatId ?? null;
   if (sectorChatId === null) {
-    throw new ForbiddenError(`Для сферы обращения ${incident.publicCode} не настроен рабочий чат.`);
+    throw new ForbiddenError(`Для сферы сообщения ${incident.publicCode} не настроен рабочий чат.`);
   }
   if (chatId === undefined || chatId !== sectorChatId) {
-    throw new ForbiddenError('Это действие доступно только в профильном чате этого обращения.');
+    throw new ForbiddenError('Это действие доступно только в профильном чате этого сообщения.');
   }
   if (group?.bypassReview && !hasPermission(actor.roles, 'incident.distribute')) {
     throw new ForbiddenError('В чате «Администрация Губернатора» отвечать могут только распределители.');

@@ -219,7 +219,7 @@ async function handleSessionCallback(
 
   const session = await services.sessions.find(maxUserId, chatId);
   if (!session) return 'Активных действий нет.';
-  if (await discardObsoleteSession(services, session)) return 'Обращение уже перешло на другой этап. Незавершённое действие сброшено.';
+  if (await discardObsoleteSession(services, session)) return 'Сообщение уже перешло на другой этап. Незавершённое действие сброшено.';
   await services.sessions.extend(session.id);
   if (pendingConfirmation(session)) { await showStaffConfirmation(services, session); return 'Проверьте действие и подтвердите или отмените.'; }
   if ((session.data as { reviewEdit?: boolean } | null)?.reviewEdit) {

@@ -132,7 +132,7 @@ describeIntegration('mixed resident and employee workflows', () => {
         expect(incident.requesterPhone?.replace(/\D/g, '')).toBe(`7900000${String(i).padStart(4, '0')}`);
         expect(incident.attachments.map(a => photoToken(a.storageKey))).toEqual([`resident-${i}`]);
         const approved = incident.answers.filter(a => a.status === 'APPROVED');
-        const final = sent.filter(row => row.target === `user:${incident.requesterMaxUserId}` && row.text.includes('Получен ответ по вашему обращению'));
+        const final = sent.filter(row => row.target === `user:${incident.requesterMaxUserId}` && row.text.includes('Получен ответ по вашему сообщению'));
         expect(final).toHaveLength(incident.status === 'RESOLVED' ? 1 : 0);
         if (incident.status === 'RESOLVED') {
           expect(approved).toHaveLength(1); expect(approved[0]!.deliveredAt).not.toBeNull();

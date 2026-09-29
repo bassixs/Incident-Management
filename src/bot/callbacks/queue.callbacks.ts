@@ -12,12 +12,12 @@ export async function handleQueueCallback(services: AppServices, actor: Resolved
     case 'open': {
       const incident = await services.distributionQueue.claim(actor, chatId, payload.action === 'open' ? payload.argument : undefined, true);
       await services.distributionQueue.refresh();
-      return incident ? `${incident.publicCode}: закреплено за вами` : 'Свободных обращений нет. Ожидающие обращения могут быть у других операторов.';
+      return incident ? `${incident.publicCode}: закреплено за вами` : 'Свободных сообщений нет. Ожидающие сообщения могут быть у других операторов.';
     }
     case 'release':
       await services.distributionQueue.release(actor, chatId, payload.argument!);
       await services.distributionQueue.refresh();
-      return 'Обращение снова доступно другим операторам';
+      return 'Сообщение снова доступно другим операторам';
     case 'list':
       await services.distributionQueue.list(actor, chatId, Number(payload.argument));
       return 'Список обновлён';

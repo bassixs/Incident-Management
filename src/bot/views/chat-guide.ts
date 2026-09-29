@@ -26,12 +26,12 @@ export async function sendChatGuide(services: AppServices, actor: ResolvedActor,
   if (!dialog) await assertWorkingChat(services, chatId, false);
   const guides: Array<{ name: string; title: string }> = [];
   if (action === 'admin') guides.push({ name: 'admin', title: 'Администратор: настройки и служебные команды' });
-  else if (dialog) guides.push({ name: 'resident', title: 'Житель: подача обращения и получение ответа' });
+  else if (dialog) guides.push({ name: 'resident', title: 'Житель: подача сообщения и получение ответа' });
   else {
     // Reload configuration: even an old button must select the current chat's guide.
     const chat = await workingChatFor(services, chatId!);
     if (!chat) throw new ForbiddenError('Этот чат больше не настроен как рабочий.');
-    if (chat.distribution) guides.push({ name: 'distribution', title: 'Распределение обращений' });
+    if (chat.distribution) guides.push({ name: 'distribution', title: 'Распределение сообщений' });
     if (chat.groups.some(group => !group.bypassReview)) guides.push({ name: 'profile', title: 'Профильный чат: подготовка ответа' });
     if (chat.groups.some(group => group.bypassReview)) guides.push({ name: 'profile-direct', title: 'Профильный чат: ответы без согласования' });
     if (chat.review) guides.push({ name: 'review', title: 'Согласование ответов' });

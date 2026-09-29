@@ -53,7 +53,7 @@ async function checkDatabase(prisma: PrismaClient): Promise<void> {
     record(
       'База данных',
       'ok',
-      `Подключение есть, миграции применены. Тем: ${categories}, ответственных групп: ${groups}, обращений: ${incidents}.`,
+      `Подключение есть, миграции применены. Тем: ${categories}, ответственных групп: ${groups}, сообщений: ${incidents}.`,
     );
     if (categories === 0) {
       record('Сферы (Category)', 'warn', 'Таблица пуста. Выполните: npm run seed');
@@ -92,7 +92,7 @@ async function checkChat(max: MaxClient, label: string, chatId: bigint | undefin
       canWrite && membership.is_admin ? 'ok' : 'warn',
       `${chat.title ?? 'без названия'} (${chatId.toString()}), тип: ${chat.type}` +
         (canWrite ? '' : ' — у бота нет права писать в чат') +
-        (membership.is_admin ? '' : ' — для приветствия при вступлении бот должен быть администратором; права участников работают при обращении к боту'),
+        (membership.is_admin ? '' : ' — для приветствия при вступлении бот должен быть администратором; права участников работают при взаимодействии с ботом'),
     );
     return true;
   } catch (error) {

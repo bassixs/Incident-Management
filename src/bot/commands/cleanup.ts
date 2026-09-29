@@ -21,7 +21,7 @@ export async function cleanupCommand(context: CommandContext, kind: CleanupKind)
   }
   if (kind === 'data' && !args.length) {
     await services.messages.send({ chatId }, {
-      text: 'Удаление обращений: выберите период по дате их создания. Следующий шаг — только подсчёт, без удаления.\n\nСохранённые данные жителей сбрасываются отдельно: /clear_users.',
+      text: 'Удаление сообщений: выберите период по дате их создания. Следующий шаг — только подсчёт, без удаления.\n\nСохранённые данные жителей сбрасываются отдельно: /clear_users.',
       keyboard: [...CLEANUP_PERIODS.map((period, index) => [{ type: 'callback' as const, text: labels[index]!, payload: `cleanup:${period}` }]),
         [{ type: 'callback', text: 'Указать даты', payload: 'cleanup:custom' }]],
     });

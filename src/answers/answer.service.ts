@@ -47,7 +47,7 @@ export class AnswerService {
     await this.prisma.$transaction(async tx => {
       await acquireAdvisoryLock(tx, 'incident-answer', incidentId);
       const incident = await this.repository.findById(incidentId, tx);
-      if (!incident || !incident.assignedGroup?.isActive || incident.assignedGroup.maxChatId !== chatId) throw new ConflictError('Откройте действие в профильном чате обращения.');
+      if (!incident || !incident.assignedGroup?.isActive || incident.assignedGroup.maxChatId !== chatId) throw new ConflictError('Откройте действие в профильном чате сообщения.');
       assertResponder(actor, incident, chatId);
       const failed = await tx.outboundMessage.findUnique({ where: { id: outboxId } });
       const answer = incident.answers.at(-1);

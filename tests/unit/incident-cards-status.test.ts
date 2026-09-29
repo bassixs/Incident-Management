@@ -100,7 +100,7 @@ describe('staff card status markers', () => {
   ])('shows the sector workflow stage %s', (status, marker) => {
     const text = sectorCard({ ...incident, status }, group);
     expect(text.startsWith(marker)).toBe(true);
-    expect(text).not.toContain('НОВОЕ ОБРАЩЕНИЕ');
+    expect(text).not.toContain('НОВОЕ СООБЩЕНИЕ');
     expect(text).toContain(incident.text);
     expect(distributionStatus({ status })).toBe('🟢 РАСПРЕДЕЛЕНО');
     expect(incidentLookupCard({ ...incident, status }, undefined, true)).toContain('Статус:\n🟢 РАСПРЕДЕЛЕНО');

@@ -699,7 +699,7 @@ export class MaxMessageService {
       const oldSector = !review && (row.targetId !== incident.assignedGroup?.maxChatId || (incident.history?.[0] && (row.trackingType === 'SECTOR_CARD' ? row.dedupeKey !== `sector-card:${incidentId}:return:${incident.history[0].id}` : row.dedupeKey?.startsWith('work-copy:sector:') ? !row.dedupeKey.endsWith(`:cycle:${incident.history[0].id}`) : row.createdAt < incident.history[0].createdAt)));
       let text: string; let buttons: Button[][] = [];
       if (oldSector) {
-        text = `↩️ ${incident.publicCode}: обращение возвращено на перераспределение. Работа по этой карточке завершена.\nПричина: ${(incident.history?.[0]?.metadata as { reason?: string })?.reason ?? 'Организация изменена'}`;
+        text = `↩️ ${incident.publicCode}: сообщение возвращено на перераспределение. Работа по этой карточке завершена.\nПричина: ${(incident.history?.[0]?.metadata as { reason?: string })?.reason ?? 'Организация изменена'}`;
       } else if (review) {
         const answer = incident.answers.find(a => a.id === row.answerId);
         if (!answer) continue;
@@ -749,10 +749,10 @@ export class MaxMessageService {
     const overloaded = snapshot.total >= config.DISTRIBUTION_OVERLOAD_COUNT;
     if (!overloaded && !(operation.level === 'normal' ? snapshot.delayed60 : snapshot.delayed120)) return {};
     return this.deliverLogical({ chatId }, {
-      text: [operation.level === 'normal' ? '⚠️ Очередь распределения требует внимания' : '🚨 Нужна помощь с распределением обращений', '',
+      text: [operation.level === 'normal' ? '⚠️ Очередь распределения требует внимания' : '🚨 Нужна помощь с распределением сообщений', '',
         `Ожидают: ${snapshot.total}. Более часа: ${snapshot.delayed60}. Более двух часов: ${snapshot.delayed120}.`,
-        ...(overloaded ? [`Очередь достигла порога ${config.DISTRIBUTION_OVERLOAD_COUNT} обращений — проверьте, нужен ли резервный оператор.`] : []),
-        'Откройте панель очереди в чате распределения и разберите старейшие обращения.',
+        ...(overloaded ? [`Очередь достигла порога ${config.DISTRIBUTION_OVERLOAD_COUNT} сообщений — проверьте, нужен ли резервный оператор.`] : []),
+        'Откройте панель очереди в чате распределения и разберите старейшие сообщения.',
       ].join('\n'),
       ...(operation.level === 'normal' ? { keyboard: queueKeyboard() } : {}),
     });
@@ -810,7 +810,7 @@ export class MaxMessageService {
           }
           continue;
         }
-        text = `🔴 НЕ РАСПРЕДЕЛЕНО\n\n${incident.publicCode}: закрепление по этой карточке завершено.\n\nОбращение остаётся в очереди. Откройте /queue, чтобы увидеть его текущее состояние и взять в работу.`;
+        text = `🔴 НЕ РАСПРЕДЕЛЕНО\n\n${incident.publicCode}: закрепление по этой карточке завершено.\n\nСообщение остаётся в очереди. Откройте /queue, чтобы увидеть его текущее состояние и взять в работу.`;
       } else if (incident.status === 'REJECTED') {
         text = `🔴 НЕ РАСПРЕДЕЛЕНО\n\n${incident.publicCode} отклонено\n\nПричина:\n${incident.rejectionReason ?? '—'}`;
       } else if (incident.assignedGroup) {
@@ -1029,7 +1029,7 @@ export class MaxMessageService {
     const notice = row.targetType === 'chat'
       ? '⚠️ Фотография недоступна в MAX. Для ответа сотрудника подготовьте новую версию с доступными вложениями. По фотографии жителя требуется проверка сотрудником.'
       : '⚠️ Фотография к этому сообщению недоступна в MAX. Специалисты уведомлены: требуется повторная отправка фотографии. Полный ответ пока не доставлен.';
-    const text = row.targetType === 'user' ? `${payload.label ?? 'Сообщение по вашему обращению'}\n\n${notice}` : `${payload.text}\n\n${notice}`;
+    const text = row.targetType === 'user' ? `${payload.label ?? 'Сообщение по вашему сообщению'}\n\n${notice}` : `${payload.text}\n\n${notice}`;
     await this.durable!.prisma.outboundMessage.createMany({ skipDuplicates: true, data: [{
       dedupeKey: `photo-recovery:${row.id}`, targetType: row.targetType, targetId: row.targetId,
       incidentId: row.incidentId, attachments: [],

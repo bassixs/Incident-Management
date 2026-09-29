@@ -28,16 +28,16 @@ export async function workPanelText(db: PrismaClient | Tx, chatId: bigint): Prom
   const busy = await db.actionLock.count({ where: { action: scope.kind === 'sector' ? SECTOR_LEASE_ACTION : REVIEW_LEASE_ACTION, lockedUntil: { gt: new Date() }, incidentId: { in: (await db.incident.findMany({ where: scope.where, select: { id: true } })).map(i => i.id) } } });
   return [scope.kind === 'sector' ? '📋 ОЧЕРЕДЬ ПРОФИЛЬНОГО ЧАТА' : '📋 ОЧЕРЕДЬ СОГЛАСОВАНИЯ', '',
     `Ожидают обработки: ${total}`, `Свободны: ${total - busy} · В работе: ${busy}`, '',
-    '«Следующее свободное» — самое старое свободное обращение.',
+    '«Следующее свободное» — самое старое свободное сообщение.',
     'Закрепление за сотрудником на 15 минут. Имя и время указаны в карточке. Можно освободить кнопкой.',
-    '«За сегодня» — статусы обращений, зарегистрированных сегодня по Москве.',
+    '«За сегодня» — статусы сообщений, зарегистрированных сегодня по Москве.',
     'Панель обновляется каждую минуту.',
   ].join('\n');
 }
 export async function queueWorkPanel(db: PrismaClient | Tx, chatId: bigint): Promise<void> {
   const dedupeKey = workPanelKey(chatId);
   await db.outboundMessage.createMany({ skipDuplicates: true, data: [{ dedupeKey, targetType: 'chat', targetId: chatId,
-    payload: { text: 'Очередь обращений', operation: { type: 'work-panel' } }, attachments: [], trackingApplied: true }] });
+    payload: { text: 'Очередь сообщений', operation: { type: 'work-panel' } }, attachments: [], trackingApplied: true }] });
   await db.outboundMessage.updateMany({ where: { dedupeKey, status: { in: ['SENT', 'FAILED'] } },
     data: { status: 'PENDING', attempts: 0, nextAttemptAt: new Date(), lastError: null } });
 }

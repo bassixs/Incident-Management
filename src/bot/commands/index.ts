@@ -113,7 +113,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
     const code = args[0];
     if (!code) throw new ValidationError('Использование: /incident INC-000001');
     const incident = await services.incidents.findByPublicCode(code);
-    if (!incident) throw new AppError(`Обращение ${code.toUpperCase()} не найдено.`, 'NOT_FOUND');
+    if (!incident) throw new AppError(`Сообщение ${code.toUpperCase()} не найдено.`, 'NOT_FOUND');
     assertIncidentVisible(actor, incident, chatId);
     await services.messages.send({ chatId }, { text: incidentLookupCard(incident, incident.status === 'DISTRIBUTION' ? incident.distributionClaimUntil && incident.distributionClaimUntil > new Date() ? { name: incident.distributionClaimedName ?? 'Сотрудник', until: incident.distributionClaimUntil } : null : ['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED', 'WAITING_REVIEW'].includes(incident.status) ? await leaseView(services.prisma, incident.id, incident.status === 'WAITING_REVIEW' ? 'review-queue' : 'sector-queue') : undefined, chatId === services.config.DISTRIBUTION_CHAT_ID, [services.config.DISTRIBUTION_CHAT_ID, services.config.REVIEW_CHAT_ID, services.config.DELIVERY_ALERT_CHAT_ID].includes(chatId)) });
   },
@@ -124,7 +124,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
     const code = args[0];
     if (!code) throw new ValidationError('Использование: /history INC-000001');
     const incident = await services.incidents.findByPublicCode(code);
-    if (!incident) throw new AppError(`Обращение ${code.toUpperCase()} не найдено.`, 'NOT_FOUND');
+    if (!incident) throw new AppError(`Сообщение ${code.toUpperCase()} не найдено.`, 'NOT_FOUND');
     assertIncidentVisible(actor, incident, chatId);
     const entries = await services.history.listForIncident(incident.id);
     const actorIds = [...new Set(entries.flatMap((entry) => (entry.actorMaxUserId ? [entry.actorMaxUserId] : [])))];
@@ -165,7 +165,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
     const code = args[0];
     if (!code) throw new ValidationError('Использование: /resend INC-000001');
     const incident = await services.incidents.findByPublicCode(code);
-    if (!incident) throw new AppError(`Обращение ${code.toUpperCase()} не найдено.`, 'NOT_FOUND');
+    if (!incident) throw new AppError(`Сообщение ${code.toUpperCase()} не найдено.`, 'NOT_FOUND');
     assertIncidentVisible(actor, incident, chatId);
     const sent = await services.review.resend(incident.id);
     await services.messages.send(
@@ -240,7 +240,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
       isDialog,
       actor,
       [
-        `Темы обращения: ${categories.length}`,
+        `Темы сообщения: ${categories.length}`,
         ...(active.length
           ? ['', `✅ Доступны пользователю (${active.length}):`, ...active.map((item) => `${item.code} — ${item.name}`)]
           : []),
@@ -564,7 +564,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
     const result = await services.retention.run();
     await recordAudit(services, actor, {
       action: AuditAction.RETENTION_RUN,
-      targetType: 'завершённые обращения',
+      targetType: 'завершённые сообщения',
       summary: `Очистка хранения: удалено ${result.deletedIncidents}, ошибок ${result.failures.length}`,
       metadata: {
         cutoff: result.preview.cutoff.toISOString(),
@@ -603,7 +603,7 @@ export function formatDeliveryProblems(
       `${problem.direction === 'outbound' ? '📤' : '📥'} Ошибка ${problem.reference}`,
       `Когда: ${formatter.format(problem.occurredAt)}`,
       `Что: ${problem.description}`,
-      ...(problem.incidentCode ? [`Обращение: ${problem.incidentCode}`] : []),
+      ...(problem.incidentCode ? [`Сообщение: ${problem.incidentCode}`] : []),
       ...(problem.targetId
         ? [`Получатель: ${problem.targetType === 'user' ? 'пользователь' : 'чат'} ${problem.targetId.toString()}`]
         : []),
