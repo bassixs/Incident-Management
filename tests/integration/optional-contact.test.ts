@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto';
 import ExcelJS from 'exceljs';
 import { beforeAll, afterAll, beforeEach, afterEach, expect, it, vi } from 'vitest';
-import { UserRole, type PrismaClient } from '@prisma/client';
+import { InboxStatus, UserRole, type PrismaClient } from '@prisma/client';
 import { actorFor, createHarness, createTestPrisma, describeIntegration, pushSchemaOnce, resetDatabase, seedCategories, type TestHarness } from '../helpers/integration';
 import { handleUserCallback } from '../../src/bot/callbacks/user.callbacks';
 import { handleRequesterMessage } from '../../src/bot/handlers/requester.handler';
@@ -128,6 +128,47 @@ describeIntegration('optional per-message contact', () => {
     await dispatcher.handle(rawContact() as never);
     const row = await prisma.inboundUpdate.findFirstOrThrow();
     expect(row.payload).toEqual({}); expect(row.lastError).not.toContain('sensitive failure');
+  });
+  it.each([InboxStatus.PROCESSING, InboxStatus.FAILED])('scrubs contact in %s on dispatcher startup without changing pending contacts or ordinary diagnostics', async (status) => {
+    await preview();
+    const dispatch = vi.fn();
+    const dispatcher = new UpdateDispatcher(prisma, { dispatch } as never);
+    const reservation = await dispatcher.reserve(rawContact() as never);
+    const contact = await prisma.inboundUpdate.update({
+      where: { id: reservation.id! },
+      data: { status, lockedAt: new Date(), lastError: `Interrupted contact ${phone}` },
+    });
+    expect(contact.payload).toHaveProperty('verifiedDraftContact.phone', phone);
+    const pending = await prisma.inboundUpdate.create({ data: {
+      externalUpdateKey: 'pending-contact', updateType: contact.updateType,
+      payload: contact.payload as object, status: InboxStatus.PENDING,
+    } });
+    const diagnostic = { update_type: 'message_created', diagnostic: 'keep for investigation' };
+    const ordinaryFailed = await prisma.inboundUpdate.create({ data: {
+      externalUpdateKey: 'ordinary-failed', updateType: contact.updateType,
+      payload: diagnostic, status: InboxStatus.FAILED, lastError: 'Original diagnostic error',
+    } });
+    const ordinaryProcessing = await prisma.inboundUpdate.create({ data: {
+      externalUpdateKey: 'ordinary-processing', updateType: contact.updateType,
+      payload: diagnostic, status: InboxStatus.PROCESSING, lockedAt: new Date(),
+    } });
+    dispatcher.pauseProcessing();
+    try { await dispatcher.start(); }
+    finally { dispatcher.stop(); await dispatcher.waitForIdle(); }
+
+    const recovered = await prisma.inboundUpdate.findUniqueOrThrow({ where: { id: contact.id } });
+    expect(recovered.status).toBe(InboxStatus.FAILED);
+    expect(recovered.payload).toEqual({});
+    expect(recovered.lockedAt).toBeNull();
+    expect(recovered.lastError).toBe('Не удалось обработать контакт; номер очищен. Повторите передачу контакта.');
+    expect(recovered.lastError).not.toMatch(/\d/);
+    expect(await prisma.inboundUpdate.findUniqueOrThrow({ where: { id: pending.id } })).toEqual(pending);
+    expect(await prisma.inboundUpdate.findUniqueOrThrow({ where: { id: ordinaryFailed.id } })).toEqual(ordinaryFailed);
+    expect(await prisma.inboundUpdate.findUniqueOrThrow({ where: { id: ordinaryProcessing.id } })).toMatchObject({
+      status: InboxStatus.FAILED, payload: diagnostic, lockedAt: null,
+      lastError: 'Обработка была прервана перезапуском; требуется безопасная ручная проверка.',
+    });
+    expect(dispatch).not.toHaveBeenCalled();
   });
   it('never includes the optional phone in Excel including overdue rows', async () => {
     await withPhone(); const incident = await register();

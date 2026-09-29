@@ -21,7 +21,7 @@ describeIntegration('bounded parallel inbox', () => {
     const create = vi.fn((args: Parameters<typeof insert>[0]) => insert(args));
     create.mockImplementationOnce(args => blocked.then(() => insert(args)) as ReturnType<typeof insert>);
     // Wrap Prisma instead of spying on its dynamic delegate proxy.
-    const wrapped = { processedUpdate: prisma.processedUpdate, inboundUpdate: { create } };
+    const wrapped = { processedUpdate: prisma.processedUpdate, privateWorkItem: prisma.privateWorkItem, inboundUpdate: { create } };
     const worker = new UpdateDispatcher(wrapped as never, { dispatch: async () => undefined } as never, 2);
     const first = worker.reserve(update(1, 'first-reservation'));
     const second = worker.reserve(update(1, 'second-reservation'));

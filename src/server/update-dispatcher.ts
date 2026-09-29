@@ -11,6 +11,7 @@ import { moduleLogger } from '../utils/logger';
 
 const log = moduleLogger('dispatcher');
 const INBOX_INTERVAL_MS = 250;
+const CONTACT_FAILURE = 'Не удалось обработать контакт; номер очищен. Повторите передачу контакта.';
 
 export type Reservation = { id?: string; key: string; fresh: boolean };
 
@@ -80,6 +81,20 @@ export class UpdateDispatcher {
   async start(): Promise<void> {
     if (this.timer) return;
     this.stopping = false;
+    // Scrub interrupted contacts and failures left by older versions before
+    // resuming work. Pending contacts must remain available for processing.
+    await this.prisma.inboundUpdate.updateMany({
+      where: {
+        status: { in: [InboxStatus.PROCESSING, InboxStatus.FAILED] },
+        payload: { path: ['verifiedDraftContact'], not: Prisma.AnyNull },
+      },
+      data: {
+        status: InboxStatus.FAILED,
+        payload: {},
+        lastError: CONTACT_FAILURE,
+        lockedAt: null,
+      },
+    });
     const interrupted = await this.prisma.inboundUpdate.updateMany({
       where: { status: InboxStatus.PROCESSING },
       data: {
@@ -180,7 +195,7 @@ export class UpdateDispatcher {
       });
     } catch (error) {
       const contact = !!(row.payload as { verifiedDraftContact?: unknown }).verifiedDraftContact;
-      const detail = contact ? 'Не удалось обработать контакт; номер очищен. Повторите передачу контакта.' : error instanceof Error ? error.message : String(error);
+      const detail = contact ? CONTACT_FAILURE : error instanceof Error ? error.message : String(error);
       await this.prisma.inboundUpdate.update({
         where: { id },
         data: {

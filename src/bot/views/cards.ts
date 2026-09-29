@@ -402,7 +402,9 @@ export function incidentDraftPreview(draft: IncidentDraftView, categoryName?: st
     ...(draft.requesterPhone ? [`Телефон для связи: ${draft.requesterPhone}`, OPTIONAL_PHONE_ADDED]
       : draft.pendingPhone ? [`Телефон для связи: ${draft.pendingPhone}`, 'Номер ещё не прикреплён. Проверьте сообщение выше и нажмите «Добавить номер к этому сообщению» или «Убрать номер».']
       : [OPTIONAL_PHONE_OFFER]),
-    'Сообщение ещё не отправлено. Если всё указано правильно, нажмите «Всё верно».',
+    draft.pendingPhone
+      ? 'Сообщение ещё не отправлено. Добавьте номер к этому сообщению или уберите его, чтобы продолжить'
+      : 'Сообщение ещё не отправлено. Если всё указано правильно, нажмите «Всё верно».',
   ].join('\n');
 }
 

@@ -18,6 +18,23 @@ function callback(rows: ReturnType<typeof incidentDraftEditKeyboard>, label: str
 }
 
 describe('requester incident draft', () => {
+  it.each([
+    { pendingPhone: '+7 900 123-45-67' },
+    { requesterPhone: '+7 900 123-45-67' },
+    {},
+  ])('shows the next step appropriate to the phone state: %j', (contact) => {
+    const text = incidentDraftPreview({
+      ...contact, problemMunicipalityName: 'Город Калуга',
+      draftText: 'Не работает фонарь', photoCount: 0,
+    });
+    if ('pendingPhone' in contact) {
+      expect(text).toContain('Сообщение ещё не отправлено. Добавьте номер к этому сообщению или уберите его, чтобы продолжить');
+      expect(text).not.toContain('«Всё верно»');
+    } else {
+      expect(text).toContain('Сообщение ещё не отправлено. Если всё указано правильно, нажмите «Всё верно».');
+    }
+  });
+
   it('shows every entered field and makes clear that nothing was sent yet', () => {
     const text = incidentDraftPreview(
       {
