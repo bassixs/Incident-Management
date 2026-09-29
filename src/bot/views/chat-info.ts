@@ -14,7 +14,7 @@ export async function chatInfoText(services: AppServices, actor: ResolvedActor, 
   ].join('\n');
   const chat = actor.workingChat ?? await workingChatFor(services, chatId);
   if (!chat) return [
-    'Этот чат пока не настроен как рабочий чат «Искры».',
+    'Этот чат пока не настроен как рабочий чат бота «На связи_регион40».',
     `Передайте администратору ID чата: ${chatId}.`,
     '/whoami — узнать свой ID',
     'Чтобы подать обращение, откройте личный чат с ботом и отправьте /start.',
