@@ -108,7 +108,7 @@ export class WorkQueueService {
         text: review ? reviewCard(incident, answer!, incident.assignedGroup, view) : sectorCard(incident, incident.assignedGroup!, view),
         label: `№ ${incident.publicCode}`,
         keyboard: review ? reviewKeyboard(id, answer!.id)
-          : sectorKeyboard(id, { hasTemplate: !!incident.assignedGroup?.answerTemplate, status: incident.status }),
+          : sectorKeyboard(id, { hasPhone: !!incident.requesterPhone, hasTemplate: !!incident.assignedGroup?.answerTemplate, status: incident.status }),
         delivery: { dedupeKey: key },
       }, id, review ? answer!.attachments : incident.attachments);
       if (review) await tx.outboundMessage.updateMany({ where: { dedupeKey: key }, data: { answerId: answer!.id } });

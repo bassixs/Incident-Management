@@ -23,7 +23,7 @@ it.each([
   services.messages.send.mockRejectedValueOnce(error);
   await showIncidentDraftPreview(services as never, 1n, 1n, { ...draft, draftMedia: [{ kind: 'IMAGE', token: 'old' }] });
   expect(services.sessions.start).toHaveBeenCalledWith(expect.objectContaining({
-    type: 'WAITING_INCIDENT_EDIT_VALUE', data: { ...draft, draftMedia: [], draftEditField: 'photo', draftPhotoRetry: true },
+    type: 'WAITING_INCIDENT_EDIT_VALUE', data: expect.objectContaining({ ...draft, draftMedia: [], draftEditField: 'photo', draftPhotoRetry: true }),
   }));
   const notice = services.messages.send.mock.calls.at(-1)![1];
   expect(notice.text).toContain('данные сохранены');

@@ -51,7 +51,7 @@ export class DistributionQueueService {
         text: distributionCard(updated),
         label: `№ ${updated.publicCode}`,
         ...(updated.distributionMessageId ? { replyToMessageId: updated.distributionMessageId } : {}),
-        keyboard: distributionKeyboard(updated.id),
+        keyboard: distributionKeyboard(updated.id, !!updated.requesterPhone),
         delivery: { dedupeKey: `distribution-claim:${updated.id}:${actor.maxUserId}:${until.getTime()}` },
       }, updated.id, updated.attachments);
       if (!own || own.id !== updated.id) await queueDistributionRefresh(tx, updated.id, undefined, true);

@@ -56,7 +56,7 @@ export class SectorService {
       {
         text: sectorCard(incident, incident.assignedGroup, await leaseView(this.prisma, incidentId, SECTOR_LEASE_ACTION)),
         label: codeLabel(incident),
-        keyboard: sectorKeyboard(incident.id, {
+        keyboard: sectorKeyboard(incident.id, { hasPhone: !!incident.requesterPhone,
           hasTemplate: Boolean(incident.assignedGroup.answerTemplate),
           status: incident.status,
         }),
@@ -187,7 +187,7 @@ export class SectorService {
       {
         text: revisionCard(incident, answerVersion, reason),
         label: codeLabel(incident),
-        keyboard: revisionKeyboard(incident.id),
+        keyboard: revisionKeyboard(incident.id, !!incident.requesterPhone),
         delivery: { dedupeKey: `revision:${incident.id}:${answerVersion}` },
       },
     );

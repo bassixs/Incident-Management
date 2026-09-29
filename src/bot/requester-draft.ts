@@ -3,6 +3,7 @@ import type { IncomingMedia } from '../media/media.service';
 import type { OutboundAttachment } from '../max/max-message.service';
 import type { SessionData } from '../sessions/operator-session.service';
 import { SessionType } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 
 import { ValidationError } from '../utils/errors';
 import { assertMediaSize } from '../media/media-limits';
@@ -60,22 +61,31 @@ export async function showIncidentDraftPreview(
   chatId: bigint,
   data: SessionData,
 ): Promise<void> {
-  const { requesterName: _name, requesterPhone: _phone, ...minimal } = data;
+  const { requesterName: _name, ...minimal } = data;
   const draft = requireCompleteIncidentDraft(minimal);
   const { draftEditField: _draftEditField, draftPhotoRetry: _draftPhotoRetry, ...cleanDraft } = draft;
+  cleanDraft.draftToken ??= randomUUID();
+  cleanDraft.previewToken = randomUUID();
+  cleanDraft.previewStartedAt = Date.now();
+  if (cleanDraft.previewMessageId) {
+    await services.messages.deleteCard(cleanDraft.previewMessageId).catch(() => false);
+    delete cleanDraft.previewMessageId;
+  }
   const category = draft.selectedCategoryId
     ? await services.categories.findById(draft.selectedCategoryId)
     : null;
   let attachments: OutboundAttachment[];
   try {
     attachments = await loadPreviewPhotos(draft.draftMedia);
-    await services.messages.send({ userId: maxUserId }, {
+    const sent = await services.messages.send({ userId: maxUserId }, {
       text: incidentDraftPreview({
         problemMunicipalityName: draft.problemMunicipalityName, problemLocality: draft.problemLocality,
-        draftText: draft.draftText, photoCount: attachments.length }, category?.name),
-      keyboard: incidentDraftConfirmationKeyboard(), immediatePreview: true,
+        draftText: draft.draftText, photoCount: attachments.length,
+        requesterPhone: draft.requesterPhone, pendingPhone: draft.pendingPhone }, category?.name),
+      keyboard: incidentDraftConfirmationKeyboard(cleanDraft.previewToken, !!draft.requesterPhone, !!draft.pendingPhone), immediatePreview: true,
       ...(attachments.length ? { attachments } : {}),
     });
+    if (sent?.firstMessageId) cleanDraft.previewMessageId = sent.firstMessageId;
   } catch (error) {
     if (!draft.draftMedia.length) throw error;
     // The failed set must never become confirmable or be silently omitted.

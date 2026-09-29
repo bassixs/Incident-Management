@@ -457,7 +457,7 @@ export class MaxMessageService {
         // Also upgrades older queued replies. A delayed clarification must not
         // offer work buttons after the incident closes or another question starts.
         payload.keyboard = ['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status) && !incident.activeClarificationId
-          ? sectorKeyboard(incident.id, { hasTemplate: Boolean(incident.assignedGroup.answerTemplate) })
+          ? sectorKeyboard(incident.id, { hasPhone: !!incident.requesterPhone, hasTemplate: Boolean(incident.assignedGroup.answerTemplate) })
           : [];
       }
       const result = payload.operation?.type === 'distribution-panel'
@@ -711,10 +711,10 @@ export class MaxMessageService {
       } else if (row.dedupeKey?.startsWith('revision:')) {
         const active = incident.status === 'REVISION_REQUIRED' && row.dedupeKey === `revision:${incidentId}:${latest?.version}`;
         text = `${active ? leaseText(sectorLease) + '\n\n' : ''}↩️ ${incident.publicCode}: ${active ? 'на доработке' : 'доработка по этой карточке завершена'}.\n\n${incident.revisionReason ?? ''}`;
-        if (active) buttons = revisionKeyboard(incidentId);
+        if (active) buttons = revisionKeyboard(incidentId, !!incident.requesterPhone);
       } else {
         text = sectorCard(incident, incident.assignedGroup!, sectorLease);
-        buttons = sectorKeyboard(incidentId, { status: incident.status, hasTemplate: !!incident.assignedGroup?.answerTemplate });
+        buttons = sectorKeyboard(incidentId, { hasPhone: !!incident.requesterPhone, status: incident.status, hasTemplate: !!incident.assignedGroup?.answerTemplate });
       }
       if (stored?.keyboardMessageId && stored.keyboardMessageId !== row.firstMessageId) {
         // Keep every original text fragment; only the final fragment carries actions.
@@ -765,7 +765,7 @@ export class MaxMessageService {
       // Existing status jobs also refresh controls after this upgrade. MAX media
       // is retained from the actual message, without downloading or re-uploading.
       await this.max.editCardWithKeyboard(incident.sectorMessageId, sectorCard(incident, incident.assignedGroup, await leaseView(this.durable!.prisma, incidentId, SECTOR_LEASE_ACTION)),
-        sectorKeyboard(incident.id, { hasTemplate: Boolean(incident.assignedGroup.answerTemplate), status: incident.status }));
+        sectorKeyboard(incident.id, { hasPhone: !!incident.requesterPhone, hasTemplate: Boolean(incident.assignedGroup.answerTemplate), status: incident.status }));
       return {};
     }
     const attachments: OutboundAttachment[] = [];
@@ -780,7 +780,7 @@ export class MaxMessageService {
     await this.max.editMessage(incident.sectorMessageId, sectorCard(incident, incident.assignedGroup, await leaseView(this.durable!.prisma, incidentId, SECTOR_LEASE_ACTION)), [
       ...await this.upload(attachments, true),
       ...(['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)
-        ? [{ type: 'inline_keyboard' as const, payload: { buttons: sectorKeyboard(incident.id, { hasTemplate: Boolean(incident.assignedGroup.answerTemplate), status: incident.status }) } }] : []),
+        ? [{ type: 'inline_keyboard' as const, payload: { buttons: sectorKeyboard(incident.id, { hasPhone: !!incident.requesterPhone, hasTemplate: Boolean(incident.assignedGroup.answerTemplate), status: incident.status }) } }] : []),
     ]);
     return {};
   }
@@ -803,7 +803,7 @@ export class MaxMessageService {
         // The original stays actionable; only obsolete queue copies are retired.
         if (!card.dedupeKey || card.dedupeKey === activeKey || card.dedupeKey === `redistribution-notice:${incident.history?.[0]?.id}`) {
           if (refreshActive) {
-            const keyboard = distributionKeyboard(incidentId);
+            const keyboard = distributionKeyboard(incidentId, !!incident.requesterPhone);
             const currentText = distributionCard(incident);
             try { await this.max.editCardWithKeyboard(card.firstMessageId!, currentText, keyboard); }
             catch (error) { if (!(error instanceof MaxError) || error.status !== 404) throw error; }

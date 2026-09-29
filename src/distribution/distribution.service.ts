@@ -73,7 +73,7 @@ export class DistributionService {
       {
         text: distributionCard(incident),
         label: codeLabel(incident),
-        keyboard: distributionKeyboard(incident.id),
+        keyboard: distributionKeyboard(incident.id, !!incident.requesterPhone),
         attachments: await loadOutboundAttachments(this.media, incident.attachments),
         delivery: {
           dedupeKey: `distribution-card:${incident.id}`,
@@ -264,6 +264,7 @@ export class DistributionService {
       const claimed = await this.repository.transition(tx, incidentId, IncidentStatus.DISTRIBUTION, {
         status: IncidentStatus.REJECTED,
         text: 'Содержание отклонённого сообщения удалено.',
+        requesterPhone: null,
         problemLocality: null,
         rejectionReason: reason,
         distributionClaimedBy: null, distributionClaimedName: null, distributionClaimUntil: null,

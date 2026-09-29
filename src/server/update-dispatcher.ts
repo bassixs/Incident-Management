@@ -179,13 +179,15 @@ export class UpdateDispatcher {
         },
       });
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
+      const contact = !!(row.payload as { verifiedDraftContact?: unknown }).verifiedDraftContact;
+      const detail = contact ? 'Не удалось обработать контакт; номер очищен. Повторите передачу контакта.' : error instanceof Error ? error.message : String(error);
       await this.prisma.inboundUpdate.update({
         where: { id },
         data: {
           status: InboxStatus.FAILED,
           lockedAt: null,
           lastError: detail.slice(0, 4_000),
+          ...(contact ? { payload: {} } : {}),
         },
       });
       log.error({ inboxId: id, key: row.externalUpdateKey, err: detail }, 'inbox update requires attention');

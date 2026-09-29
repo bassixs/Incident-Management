@@ -20,6 +20,7 @@ const log = moduleLogger('incidents');
 
 export type CreateIncidentInput = {
   draftSessionId?: string;
+  draftPreviewToken?: string;
   requester: { maxUserId: bigint; name?: string; phone?: string; username?: string | null };
   text: string;
   userSelectedCategoryId?: string | null;
@@ -161,7 +162,6 @@ export class IncidentService {
     const config = getConfig();
     const { text } = this.validateSubmission(input.text, input.media ?? []);
     const requesterName = 'Житель';
-    const requesterPhone = null;
     assertNoPersonalData(input.problemLocality ?? '');
     await this.assertNotBanned(input.requester.maxUserId);
 
@@ -173,9 +173,13 @@ export class IncidentService {
     let transactionBodyCompleted = false;
     const incident = await this.prisma.$transaction(async (tx) => {
       await acquireAdvisoryLock(tx, 'incident-quota', input.requester.maxUserId.toString());
-
+      let requesterPhone: string | null = null;
       if (input.draftSessionId) {
-        const consumed = await tx.operatorSession.deleteMany({ where: { id: input.draftSessionId, maxUserId: input.requester.maxUserId, type: 'WAITING_INCIDENT_CONFIRMATION' } });
+        const session = await tx.operatorSession.findFirst({ where: { id: input.draftSessionId, maxUserId: input.requester.maxUserId, type: 'WAITING_INCIDENT_CONFIRMATION', expiresAt: { gt: new Date() } } });
+        const data = session?.data as import('../sessions/operator-session.service').SessionData | null;
+        if (!session || !data?.previewToken || data.previewToken !== input.draftPreviewToken || data.pendingPhone) throw new ConflictError('Черновик уже подтверждён или устарел.');
+        requesterPhone = data.requesterPhone ? normaliseRequesterPhone(data.requesterPhone) : null;
+        const consumed = await tx.operatorSession.deleteMany({ where: { id: session.id, data: { equals: session.data! }, expiresAt: { gt: new Date() } } });
         if (consumed.count !== 1) throw new ConflictError('Черновик уже подтверждён или устарел.');
       }
       const used = await this.repository.countCreatedBetween(tx, input.requester.maxUserId, start, end);

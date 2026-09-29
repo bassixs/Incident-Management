@@ -1,4 +1,5 @@
 import { SECTOR_LEASE_ACTION } from '../../work-queues/leases';
+import { revealResidentContact } from '../../privacy/staff-contact';
 import { IncidentStatus, ResponsibleGroupKind, SessionType } from '@prisma/client';
 
 import type { AppServices } from '../../app/container';
@@ -64,12 +65,15 @@ export async function handleIncidentCallback(
   );
 
   switch (payload.action) {
+    case 'contact':
+      await revealResidentContact(services, actor, chatId, incident.id);
+      return 'Контакт отправлен вам в личный диалог с ботом.';
     case 'privacy-pass': {
       assertDispatcher(services, actor, chatId);
       await services.distributionQueue.claim(actor, chatId, incident.id);
       if (payload.argument !== 'confirm') {
         await services.messages.send({ chatId }, {
-          text: `${incident.publicCode}: проверьте весь текст и каждую фотографию. Нет ФИО, телефонов, документов, лиц и других персональных данных? Если данные есть — выберите «Отклонить» и причину «Персональные данные».`,
+          text: `${incident.publicCode}: проверьте весь текст и каждую фотографию. Нет ФИО, телефонов, документов, лиц и других персональных данных? Телефон, переданный отдельной кнопкой, к этой проверке не относится. Если в тексте или фото данные есть — выберите «Отклонить» и причину «Персональные данные».`,
           keyboard: [[{ type: 'callback', text: 'Проверено, персональных данных нет', payload: `incident:privacy-pass:${incident.id}:confirm` }], [{ type: 'callback', text: 'Отмена', payload: `incident:cancel:${incident.id}` }]],
         });
         return;

@@ -10,9 +10,15 @@ const log = moduleLogger('sessions');
 export { SessionType };
 
 export type SessionData = {
-  /** Mandatory contacts collected for the current requester draft. */
+  /** Legacy name is never collected. Phone is optional and scoped to this draft only. */
   requesterName?: string;
   requesterPhone?: string;
+  draftToken?: string;
+  previewToken?: string;
+  previewStartedAt?: number;
+  previewMessageId?: string;
+  /** A verified contact awaiting explicit binding to this preview (MAX has no button nonce). */
+  pendingPhone?: string;
   /** Requester draft: the тема the requester selected, if any. */
   selectedCategoryId?: string | null;
   problemMunicipalityCode?: string;

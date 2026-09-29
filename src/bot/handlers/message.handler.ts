@@ -84,7 +84,9 @@ export async function handleMessageUpdate(services: AppServices, ctx: Context): 
   }
 
   if (dialog) {
-    await handleRequesterMessage(services, actor, chatId, message);
+    const contact = (update as unknown as { verifiedDraftContact?: import('../../privacy/optional-contact').VerifiedDraftContact }).verifiedDraftContact;
+    if (contact) await handleRequesterMessage(services, actor, chatId, message, contact);
+    else await handleRequesterMessage(services, actor, chatId, message);
     return;
   }
 

@@ -41,7 +41,7 @@ export async function handleRequesterMessage(
   actor: ResolvedActor,
   chatId: bigint,
   message: Message,
-  contactInfo?: { tel?: string; fullName?: string },
+  contactInfo?: import('../../privacy/optional-contact').VerifiedDraftContact,
 ): Promise<void> {
   const target = { userId: actor.maxUserId } as const;
   if (message.body.attachments?.some(a => a.type === 'contact')) {
@@ -70,6 +70,14 @@ export async function handleRequesterMessage(
   }
 
   const data = services.sessions.readData(session);
+  if (contactInfo) {
+    if (session.type !== SessionType.WAITING_INCIDENT_CONFIRMATION || data.draftToken !== contactInfo.draftToken ||
+        data.previewToken !== contactInfo.previewToken || data.requesterPhone || data.pendingPhone) {
+      await services.messages.send(target, { text: 'Запрос контакта устарел. Используйте кнопки текущей карточки.' }); return;
+    }
+    await showIncidentDraftPreview(services, actor.maxUserId, chatId, { ...data, pendingPhone: contactInfo.phone });
+    return;
+  }
   const media = classifyAttachments(message.body.attachments);
   const text = message.body.text ?? '';
 

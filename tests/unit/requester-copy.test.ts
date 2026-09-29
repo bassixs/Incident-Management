@@ -30,7 +30,7 @@ describe('requester-facing copy', () => {
 
     const rules = rulesText();
     expect(rules).toContain('Нажмите «Создать сообщение»');
-    expect(rules).toContain('Персональные данные указывать не нужно');
+    expect(rules).toContain('ФИО не запрашивается');
     expect(rules).toContain('9. Текст или фотографии');
     expect(rules).toContain('проверку сотрудником');
     expect(rules).toContain('Если не уверены, нажмите «Иное»');
@@ -41,7 +41,7 @@ describe('requester-facing copy', () => {
 
   it('keeps the approved legal notice and removes the third greeting paragraph', () => {
     expect(greetingText()).toContain('органам исполнительной власти и местного самоуправления');
-    expect(greetingText()).not.toContain('Персональные данные указывать не нужно');
+    expect(greetingText()).not.toContain('ФИО не запрашивается');
     expect(rulesText()).toContain('служебные сведения о его обработке');
     for (const text of [greetingText(), rulesText()]) {
       expect(text).toContain('Чат-бот «На связи_регион40»');
@@ -50,7 +50,7 @@ describe('requester-facing copy', () => {
       expect(text).toContain('02.05.2006');
       expect(text).toContain('59-ФЗ');
     }
-    expect(rulesText()).toContain('Персональные данные указывать не нужно');
+    expect(rulesText()).toContain('ФИО не запрашивается');
     expect(rulesText()).toContain('5. Текст сообщения не позволяет определить суть предложения, заявления или жалобы.');
     expect(rulesText()).toContain('8. В сообщении отсутствует адрес проблемы.');
     expect(rulesText()).toContain('при этом в сообщении не приводятся новые обстоятельства.');

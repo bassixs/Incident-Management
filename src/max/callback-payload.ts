@@ -8,6 +8,7 @@
  */
 
 export const INCIDENT_ACTIONS = [
+  'contact',
   'privacy-pass',
   'personal',
   'action-confirm',
@@ -49,6 +50,9 @@ export const INCIDENT_ACTIONS = [
 export type IncidentAction = (typeof INCIDENT_ACTIONS)[number];
 
 export const USER_ACTIONS = [
+  'draft-phone-use',
+  'draft-phone-remove',
+  'draft-cancel',
   'new',
   'category',
   'page',

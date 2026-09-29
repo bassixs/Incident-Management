@@ -71,7 +71,7 @@ export async function queueSubscriptionInvite(tx: Tx, incidentId: string): Promi
 export async function queueDistribution(tx: Tx, incidentId: string): Promise<void> {
   const incident = await tx.incident.findUniqueOrThrow({ where: { id: incidentId }, include: INCIDENT_INCLUDE });
   await queueMessage(tx, { chatId: requiredChat(getConfig().DISTRIBUTION_CHAT_ID) }, {
-    text: distributionCard(incident), label: codeLabel(incident), keyboard: distributionKeyboard(incidentId),
+    text: distributionCard(incident), label: codeLabel(incident), keyboard: distributionKeyboard(incidentId, !!incident.requesterPhone),
     delivery: { dedupeKey: `distribution-card:${incidentId}`, tracking: { type: 'DISTRIBUTION_CARD', incidentId } },
   }, incidentId, incident.attachments);
   await queueMessage(tx, { userId: incident.requester.maxUserId }, {
@@ -86,7 +86,7 @@ export async function queueSector(tx: Tx, incidentId: string): Promise<void> {
   if (!group) throw new Error('Incident has no responsible group');
   await queueMessage(tx, { chatId: requiredChat(group.maxChatId) }, {
     text: sectorCard(incident, group), label: codeLabel(incident),
-    keyboard: sectorKeyboard(incidentId, { hasTemplate: Boolean(group.answerTemplate), status: incident.status }),
+    keyboard: sectorKeyboard(incidentId, { hasPhone: !!incident.requesterPhone, hasTemplate: Boolean(group.answerTemplate), status: incident.status }),
     delivery: { dedupeKey: `sector-card:${incidentId}${incident.history?.[0] ? ':return:' + incident.history[0].id : ''}`, tracking: { type: 'SECTOR_CARD', incidentId } },
   }, incidentId, incident.attachments);
 }
@@ -144,7 +144,7 @@ export async function queueAnswer(tx: Tx, incidentId: string, answerId: string, 
 export async function queueRevision(tx: Tx, incidentId: string, version: number, reason: string): Promise<void> {
   const incident = await tx.incident.findUniqueOrThrow({ where: { id: incidentId }, include: INCIDENT_INCLUDE });
   await queueMessage(tx, { chatId: requiredChat(incident.assignedGroup?.maxChatId) }, {
-    text: revisionCard(incident, version, reason), label: codeLabel(incident), keyboard: revisionKeyboard(incidentId),
+    text: revisionCard(incident, version, reason), label: codeLabel(incident), keyboard: revisionKeyboard(incidentId, !!incident.requesterPhone),
     delivery: { dedupeKey: `revision:${incidentId}:${version}` },
   }, incidentId);
   await queueSectorRefresh(tx, incidentId, `sector-status:${incidentId}:revision:${incident.revisionCount}`, true);

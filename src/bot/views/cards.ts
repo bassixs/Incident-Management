@@ -1,4 +1,5 @@
 import { PRIVACY_NOTICE } from '../../privacy/personal-data';
+import { OPTIONAL_PHONE_ADDED, OPTIONAL_PHONE_OFFER } from '../../privacy/optional-contact';
 import type { Incident, IncidentAnswer, ResponsibleGroup } from '@prisma/client';
 
 import { leaseText, type LeaseView } from '../../work-queues/leases';
@@ -342,7 +343,7 @@ export function rulesText(): string {
     "• состояние сообщения доступно в разделе «Мои сообщения»;",
     "• итоговый ответ придёт в этот личный чат.",
     "",
-    "Персональные данные указывать не нужно. Сохраняются ID в MAX, текст сообщения и служебные сведения о его обработке.",
+    "ФИО не запрашивается. Сохраняются ID в MAX, текст сообщения, фотографии и служебные сведения о его обработке. Перед отправкой можно добровольно поделиться своим телефоном для одного сообщения или отправить его без номера. Номер доступен распределителю и текущему исполнителю для связи и уточнения деталей; в следующий черновик он не переносится.",
     "Текст проходит автоматическую проверку, текст и фото — проверку сотрудником перед распределением.",
   ].join('\n');
 }
@@ -371,6 +372,7 @@ export function greetingText(): string {
 }
 
 export type IncidentDraftView = {
+  pendingPhone?: string;
   requesterName?: string;
   requesterPhone?: string;
   problemMunicipalityName: string;
@@ -397,7 +399,9 @@ export function incidentDraftPreview(draft: IncidentDraftView, categoryName?: st
     '',
     `Фотографии: ${draft.photoCount > 0 ? draft.photoCount : 'нет'}`,
     '',
-    PRIVACY_NOTICE,
+    ...(draft.requesterPhone ? [`Телефон для связи: ${draft.requesterPhone}`, OPTIONAL_PHONE_ADDED]
+      : draft.pendingPhone ? [`Телефон для связи: ${draft.pendingPhone}`, 'Номер ещё не прикреплён. Проверьте сообщение выше и нажмите «Добавить номер к этому сообщению» или «Убрать номер».']
+      : [OPTIONAL_PHONE_OFFER]),
     'Сообщение ещё не отправлено. Если всё указано правильно, нажмите «Всё верно».',
   ].join('\n');
 }

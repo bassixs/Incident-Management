@@ -32,7 +32,7 @@ describe('requester incident draft', () => {
     );
 
     expect(text).not.toContain('Иванов Иван Иванович');
-    expect(text).not.toContain('+7 900 123-45-67');
+    expect(text).toContain('Телефон для связи: +7 900 123-45-67');
     expect(text).toContain('Благоустройство');
     expect(text).toContain('Жуковский округ → Кременки');
     expect(text).toContain('Не работает фонарь');
@@ -42,7 +42,7 @@ describe('requester incident draft', () => {
 
   it('offers confirmation and correction of each concrete field', () => {
     const confirmation = incidentDraftConfirmationKeyboard();
-    expect(labels(confirmation)).toEqual(['✅ Всё верно', '✏️ Исправить']);
+    expect(labels(confirmation)).toEqual(['📞 Поделиться контактом', '✅ Всё верно', '✏️ Исправить', 'Отмена']);
     expect(callback(confirmation, '✅ Всё верно')).toEqual({ kind: 'user', action: 'draft-confirm' });
 
     const edit = incidentDraftEditKeyboard(true);

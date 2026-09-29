@@ -225,9 +225,9 @@ export async function showPersonalWork(services: AppServices, actor: ResolvedAct
     const live = await services.sessions.find(actor.maxUserId, s.item.originChatId);
     if (live) { await resumeRejection(personalServices(services, s.item, s.incident.publicCode), live); return; }
   } else if (active && !data.session) {
-    rows = wrapButtons(s.kind === 'distribution' ? distributionKeyboard(s.incident.id) : s.kind === 'review'
+    rows = wrapButtons(s.kind === 'distribution' ? distributionKeyboard(s.incident.id, !!s.incident.requesterPhone) : s.kind === 'review'
       ? reviewKeyboard(s.incident.id, s.incident.answers.at(-1)!.id)
-      : sectorKeyboard(s.incident.id, { status: s.incident.status, hasTemplate: !!s.incident.assignedGroup?.answerTemplate }), s.item);
+      : sectorKeyboard(s.incident.id, { hasPhone: !!s.incident.requesterPhone, status: s.incident.status, hasTemplate: !!s.incident.assignedGroup?.answerTemplate }), s.item);
   }
   if (details) text += `\n\n${s.kind === 'review' ? reviewCard(s.incident, s.incident.answers.at(-1)!, s.incident.assignedGroup, owned) : incidentLookupCard(s.incident, owned, s.kind === 'distribution', s.kind !== 'sector')}`;
   else text += `\n\nСообщение:\n${s.incident.text}`;
@@ -295,6 +295,9 @@ export async function personalAction(services: AppServices, actor: ResolvedActor
   if (action === 'open') { await enterPersonalWork(services, actor, id); return; }
   if (!s.item.selected) throw new ConflictError('Сейчас выбрано другое сообщение. Откройте нужное через «Моя работа».');
   if (action === 'show' || action === 'details') { await showPersonalWork(services, actor, id, action === 'details'); return; }
+  if (action === 'run' && argument === `incident:contact:${s.item.incidentId}`) {
+    await run(services, s, argument, messageId); return;
+  }
   if (action === 'resume') { await take(services, s); await showPersonalWork(services, actor, id); return; }
   if (action === 'cancel') {
     await withConfirmationLock(services, actor.maxUserId, s.item.originChatId, () => services.prisma.operatorSession.deleteMany({ where: { maxUserId: actor.maxUserId, chatId: s.item.originChatId, incidentId: s.item.incidentId } }));

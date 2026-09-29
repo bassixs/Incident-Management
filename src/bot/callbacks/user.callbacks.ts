@@ -1,4 +1,5 @@
 import { PRIVACY_NOTICE } from '../../privacy/personal-data';
+import { randomUUID } from 'node:crypto';
 import { SessionType } from '@prisma/client';
 
 import type { AppServices } from '../../app/container';
@@ -148,12 +149,15 @@ export async function handleUserCallback(
         SessionType.WAITING_INCIDENT_CONFIRMATION,
       );
       const draft = requireCompleteIncidentDraft(data);
+      assertPreviewToken(data, payload.argument);
+      if (draft.pendingPhone) throw new ValidationError('Сначала добавьте номер к сообщению или уберите его.');
       let incident;
       try {
         const draftSession = await services.sessions.find(actor.maxUserId, chatId);
         if (!draftSession) throw new ValidationError('Черновик устарел.');
         incident = await services.incidents.create({
           draftSessionId: draftSession.id,
+          draftPreviewToken: data.previewToken,
           requester: {
             maxUserId: actor.maxUserId,
           },
@@ -209,6 +213,32 @@ export async function handleUserCallback(
       return 'Сообщение зарегистрировано';
     }
 
+    case 'draft-phone-use':
+    case 'draft-phone-remove':
+    case 'draft-cancel': {
+      const chatId = context.chatId ?? actor.maxUserId;
+      const data = await requireDraftForSession(services, actor.maxUserId, chatId, SessionType.WAITING_INCIDENT_CONFIRMATION);
+      assertPreviewToken(data, payload.argument);
+      if (payload.action === 'draft-cancel') {
+        await services.sessions.clear(actor.maxUserId, chatId);
+        if (data.previewMessageId) await services.messages.deleteCard(data.previewMessageId).catch(() => false);
+        await services.messages.send(target, { text: 'Черновик и номер удалены. Сообщение не отправлено.', keyboard: mainMenuKeyboard() });
+        return;
+      }
+      if (payload.action === 'draft-phone-use') {
+        if (!data.pendingPhone) throw new ValidationError('Запрос контакта устарел.');
+        data.requesterPhone = data.pendingPhone;
+      } else delete data.requesterPhone;
+      delete data.pendingPhone;
+      // Commit removal before any MAX call; a transport failure must not keep the old phone.
+      if (payload.action === 'draft-phone-remove') {
+        data.previewToken = randomUUID();
+        await services.sessions.start({ maxUserId: actor.maxUserId, chatId, type: SessionType.WAITING_INCIDENT_CONFIRMATION, data });
+      }
+      await showIncidentDraftPreview(services, actor.maxUserId, chatId, data);
+      return;
+    }
+
     case 'draft-edit': {
       const chatId = context.chatId ?? actor.maxUserId;
       const allowed =
@@ -219,6 +249,10 @@ export async function handleUserCallback(
               SessionType.WAITING_INCIDENT_EDIT_SELECTION,
             ];
       const data = await requireDraftForSession(services, actor.maxUserId, chatId, ...allowed);
+      const current = await services.sessions.find(actor.maxUserId, chatId);
+      if (current?.type === SessionType.WAITING_INCIDENT_CONFIRMATION) assertPreviewToken(data, payload.argument);
+      // An unconfirmed contact cannot follow the user into a different preview.
+      delete data.pendingPhone;
       const draft = requireCompleteIncidentDraft(data);
       if (payload.argument === 'back') {
         if (context.messageId) {
@@ -565,10 +599,17 @@ async function beginNewIncident(context: UserCallbackContext): Promise<void> {
     });
     return;
   }
+  const previous = await services.sessions.find(actor.maxUserId, context.chatId ?? actor.maxUserId);
+  const preview = previous && services.sessions.readData(previous).previewMessageId;
+  if (preview) await services.messages.deleteCard(preview).catch(() => false);
   await services.sessions.clear(actor.maxUserId, context.chatId ?? actor.maxUserId);
   const categories = await services.categories.listActive();
   await services.sessions.start({ maxUserId: actor.maxUserId, chatId: context.chatId ?? actor.maxUserId, type: SessionType.WAITING_INCIDENT_SELECTION, data: {} });
   await services.messages.send(target, { text: PRIVACY_NOTICE+'\n\n'+categoryPromptText(categories.length), keyboard: requesterCategoryKeyboard(categories, 0) });
+}
+
+function assertPreviewToken(data: SessionData, token: string | undefined): void {
+  if (!data.previewToken || token !== data.previewToken) throw new ValidationError('Кнопка устарела. Используйте текущую карточку сообщения.');
 }
 
 async function requireSelectionDraft(
