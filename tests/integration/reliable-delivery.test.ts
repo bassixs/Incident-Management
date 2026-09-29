@@ -33,18 +33,25 @@ describeIntegration('durable delivery and button guards', () => {
     for (const technical of [true, false]) it(`${route}: records ${technical ? 'a technical failure' : 'a validation refusal'} correctly in the inbox`, async () => {
       await seedCategories(prisma);
       const h = await createHarness(prisma);
-      const actor = await actorFor(prisma, TEST_USERS.admin, 'Администратор', [UserRole.ADMIN]);
+      const actor = route === 'requester'
+        ? await actorFor(prisma, TEST_USERS.requesterA, 'Житель', [])
+        : await actorFor(prisma, TEST_USERS.admin, 'Администратор', [UserRole.ADMIN]);
       const error = technical ? new Error('database unavailable') : new ValidationError('Проверьте ввод');
       const chatId = route === 'requester' ? actor.maxUserId : TEST_CHATS.distribution;
       const message = { sender: { user_id: Number(actor.maxUserId), name: actor.displayName },
         recipient: { chat_id: Number(chatId), chat_type: route === 'requester' ? 'dialog' : 'chat' },
-        body: { mid: `${route}-${technical}`, text: route === 'command' ? '/report all' : route === 'operator' ? 'all' : 'Иван Иванов' } };
+        body: { mid: `${route}-${technical}`, text: route === 'command' ? '/report all' : route === 'operator' ? 'all' : 'Не работает фонарь у дома 12' } };
+      let called: () => void;
       if (route === 'requester') {
-        await h.services.sessions.start({ maxUserId: actor.maxUserId, chatId, type: 'WAITING_REQUESTER_NAME' });
-        vi.spyOn(h.services.legal, 'hasCurrentAccess').mockResolvedValue(true);
-        vi.spyOn(h.services.sessions, 'start').mockRejectedValue(error);
+        await h.services.sessions.start({ maxUserId: actor.maxUserId, chatId, type: 'WAITING_INCIDENT_TEXT', data: { problemArea: 'TEST_AREA' } });
+        const validate = vi.spyOn(h.services.incidents, 'validateSubmission').mockImplementation(() => { throw error; });
+        called = () => {
+          expect(validate).toHaveBeenCalledTimes(1);
+          expect(validate).toHaveBeenCalledWith(message.body.text, []);
+        };
       } else {
-        vi.spyOn(h.services.reports, 'build').mockRejectedValue(error);
+        const build = vi.spyOn(h.services.reports, 'build').mockRejectedValue(error);
+        called = () => expect(build).toHaveBeenCalledTimes(1);
         if (route === 'operator') await h.services.sessions.start({ maxUserId: actor.maxUserId, chatId, type: 'WAITING_REPORT_PERIOD' });
       }
       vi.spyOn(h.services.max, 'answerCallback').mockResolvedValue(undefined);
@@ -56,9 +63,18 @@ describeIntegration('durable delivery and button guards', () => {
       const dispatcher = new UpdateDispatcher(prisma, max as never);
       const reservation = await dispatcher.reserve(update);
       await dispatcher.kick();
+      called();
       const stored = await prisma.inboundUpdate.findUniqueOrThrow({ where: { id: reservation.id! } });
       expect(stored.status).toBe(technical ? 'FAILED' : 'PROCESSED');
       expect(stored.lastError).toBe(technical ? 'database unavailable' : null);
+      expect(stored.attempts).toBe(1);
+      expect(stored.lockedAt).toBeNull();
+      if (route === 'requester') {
+        expect(await prisma.incident.count()).toBe(0);
+        expect((await h.services.sessions.find(actor.maxUserId, chatId))?.type).toBe('WAITING_INCIDENT_TEXT');
+        expect(h.messages.toUser(actor.maxUserId).at(-1)?.message.text).toBe(technical
+          ? 'Не удалось сохранить черновик. Попробуйте ещё раз позже.' : 'Проверьте ввод');
+      }
     });
   }
 

@@ -287,9 +287,24 @@ export class DistributionService {
       await tx.incidentAttachment.deleteMany({ where: { incidentId } });
       await tx.privateWorkItem.deleteMany({ where: { incidentId } });
       await tx.operatorSession.deleteMany({ where: { incidentId } });
+      // Capture published distribution cards before privacy cleanup removes their
+      // outbox rows. Persist only message IDs in the replacement refresh job.
+      const published = await tx.outboundMessage.findMany({ where: {
+        incidentId, targetType: 'chat', targetId: this.chatId(), firstMessageId: { not: null },
+        OR: [
+          { trackingType: 'DISTRIBUTION_CARD' },
+          { dedupeKey: { startsWith: `distribution-claim:${incidentId}:` } },
+          { dedupeKey: { startsWith: 'redistribution-notice:' } },
+        ],
+      }, select: { firstMessageId: true, payload: true } });
+      const publishedIds = published.flatMap(row => {
+        const keyboardId = (row.payload as { keyboardMessageId?: unknown } | null)?.keyboardMessageId;
+        return [row.firstMessageId!, ...(typeof keyboardId === 'string' ? [keyboardId] : [])];
+      });
       await tx.outboundMessage.deleteMany({ where: { incidentId } });
       await queueRejection(tx, incidentId, reason);
-      await queueDistributionRefresh(tx, incidentId, 'rejected', true);
+      await queueDistributionRefresh(tx, incidentId, 'rejected', true,
+        [...new Set(publishedIds)]);
     }, TRANSACTION_OPTIONS);
 
     await this.delivery.notify(

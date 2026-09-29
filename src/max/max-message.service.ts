@@ -61,7 +61,7 @@ export type CompositeMessage = {
     | { type: 'distribution-panel' }
     | { type: 'work-panel' }
     | { type: 'staff-refresh'; incidentId: string }
-    | { type: 'distribution-refresh'; incidentId: string; refreshActive?: boolean }
+    | { type: 'distribution-refresh'; incidentId: string; refreshActive?: boolean; messageIds?: string[] }
     | { type: 'distribution-alert'; level: 'normal' | 'escalation'; hour: number };
   replyToMessageId?: string;
   /** Prefix repeated on every follow-up part, e.g. `№ INC-000001`. */
@@ -468,7 +468,7 @@ export class MaxMessageService {
         : payload.operation?.type === 'staff-refresh'
         ? await this.refreshStaffCards(payload.operation.incidentId)
         : payload.operation?.type === 'distribution-refresh'
-        ? await this.refreshDistributionCards(payload.operation.incidentId, payload.operation.refreshActive)
+        ? await this.refreshDistributionCards(payload.operation.incidentId, payload.operation.refreshActive, payload.operation.messageIds)
         : payload.operation?.type === 'distribution-alert'
         ? await this.deliverDistributionAlert(row.targetId, payload.operation)
         : payload.operation?.type === 'sla-reminder'
@@ -747,7 +747,7 @@ export class MaxMessageService {
     return {};
   }
 
-  private async refreshDistributionCards(incidentId: string, refreshActive = false): Promise<{ firstMessageId?: string }> {
+  private async refreshDistributionCards(incidentId: string, refreshActive = false, messageIds: string[] = []): Promise<{ firstMessageId?: string }> {
     const prisma = this.durable!.prisma;
     const incident = await prisma.incident.findUnique({ where: { id: incidentId }, include: INCIDENT_INCLUDE });
     if (!incident) return {};
@@ -757,6 +757,11 @@ export class MaxMessageService {
     }, select: { firstMessageId: true, dedupeKey: true } });
     const cards = [...copies];
     if (incident.distributionMessageId) cards.push({ firstMessageId: incident.distributionMessageId, dedupeKey: null });
+    // Rejection erases delivery payloads. Its durable refresh retains only IDs,
+    // so retries can retire the published copies without restoring their content.
+    for (const mid of messageIds) {
+      if (!cards.some(card => card.firstMessageId === mid)) cards.push({ firstMessageId: mid, dedupeKey: null });
+    }
     const activeKey = incident.distributionClaimUntil && incident.distributionClaimUntil > new Date()
       ? `distribution-claim:${incidentId}:${incident.distributionClaimedBy}:${incident.distributionClaimUntil.getTime()}` : null;
     for (const card of cards) {

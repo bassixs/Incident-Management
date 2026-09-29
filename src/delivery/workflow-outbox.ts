@@ -92,10 +92,10 @@ export async function queueSector(tx: Tx, incidentId: string): Promise<void> {
 }
 
 /** Refresh every distribution card, including copies issued by the queue. */
-export async function queueDistributionRefresh(tx: Tx, incidentId: string, event: string = randomUUID(), refreshActive = false): Promise<void> {
+export async function queueDistributionRefresh(tx: Tx, incidentId: string, event: string = randomUUID(), refreshActive = false, messageIds?: string[]): Promise<void> {
   await queueMessage(tx, { chatId: requiredChat(getConfig().DISTRIBUTION_CHAT_ID) }, {
     text: 'Обновление карточек распределения',
-    operation: { type: 'distribution-refresh', incidentId, refreshActive },
+    operation: { type: 'distribution-refresh', incidentId, refreshActive, ...(messageIds?.length ? { messageIds } : {}) },
     delivery: { dedupeKey: `distribution-refresh:${incidentId}:${event}` },
   }, incidentId);
 }

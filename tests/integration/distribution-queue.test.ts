@@ -18,6 +18,7 @@ describeIntegration('persistent distribution queue', () => {
   let colleague: typeof actor;
   let sends: Array<{ target: bigint; text: string; extra: any }>;
   let max: any;
+  let cards: Map<string, { text: string; attachments: unknown[] }>;
   let requesterSequence = 0;
   beforeAll(() => { pushSchemaOnce(); prisma = createTestPrisma(); });
   afterAll(() => prisma.$disconnect());
@@ -32,9 +33,13 @@ describeIntegration('persistent distribution queue', () => {
     tomorrow.setUTCHours(9, 0, 0, 0);
     vi.setSystemTime(tomorrow);
     sends = [];
+    cards = new Map();
     requesterSequence = 0;
     const send = async (target: bigint, text: string, extra: any) => {
-      sends.push({ target, text, extra }); return { body: { mid: `mid-${sends.length}` } };
+      sends.push({ target, text, extra });
+      const mid = `mid-${sends.length}`;
+      cards.set(mid, { text, attachments: extra?.attachments ?? [] });
+      return { body: { mid } };
     };
     max = { sendToChat: vi.fn(send), sendToUser: vi.fn(send), editCardWithKeyboard: vi.fn(async () => undefined), editMessage: vi.fn(async () => undefined),
       api: { getMessage: vi.fn(async () => ({ recipient: { chat_id: Number(TEST_CHATS.distribution) } })), getPinnedMessage: vi.fn(async () => ({ message: null })), pinMessage: vi.fn(async () => ({ success: true })) } };
@@ -45,7 +50,10 @@ describeIntegration('persistent distribution queue', () => {
     max.getChatMessages = vi.fn(async (chat: bigint) => ({ messages: sends.map(asMessage).filter(m => m.recipient.chat_id === Number(chat)) }));
     max.api.getMessage.mockImplementation(async (mid: string) => { const i = Number(mid.slice(4)) - 1; return asMessage(sends[i]!, i); });
     max.editMessage.mockImplementation(async (mid: string, text: string, attachments: unknown[]) => {
-      const row = sends[Number(mid.slice(4)) - 1]!; row.text = text; row.extra = { attachments };
+      if (!cards.has(mid)) throw new MaxError(404, { code: 'message.not.found', message: 'Deleted' });
+      cards.set(mid, { text, attachments });
+      const row = sends[Number(mid.slice(4)) - 1];
+      if (row) { row.text = text; row.extra = { attachments }; }
     });
     max.pinMessage = (chat: bigint, mid: string) => max.api.pinMessage(Number(chat), mid, { notify: false });
     const storage = { load: async () => Buffer.from('photo'), remove: vi.fn(async () => undefined) };
@@ -57,6 +65,7 @@ describeIntegration('persistent distribution queue', () => {
   async function create(age = 0) {
     const incident = await services.incidents.create({ requester: { maxUserId: 6000n + BigInt(++requesterSequence), name: 'Иванов Иван', phone: '+79001112233' }, text: 'Не работает фонарь' });
     await services.distribution.confirmPrivacyCheck(incident.id, actor);
+    cards.set(`original-${incident.id}`, { text: incident.text, attachments: [{ type: 'inline_keyboard' }] });
     return prisma.incident.update({ where: { id: incident.id }, data: { createdAt: new Date(Date.now() - age * 60_000), distributionMessageId: `original-${incident.id}` } });
   }
   const claim = (who = actor) => services.distributionQueue.claim(who, TEST_CHATS.distribution, undefined, true);
@@ -138,16 +147,67 @@ describeIntegration('persistent distribution queue', () => {
     expect(max.editMessage).toHaveBeenCalledWith(copy.firstMessageId, expect.stringContaining('🟢 РАСПРЕДЕЛЕНО'), []);
   });
 
-  it('rejects every copy and ignores a deleted copy while refreshing the others', async () => {
+  for (const retry of [false, true]) it(`rejects every copy, ignores a deleted copy${retry ? ' and retries after restart' : ''}`, async () => {
     const incident = await create(); await claim();
     const old = (await copies(incident.id))[0]!;
     advance(15); await claim(colleague);
     const current = (await copies(incident.id)).find(c => c.id !== old.id)!;
-    max.editMessage.mockImplementation(async (mid: string) => {
-      if (mid === old.firstMessageId) throw new MaxError(404, { code: 'message.not.found', message: 'Deleted' });
+    const originalId = incident.distributionMessageId!;
+    // Older multipart cards keep the keyboard on the last part.
+    const keyboardId = `keyboard-${current.id}`;
+    cards.set(keyboardId, { text: incident.text, attachments: [{ type: 'inline_keyboard' }] });
+    await prisma.outboundMessage.update({ where: { id: current.id }, data: {
+      payload: { ...(current.payload as any), keyboardMessageId: keyboardId },
+    } });
+    expect(cards.get(current.firstMessageId!)?.attachments.length).toBeGreaterThan(0);
+    // A not-yet-sent copy must be cancelled, not resurrected by the retry worker.
+    await outbox.queueMessage(prisma, { chatId: TEST_CHATS.distribution }, {
+      text: incident.text, keyboard: [[{ type: 'callback', text: 'В работу', payload: `queue:open:${incident.id}` }]],
+      delivery: { dedupeKey: `distribution-claim:${incident.id}:delayed` },
+    }, incident.id);
+    const sentBefore = sends.length;
+    cards.delete(old.firstMessageId!);
+    await prisma.incident.update({ where: { id: incident.id }, data: { requesterPhone: '+79009998877', problemLocality: 'Удаляемое место' } });
+    await prisma.incidentAttachment.create({ data: { incidentId: incident.id, type: 'IMAGE', storageKey: 'deleted-photo' } });
+    const edit = max.editMessage.getMockImplementation();
+    let fail = retry;
+    max.editMessage.mockImplementation(async (mid: string, text: string, attachments: unknown[]) => {
+      if (fail && mid === current.firstMessageId) throw new MaxError(503, { code: 'unavailable', message: 'Retry later' });
+      return edit(mid, text, attachments);
     });
+    max.editMessage.mockClear();
+    max.editCardWithKeyboard.mockClear();
     await services.distribution.reject(incident.id, 'Дублирующее сообщение', colleague);
-    expect(max.editMessage).toHaveBeenCalledWith(current.firstMessageId, expect.stringContaining('Дублирующее сообщение'), []);
+    const job = await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: `distribution-refresh:${incident.id}:rejected` } });
+    expect(job.status).toBe(retry ? 'PENDING' : 'SENT');
+    expect((job.payload as any).operation.messageIds).toEqual(expect.arrayContaining([old.firstMessageId, current.firstMessageId, keyboardId]));
+    if (retry) {
+      fail = false; advance(10);
+      await new MaxMessageService(max, { prisma, storage: { remove: async () => undefined } as never }).flush();
+    }
+    for (const mid of [originalId, current.firstMessageId!, keyboardId]) {
+      expect(cards.get(mid)?.text).toContain(`${incident.publicCode} отклонено`);
+      expect(cards.get(mid)?.text).toContain('Дублирующее сообщение');
+      expect(cards.get(mid)?.attachments).toEqual([]);
+    }
+    expect(max.editMessage).toHaveBeenCalledWith(old.firstMessageId, expect.stringContaining('Дублирующее сообщение'), []);
+    for (const [, text, attachments] of max.editMessage.mock.calls) {
+      expect(text).not.toContain(incident.text);
+      expect(text).not.toMatch(/79009998877|Удаляемое место|deleted-photo/);
+      expect(attachments).toEqual([]);
+    }
+    expect(max.editCardWithKeyboard).not.toHaveBeenCalled();
+    expect(sends.slice(sentBefore).every(send => !send.text.includes(incident.text))).toBe(true);
+    const rejected = await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } });
+    expect(rejected.status).toBe('REJECTED');
+    expect(rejected.text).toBe('Содержание отклонённого сообщения удалено.');
+    expect(rejected.requesterPhone).toBeNull();
+    expect(rejected.problemLocality).toBeNull();
+    expect(await prisma.incidentAttachment.count({ where: { incidentId: incident.id } })).toBe(0);
+    const jobs = await prisma.outboundMessage.findMany({ where: { incidentId: incident.id } });
+    const persistedContent = JSON.stringify(jobs.map(row => ({ payload: row.payload, attachments: row.attachments })));
+    expect(persistedContent).not.toContain(incident.text);
+    expect(persistedContent).not.toMatch(/79009998877|Удаляемое место|deleted-photo/);
     expect(await prisma.outboundMessage.count({ where: { incidentId: incident.id, status: { in: ['PENDING', 'FAILED'] } } })).toBe(0);
   });
 
@@ -159,6 +219,19 @@ describeIntegration('persistent distribution queue', () => {
     expect((await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).status).toBe('DISTRIBUTION');
     expect(await prisma.incidentHistory.count({ where: { incidentId: incident.id, action: 'ASSIGNED' } })).toBe(0);
     expect(await prisma.outboundMessage.count({ where: { dedupeKey: `sector-card:${incident.id}` } })).toBe(0);
+  });
+
+  it('rolls back rejection and privacy cleanup if its durable refresh cannot be saved', async () => {
+    const incident = await create(); await claim();
+    const before = await copies(incident.id);
+    vi.spyOn(outbox, 'queueDistributionRefresh').mockRejectedValueOnce(new Error('cannot queue rejection edit'));
+    await expect(services.distribution.reject(incident.id, 'Дублирующее сообщение', actor)).rejects.toThrow('cannot queue rejection edit');
+    const unchanged = await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } });
+    expect(unchanged.status).toBe('DISTRIBUTION');
+    expect(unchanged.text).toBe(incident.text);
+    expect(await copies(incident.id)).toEqual(before);
+    expect(await prisma.incidentHistory.count({ where: { incidentId: incident.id, action: 'INCIDENT_REJECTED' } })).toBe(0);
+    expect(await prisma.outboundMessage.count({ where: { dedupeKey: `rejection:${incident.id}` } })).toBe(0);
   });
 
   it('gives oldest distinct incidents to concurrent operators and reuses the same operator claim', async () => {
