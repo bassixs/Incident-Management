@@ -23,7 +23,7 @@ def main():
         text = '\n'.join(p.extract_text() or '' for p in pdf.pages)
         assert hashlib.sha256(path.read_bytes()).hexdigest() == meta['sha256']
         assert (LEGAL / 'pdf' / path.name).read_bytes() == path.read_bytes()
-        assert meta['version'] == '3.0'
+        assert f"Редакция {meta['version']} от" in source
         for block in source.strip().split('\n\n'):
             if block == '<!-- pagebreak -->': continue
             clean = block.removeprefix('## ').removeprefix('# ')
@@ -34,7 +34,7 @@ def main():
             assert not re.search(r'искр[аыой]', current, re.I)
             assert 'min_digital@adm.kaluga.ru' in current
             assert '1194027000221' in current
-            assert 'Редакция 3.0 от 29.09.2026' in current
+            assert f"Редакция {meta['version']} от 29.09.2026" in current
             assert normalized('Защитники Отечества') in normalized(current)
             assert normalized('Социального фонда России') in normalized(current)
             assert 'сами по себе не относятся' not in current

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 from xml.sax.saxutils import escape
 from docx import Document
@@ -19,12 +20,14 @@ from reportlab.lib.pagesizes import A4
 
 ROOT = Path(__file__).resolve().parents[1]
 LEGAL = ROOT / 'legal'
-VERSION = '3.0'
 DOCUMENTS = ('user-agreement', 'privacy-policy', 'personal-data-consent')
 BRAND = 'На связи_регион40'
 
 def blocks(name):
     return (LEGAL / 'source' / f'{name}.md').read_text(encoding='utf-8').strip().split('\n\n')
+
+def document_version(name):
+    return re.search(r'Редакция (\d+\.\d+) от', '\n'.join(blocks(name))).group(1)
 
 def build_docx(name):
     doc = Document()
@@ -76,7 +79,7 @@ def build_docx(name):
             next_page = False
     doc.core_properties.title = blocks(name)[0][2:]
     doc.core_properties.author = 'Министерство цифрового развития Калужской области'
-    doc.core_properties.subject = f'Чат-бот «{BRAND}», редакция {VERSION}'
+    doc.core_properties.subject = f'Чат-бот «{BRAND}», редакция {document_version(name)}'
     doc.save(LEGAL / f'{name}.docx')
 
 def build_pdf(name):
@@ -111,7 +114,7 @@ def main():
     result = {}
     for name in DOCUMENTS:
         build_docx(name)
-        result[name] = {'version': VERSION, 'sha256': build_pdf(name)}
+        result[name] = {'version': document_version(name), 'sha256': build_pdf(name)}
     (LEGAL / 'manifest.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
     print('Built 3 DOCX and 3 PDF files; legal/manifest.json contains publication hashes.')
 
