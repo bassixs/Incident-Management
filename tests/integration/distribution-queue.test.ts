@@ -39,6 +39,14 @@ describeIntegration('persistent distribution queue', () => {
     max = { sendToChat: vi.fn(send), sendToUser: vi.fn(send), editCardWithKeyboard: vi.fn(async () => undefined), editMessage: vi.fn(async () => undefined),
       api: { getMessage: vi.fn(async () => ({ recipient: { chat_id: Number(TEST_CHATS.distribution) } })), getPinnedMessage: vi.fn(async () => ({ message: null })), pinMessage: vi.fn(async () => ({ success: true })) } };
     max.getMessage = max.api.getMessage; max.getPinnedMessage = max.api.getPinnedMessage;
+    const asMessage = (s: typeof sends[number], i: number) => ({ sender: { user_id: 777, is_bot: true }, recipient: { chat_id: Number(s.target) }, timestamp: Date.now(), body: { mid: `mid-${i + 1}`, text: s.text, attachments: s.extra?.attachments ?? [] } });
+    max.getMe = vi.fn(async () => ({ user_id: 777 }));
+    max.sendPanelOnce = vi.fn((chat: bigint, text: string) => send(chat, text, {}));
+    max.getChatMessages = vi.fn(async (chat: bigint) => ({ messages: sends.map(asMessage).filter(m => m.recipient.chat_id === Number(chat)) }));
+    max.api.getMessage.mockImplementation(async (mid: string) => { const i = Number(mid.slice(4)) - 1; return asMessage(sends[i]!, i); });
+    max.editMessage.mockImplementation(async (mid: string, text: string, attachments: unknown[]) => {
+      const row = sends[Number(mid.slice(4)) - 1]!; row.text = text; row.extra = { attachments };
+    });
     max.pinMessage = (chat: bigint, mid: string) => max.api.pinMessage(Number(chat), mid, { notify: false });
     const storage = { load: async () => Buffer.from('photo'), remove: vi.fn(async () => undefined) };
     services = buildServices(prisma, { messages: new MaxMessageService(max, { prisma, storage: storage as never }), storage: storage as never });
@@ -48,6 +56,7 @@ describeIntegration('persistent distribution queue', () => {
   const advance = (minutes: number) => vi.setSystemTime(Date.now() + minutes * 60_000);
   async function create(age = 0) {
     const incident = await services.incidents.create({ requester: { maxUserId: 6000n + BigInt(++requesterSequence), name: 'Иванов Иван', phone: '+79001112233' }, text: 'Не работает фонарь' });
+    await services.distribution.confirmPrivacyCheck(incident.id, actor);
     return prisma.incident.update({ where: { id: incident.id }, data: { createdAt: new Date(Date.now() - age * 60_000), distributionMessageId: `original-${incident.id}` } });
   }
   const claim = (who = actor) => services.distributionQueue.claim(who, TEST_CHATS.distribution, undefined, true);

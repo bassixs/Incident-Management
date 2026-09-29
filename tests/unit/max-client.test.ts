@@ -1,4 +1,4 @@
-import { Bot } from '@maxhub/max-bot-api';
+import { Bot, MaxError } from '@maxhub/max-bot-api';
 import * as fs from 'node:fs/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -7,6 +7,14 @@ import { getConfig } from '../../src/config';
 import { ValidationError } from '../../src/utils/errors';
 
 afterEach(() => vi.unstubAllGlobals());
+
+it('never retries the non-idempotent panel POST after 503', async () => {
+  const bot = new Bot('test-token');
+  const send = vi.spyOn(bot.api, 'sendMessageToChat').mockRejectedValue(new MaxError(503, { code: 'unavailable', message: 'Unknown outcome' }));
+  await expect(new MaxClient(bot).sendPanelOnce(-1002n, 'Panel')).rejects.toThrow();
+  expect(send).toHaveBeenCalledTimes(1);
+  expect(send).toHaveBeenCalledWith(-1002, 'Panel', { notify: false });
+});
 
 describe('updating card controls without losing photos', () => {
   it('retains link previews and photos when refreshing an old card', async () => {

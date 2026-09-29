@@ -96,6 +96,16 @@ export class MaxClient {
     return this.call('getMessage', () => this.api.getMessage(messageId));
   }
 
+  async getChatMessages(chatId: bigint, before?: number) {
+    return this.call('getMessages', () => this.api.getMessages(toApiId(chatId), { count: 100, ...(before === undefined ? {} : { from: before }) }));
+  }
+
+  /** Panel creation is reconciled by PinnedPanelService, never blindly retried. */
+  async sendPanelOnce(chatId: bigint, text: string): Promise<Message> {
+    await this.rateGate.wait(`chat:${chatId}`, 550, () => this.rateGate.wait('global', 45));
+    return this.api.sendMessageToChat(toApiId(chatId), text, { notify: false });
+  }
+
   async getPinnedMessage(chatId: bigint | number) {
     return this.call('getPinnedMessage', () => this.api.getPinnedMessage(toApiId(chatId)));
   }

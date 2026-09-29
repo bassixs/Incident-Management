@@ -29,7 +29,7 @@ import { distributionKeyboard } from '../bot/keyboards';
 import { queueDistributionRefresh, queueSectorRefresh, queueStaffRefresh } from '../delivery/workflow-outbox';
 import { workPanelKey, workPanelText, workButtons } from '../work-queues/state';
 import { reviewCard } from '../bot/views/cards';
-import { hasSameCardContent } from './card-content';
+import { PinnedPanelService } from './pinned-panel.service';
 import { reviewKeyboard, revisionKeyboard } from '../bot/keyboards';
 import { sectorKeyboard } from '../bot/keyboards';
 import { slaNotification, slaStage, type SlaStage } from '../sla/sla-notification';
@@ -119,6 +119,7 @@ const targetKey = (target: OutboxTarget): string => `${target.targetType}:${targ
  * incident the fragment belongs to.
  */
 export class MaxMessageService {
+  private panelService?: PinnedPanelService;
   private stopping = false;
   private readonly activity = new AsyncActivity();
   private timer?: NodeJS.Timeout;
@@ -461,9 +462,9 @@ export class MaxMessageService {
           : [];
       }
       const result = payload.operation?.type === 'distribution-panel'
-        ? await this.refreshDistributionPanel(row.targetId)
+        ? await this.refreshDistributionPanel(row.targetId, row.id)
         : payload.operation?.type === 'work-panel'
-        ? await this.refreshWorkPanel(row.targetId)
+        ? await this.refreshWorkPanel(row.targetId, row.id)
         : payload.operation?.type === 'staff-refresh'
         ? await this.refreshStaffCards(payload.operation.incidentId)
         : payload.operation?.type === 'distribution-refresh'
@@ -520,15 +521,8 @@ export class MaxMessageService {
         },
       });
       if (marked.count !== 1) return;
-      const operation = (row.payload as unknown as StoredPayload).operation;
-      if (operation?.type === 'distribution-panel' && firstMessageId) {
-        const key = panelSettingKey(row.targetId);
-        await tx.systemSetting.upsert({ where: { key }, create: { key, value: firstMessageId }, update: { value: firstMessageId } });
-      }
-      if (operation?.type === 'work-panel' && firstMessageId) {
-        const key = workPanelKey(row.targetId);
-        await tx.systemSetting.upsert({ where: { key }, create: { key, value: firstMessageId }, update: { value: firstMessageId } });
-      }
+      // Panel identity is committed before activation by PinnedPanelService.
+      // Retrying completion must not replace a newer reconciled identity.
       if (row.incidentId && firstMessageId && (row.trackingType === 'REVIEW_CARD' || row.trackingType === 'SECTOR_CARD' || row.dedupeKey?.startsWith('work-copy:') || row.dedupeKey?.startsWith('revision:'))) {
         await queueStaffRefresh(tx, row.incidentId, `published:${firstMessageId}`);
       }
@@ -628,51 +622,19 @@ export class MaxMessageService {
     return this.deliverLogical(target, message);
   }
 
-  private async refreshDistributionPanel(chatId: bigint): Promise<{ firstMessageId?: string }> {
+  private async refreshDistributionPanel(chatId: bigint, jobId: string): Promise<{ firstMessageId?: string }> {
     const config = getConfig();
     if (chatId !== config.DISTRIBUTION_CHAT_ID) return {};
-    return this.refreshPinnedPanel(chatId, panelSettingKey(chatId), queuePanelText(await queueSnapshot(this.durable!.prisma, new Date())), queueKeyboard());
+    return this.refreshPinnedPanel(chatId, panelSettingKey(chatId), queuePanelText(await queueSnapshot(this.durable!.prisma, new Date())), queueKeyboard(), jobId);
   }
 
-  private async refreshWorkPanel(chatId: bigint): Promise<{ firstMessageId?: string }> {
-    return this.refreshPinnedPanel(chatId, workPanelKey(chatId), await workPanelText(this.durable!.prisma, chatId), workButtons());
+  private async refreshWorkPanel(chatId: bigint, jobId: string): Promise<{ firstMessageId?: string }> {
+    return this.refreshPinnedPanel(chatId, workPanelKey(chatId), await workPanelText(this.durable!.prisma, chatId), workButtons(), jobId);
   }
 
-  private async refreshPinnedPanel(chatId: bigint, key: string, text: string, keyboard: Button[][]): Promise<{ firstMessageId?: string }> {
-    const setting = await this.durable!.prisma.systemSetting.findUnique({ where: { key } });
-    let firstMessageId = setting?.value;
-    if (firstMessageId) {
-      try {
-        // MAX can acknowledge editing a deleted id; verify existence first.
-        const current = await this.max.getMessage(firstMessageId);
-        if (String(current.recipient.chat_id) !== String(chatId)) throw new Error('Queue panel belongs to another chat');
-        if (!hasSameCardContent(current, text, keyboard)) {
-          await this.max.editMessage(firstMessageId, text, [{ type: 'inline_keyboard', payload: { buttons: keyboard } }]);
-        }
-      } catch (error) {
-        // Recreate only a confirmed missing message, never on transient MAX failures.
-        if (!(error instanceof MaxError) || error.status !== 404) throw error;
-        firstMessageId = undefined;
-      }
-    }
-    if (!firstMessageId) {
-      const result = await this.deliverLogical({ chatId }, { text, keyboard });
-      firstMessageId = result.firstMessageId;
-      if (!firstMessageId) throw new Error('MAX did not return a queue panel message id');
-    }
-    try {
-      const pinned = await this.max.getPinnedMessage(chatId).catch(error => {
-        if (error instanceof MaxError && error.status === 404) return { message: null };
-        throw error;
-      });
-      if (pinned.message?.body.mid !== firstMessageId) {
-        const result = await this.max.pinMessage(chatId, firstMessageId);
-        if (!result.success) throw new Error('Queue panel pin was not confirmed');
-      }
-    } catch (error) {
-      log.warn({ err: String(error) }, 'queue panel is available but automatic pin failed');
-    }
-    return { firstMessageId };
+  private async refreshPinnedPanel(chatId: bigint, key: string, text: string, keyboard: Button[][], jobId: string): Promise<{ firstMessageId?: string }> {
+    this.panelService ??= new PinnedPanelService(this.durable!.prisma, this.max);
+    return this.panelService.refresh(chatId, key, text, keyboard, jobId);
   }
 
   private async refreshStaffCards(incidentId: string): Promise<{ firstMessageId?: string }> {

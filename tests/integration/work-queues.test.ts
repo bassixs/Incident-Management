@@ -32,6 +32,14 @@ describeIntegration('working chat queues and obsolete actions', () => {
       api: { getMessage: vi.fn(async (mid: string) => ({ recipient: { chat_id: Number(sent.find(s => s.mid === mid)!.chat) } })),
         getPinnedMessage: vi.fn(async () => ({ message: null })), pinMessage: vi.fn(async () => ({ success: true })) } };
     max.getMessage = max.api.getMessage; max.getPinnedMessage = max.api.getPinnedMessage;
+    const asMessage = (s: typeof sent[number]) => ({ sender: { user_id: 777, is_bot: true }, recipient: { chat_id: Number(s.chat) }, timestamp: Date.now(), body: { mid: s.mid, text: s.text, attachments: s.extra?.attachments ?? [] } });
+    max.getMe = vi.fn(async () => ({ user_id: 777 }));
+    max.sendPanelOnce = vi.fn((chat: bigint, text: string) => send(chat, text, {}));
+    max.getChatMessages = vi.fn(async (chat: bigint) => ({ messages: sent.filter(s => s.chat === chat).map(asMessage) }));
+    max.api.getMessage.mockImplementation(async (mid: string) => asMessage(sent.find(s => s.mid === mid)!));
+    max.editMessage.mockImplementation(async (mid: string, text: string, attachments: unknown[]) => {
+      const row = sent.find(s => s.mid === mid)!; row.text = text; row.extra = { attachments };
+    });
     max.pinMessage = (chat: bigint, mid: string) => max.api.pinMessage(Number(chat), mid, { notify: false });
     services = buildServices(prisma, { messages: new MaxMessageService(max, { prisma, storage: { remove: async () => undefined } as never }) });
     actor = await actorFor(prisma, TEST_USERS.admin, 'Первый сотрудник', [UserRole.ADMIN]);
@@ -40,6 +48,7 @@ describeIntegration('working chat queues and obsolete actions', () => {
   async function create(age = 0, groupCode: string = GROUP_CODES.facility) {
     const i = await services.incidents.create({ requester: { maxUserId: 6000n + BigInt(++sequence), name: 'Иван Иванов', phone: '+79001112233' }, text: 'Не работает освещение' });
     const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: groupCode } });
+    await services.distribution.confirmPrivacyCheck(i.id, actor);
     await services.distribution.assign(i.id, group.id, actor);
     return prisma.incident.update({ where: { id: i.id }, data: { createdAt: new Date(Date.now() - age * 60_000) } });
   }
@@ -137,7 +146,16 @@ describeIntegration('working chat queues and obsolete actions', () => {
   it('recreates only confirmed missing panels even when MAX would accept editing deleted messages', async () => {
     await services.workQueues.refresh(actor, TEST_CHATS.sector);
     const first = (await prisma.systemSetting.findUniqueOrThrow({ where: { key: workPanelKey(TEST_CHATS.sector) } })).value;
-    max.api.getMessage.mockRejectedValueOnce(new MaxError(404, { code: 'message.not.found', message: 'Gone' }));
+    const read = max.api.getMessage.getMockImplementation();
+    max.api.getMessage.mockImplementation(async (mid: string) => {
+      if (mid === first) throw new MaxError(404, { code: 'message.not.found', message: 'Gone' });
+      return read(mid);
+    });
+    const history = max.getChatMessages.getMockImplementation();
+    max.getChatMessages.mockImplementation(async (chat: bigint) => ({ messages: (await history(chat)).messages.filter((m: any) => m.body.mid !== first) }));
+    await services.workQueues.refresh(actor, TEST_CHATS.sector);
+    expect((await prisma.systemSetting.findUniqueOrThrow({ where: { key: workPanelKey(TEST_CHATS.sector) } })).value).toBe(first);
+    vi.setSystemTime(Date.now() + 40_000);
     await services.workQueues.refresh(actor, TEST_CHATS.sector);
     const second = (await prisma.systemSetting.findUniqueOrThrow({ where: { key: workPanelKey(TEST_CHATS.sector) } })).value;
     expect(second).not.toBe(first);
@@ -152,7 +170,7 @@ describeIntegration('working chat queues and obsolete actions', () => {
   it('skips unchanged panel edits while checking existence and restoring a lost pin', async () => {
     await services.workQueues.refresh(actor, TEST_CHATS.sector);
     const panel = sent.find(s => s.text.includes('ОЧЕРЕДЬ ПРОФИЛЬНОГО'))!;
-    max.api.getMessage.mockImplementation(async () => ({ recipient: { chat_id: Number(TEST_CHATS.sector) }, body: { mid: panel.mid, text: panel.text, attachments: panel.extra.attachments } }));
+    max.api.getMessage.mockImplementation(async () => ({ sender: { user_id: 777, is_bot: true }, recipient: { chat_id: Number(TEST_CHATS.sector) }, body: { mid: panel.mid, text: panel.text, attachments: panel.extra.attachments } }));
     max.api.getPinnedMessage.mockResolvedValue({ message: { body: { mid: panel.mid } } });
     max.editMessage.mockClear(); max.api.pinMessage.mockClear();
     await services.workQueues.refresh(actor, TEST_CHATS.sector);
