@@ -56,7 +56,13 @@ describeIntegration('Excel overdue worksheet', () => {
     expect(sheet.getCell(1, 1).value).toContain('05.09.2026 15:00');
     expect(sheet.getCell(2, 1).value).toContain('Всего: 7');
     expect(sheet.getCell(3, 5).value).toBe('Просрочка, ч');
-    expect(sheet.getRow(4).values).toEqual(expect.arrayContaining(['OLD-0', 24, 'Не назначена', 'Иванов Иван']));
+    expect(sheet.getCell(4, 1).value).toBe('OLD-0');
+    expect(sheet.getCell(4, 5).value).toBe(24);
+    expect(sheet.getCell(4, 7).value).toBe('Не назначена');
+    // Legacy profile data in the fixture must not reappear in either worksheet.
+    const reportValues = JSON.stringify(workbook.worksheets.map(worksheet => worksheet.getSheetValues()));
+    expect(reportValues).not.toContain('Иванов Иван');
+    expect(reportValues).not.toContain('+7 900 123-45-67');
     const codes = Array.from({ length: result.overdueRows }, (_, index) => sheet.getCell(index + 4, 1).value);
     expect(codes).toEqual(['OLD-0', 'OLD-1', 'OLD-2', 'OLD-3', 'OLD-4', 'OLD-5', 'EXACT-DEADLINE']);
     for (const [index, status] of active.entries()) expect(sheet.getCell(index + 4, 6).value).toBe(describeStatus(status));

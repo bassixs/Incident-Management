@@ -77,6 +77,9 @@ const envSchema = z
     HTTP_PORT: int(3000),
     INBOX_CONCURRENCY: int(8).pipe(z.number().min(1).max(32)),
     OUTBOX_CONCURRENCY: int(8).pipe(z.number().min(1).max(32)),
+    BOT_STATUS_USER_IDS: z.string().default(''),
+    BOT_STATUS_TIME: z.string().default('08:00'),
+    BOT_STATUS_WEEKDAY: z.string().default('monday'),
 
     DISTRIBUTION_CHAT_ID: optionalBigInt,
     DISTRIBUTION_QUEUE_ENABLED: boolean(true),
@@ -119,6 +122,18 @@ const envSchema = z
     RESPONDERS: bigIntList,
   })
   .superRefine((value, ctx) => {
+    if (value.BOT_STATUS_USER_IDS.trim()) {
+      const ids = value.BOT_STATUS_USER_IDS.split(',').map(id => id.trim());
+      if (ids.some(id => !/^\d+$/.test(id) || !Number.isSafeInteger(Number(id)) || Number(id) <= 0)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['BOT_STATUS_USER_IDS'], message: 'Use positive safe MAX user IDs separated by commas.' });
+      }
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(value.BOT_STATUS_TIME)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['BOT_STATUS_TIME'], message: 'Use HH:mm (00:00–23:59), Moscow time.' });
+      }
+      if (!['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'].includes(value.BOT_STATUS_WEEKDAY)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['BOT_STATUS_WEEKDAY'], message: 'Use monday through sunday in lowercase.' });
+      }
+    }
     if (value.WORKDAY_START >= value.WORKDAY_END) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['WORKDAY_END'], message: 'WORKDAY_END must be later than WORKDAY_START within the same day.' });
     }
@@ -181,7 +196,8 @@ const envSchema = z
         message: `Unknown IANA timezone: "${value.APP_TIMEZONE}".`,
       });
     }
-  });
+  }).transform(value => ({ ...value, BOT_STATUS_USER_IDS: value.BOT_STATUS_USER_IDS.trim()
+    ? [...new Set(value.BOT_STATUS_USER_IDS.split(',').map(id => BigInt(id.trim())))] : [] }));
 
 export type AppConfig = z.infer<typeof envSchema> & {
   mediaLocalAbsolutePath: string;

@@ -3,6 +3,7 @@ import { normaliseRequesterPhone } from '../incidents/incident.service';
 
 export const OPTIONAL_PHONE_OFFER = 'Для более оперативной обработки можно поделиться телефоном. Это необязательно.';
 export const OPTIONAL_PHONE_ADDED = 'Специалист сможет связаться с вами для уточнения деталей';
+export const CONTACT_REJECTION = 'Контакт не добавлен. На итоговой карточке текущего сообщения нажмите «📞 Поделиться контактом» и отправьте свой контакт. Можно продолжить без телефона. Сообщение этим действием не отправлено.';
 
 /** Trusted, minimal inbox extension. Never contains the original contact or signature. */
 export type VerifiedDraftContact = { phone: string; draftToken: string; previewToken: string };

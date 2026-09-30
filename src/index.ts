@@ -57,10 +57,11 @@ async function main(): Promise<void> {
   services.distributionQueue.start();
   services.workQueues.start();
   services.workQueues.personalSweep = () => sweepPersonalWork(services);
+  services.botStatus.start();
 
   let shuttingDown = false;
   services.cleanup.start(work => withRuntimePaused(dispatcher, services.messages,
-    [services.sla, services.distributionQueue, services.workQueues, services.deliveryAlerts], work, () => shuttingDown));
+    [services.sla, services.distributionQueue, services.workQueues, services.deliveryAlerts, services.botStatus], work, () => shuttingDown));
 
   let shutdownPromise: Promise<void> | undefined;
   const shutdown = (signal: string): Promise<void> => {
@@ -75,6 +76,7 @@ async function main(): Promise<void> {
       services.distributionQueue.stop();
       services.workQueues.stop();
       services.deliveryAlerts.stop();
+      services.botStatus.stop();
       services.messages.stop();
       await completeShutdown({
         closeIngress: async () => server?.close(),
@@ -84,6 +86,7 @@ async function main(): Promise<void> {
           services.distributionQueue.waitForIdle(),
           services.workQueues.waitForIdle(),
           services.cleanup.waitForIdle(),
+          services.botStatus.waitForIdle(),
         ]),
         waitForMessages: () => services.messages.waitForIdle(),
         disconnect: disconnectDatabase,

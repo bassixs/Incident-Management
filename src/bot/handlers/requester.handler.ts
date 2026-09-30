@@ -1,4 +1,5 @@
 import { assertNoPersonalData, PRIVACY_REJECTION } from '../../privacy/personal-data';
+import { CONTACT_REJECTION } from '../../privacy/optional-contact';
 import { reportActionError } from '../../utils/errors';
 import { hasPrivateWorkAccess } from '../../users/private-work-access';
 import { SessionType } from '@prisma/client';
@@ -14,7 +15,6 @@ import { classifyAttachments } from '../../media/media.service';
 import { ValidationError } from '../../utils/errors';
 import { normaliseIncidentText, unicodeLength } from '../../utils/text';
 import {
-  legalDocumentsKeyboard,
   mainMenuKeyboard,
   requesterCategoryKeyboard,
 } from '../keyboards';
@@ -27,8 +27,6 @@ import {
   categoryPromptText,
   greetingText,
   incidentPromptText,
-  legalGateText,
-  personalDataConsentText,
 } from '../views/cards';
 import type { ResolvedActor } from './helpers';
 
@@ -44,9 +42,9 @@ export async function handleRequesterMessage(
 ): Promise<void> {
   const target = { userId: actor.maxUserId } as const;
   if (message.body.attachments?.some(a => a.type === 'contact')) {
-    await services.messages.send(target, { text: PRIVACY_REJECTION }); return;
+    await services.messages.send(target, { text: CONTACT_REJECTION }); return;
   }
-  try { assertNoPersonalData(message.body.text ?? ''); } catch {
+  try { if (!contactInfo) assertNoPersonalData(message.body.text ?? ''); } catch {
     await services.messages.send(target, { text: PRIVACY_REJECTION }); return;
   }
 

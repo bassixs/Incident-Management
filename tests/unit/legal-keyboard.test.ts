@@ -20,8 +20,8 @@ describe('legal document keyboards', () => {
     personalDataConsent: 'https://example.test/documents/personal-data-consent.pdf',
   };
 
-  it('keeps the document centre permanently visible in the main menu', () => {
-    expect(mainMenuKeyboard().flat().map((button) => button.text)).toContain('Об обработке данных');
+  it('does not expose the retired document centre in the main menu', () => {
+    expect(mainMenuKeyboard().flat().map((button) => button.text)).not.toContain('Об обработке данных');
   });
 
   it('shows three HTTPS documents and accepts the agreement directly', () => {

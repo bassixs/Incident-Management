@@ -23,7 +23,7 @@ describeIntegration('minimal resident data and mandatory staff screening', () =>
     expect(await prisma.legalAcceptance.count()).toBe(0);
   });
   it('rejects personal text before creating incident and quota; ignores supplied legacy profile values', async () => {
-    await expect(h.services.incidents.create({ requester: { maxUserId: 555n }, text: 'Телефон +79001234567' })).rejects.toThrow('персональные');
+    await expect(h.services.incidents.create({ requester: { maxUserId: 555n }, text: 'Паспорт 45 12 123456, телефон +79001234567' })).rejects.toThrow('персональные');
     expect(await prisma.incident.count()).toBe(0);
     const incident = await h.services.incidents.create({ requester: { maxUserId: 555n, name: 'Иванов Иван Иванович', phone: '+79001234567' }, text: 'Яма у дома 12 на улице Ленина' });
     expect(incident.requesterName).toBe('Житель'); expect(incident.requesterPhone).toBeNull();
