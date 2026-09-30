@@ -6,6 +6,7 @@ import { handleOperatorMessage } from '../../src/bot/handlers/operator.handler';
 import { findCommand } from '../../src/bot/commands';
 import { REJECTION_MESSAGES } from '../../src/incidents/incident.service';
 import { getConfig } from '../../src/config';
+import { CONTACT_REJECTION } from '../../src/privacy/optional-contact';
 
 vi.mock('../../src/bot/handlers/requester.handler', () => ({ handleRequesterMessage: vi.fn(), sendMainMenu: vi.fn() }));
 vi.mock('../../src/bot/handlers/operator.handler', () => ({ handleOperatorMessage: vi.fn() }));
@@ -49,10 +50,30 @@ it('rejects a mixed photo/file message with a command caption without executing 
   expect(handleRequesterMessage).not.toHaveBeenCalled();
 });
 
-it.each(['image', 'contact'])('keeps normal %s messages available to the requester flow', async type => {
-  const { services, ctx, message } = setup([{ type, payload: {} }]);
+it('keeps normal image messages available to the requester flow', async () => {
+  const { services, ctx, message } = setup([{ type: 'image', payload: {} }]);
   await handleMessageUpdate(services as never, ctx as never);
   expect(handleRequesterMessage).toHaveBeenCalledWith(services, expect.anything(), 5001n, message);
+  expect(services.messages.send).not.toHaveBeenCalled();
+});
+
+it('never routes an unverified raw contact to the ordinary requester flow', async () => {
+  const { services, ctx } = setup([{ type: 'contact', payload: {} }]);
+  await handleMessageUpdate(services as never, ctx as never);
+  expect(handleRequesterMessage).not.toHaveBeenCalled();
+  expect(services.messages.send).toHaveBeenCalledWith({ userId: 5001n }, { text: CONTACT_REJECTION });
+  expect(services.sessions.find).not.toHaveBeenCalled();
+});
+
+it('routes a verified contact exactly once before commands and staff text processing', async () => {
+  const { services, ctx, message } = setup([], '/start');
+  const contact = { phone: '+7 900 111-22-33', draftToken: 'draft', previewToken: 'preview' };
+  Object.assign(ctx.update, { verifiedDraftContact: contact });
+  await handleMessageUpdate(services as never, ctx as never);
+  expect(handleRequesterMessage).toHaveBeenCalledTimes(1);
+  expect(handleRequesterMessage).toHaveBeenCalledWith(services, expect.anything(), 5001n, message, contact);
+  expect(findCommand).not.toHaveBeenCalled();
+  expect(services.prisma.privateWorkItem.findFirst).not.toHaveBeenCalled();
   expect(services.messages.send).not.toHaveBeenCalled();
 });
 

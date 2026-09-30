@@ -229,7 +229,7 @@ export function distributionKeyboard(incidentId: string, hasPhone = false): Butt
   return [
     ...residentContactButton(incidentId, hasPhone),
     [button.callback('Работать лично', incidentCallback('personal', incidentId))],
-    [button.callback('Текст и фото проверены: персональных данных нет', incidentCallback('privacy-pass', incidentId))],
+    [button.callback('Текст и фото проверены: запрещённых данных нет', incidentCallback('privacy-pass', incidentId))],
     [button.callback('Распределить', incidentCallback('assign', incidentId), { intent: 'positive' })],
     [button.callback('Изменить тему', incidentCallback('topic', incidentId))],
     [button.callback('Освободить сообщение', `queue:release:${incidentId}`)],

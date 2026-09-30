@@ -166,7 +166,7 @@ export class DistributionService {
       await acquireAdvisoryLock(tx, ...CLAIM_LOCK);
       assertClaimOwner(await tx.incident.findUniqueOrThrow({ where: { id: incidentId } }), actor.maxUserId);
       if (!(await tx.incidentHistory.findFirst({ where: { incidentId, action: 'PRIVACY_CHECK_PASSED' }, select: { id: true } }))) {
-        throw new ConflictError('Сначала проверьте текст и все фотографии и подтвердите отсутствие персональных данных.');
+        throw new ConflictError('Сначала проверьте текст и все фотографии и подтвердите отсутствие запрещённых персональных данных (телефон для связи разрешён).');
       }
       const claimed = await this.repository.transition(tx, incidentId, IncidentStatus.DISTRIBUTION, {
         status: IncidentStatus.ASSIGNED,

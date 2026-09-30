@@ -9,6 +9,7 @@ import type { SessionData } from '../sessions/operator-session.service';
 export async function minimiseInbound(update: Update, prisma: PrismaClient): Promise<Update> {
   const value = JSON.parse(JSON.stringify(update));
   delete value.privacyRejected;
+  delete value.contactRejected;
   delete value.verifiedDraftContact;
   const message = value.message;
   const dialog = message?.recipient?.chat_type === 'dialog';
@@ -22,7 +23,7 @@ export async function minimiseInbound(update: Update, prisma: PrismaClient): Pro
   const contacts = message?.body?.attachments?.filter((a: any) => a.type === 'contact') ?? [];
   if (contacts.length) {
     let accepted = false;
-    if (residentMessage && contacts.length === 1 && message.body.attachments.length === 1 && !message.link && !message.body.text?.trim()) {
+    if (residentMessage && contacts.length === 1 && message.body.attachments.length === 1 && !message.link) {
       const phone = verifyOwnContact(contacts[0].payload, userId, getConfig().BOT_TOKEN);
       if (phone) {
         const session = await prisma.operatorSession.findUnique({ where: { maxUserId_chatId: {
@@ -42,7 +43,9 @@ export async function minimiseInbound(update: Update, prisma: PrismaClient): Pro
     message.body.text = null;
     message.body.attachments = [];
     delete message.link;
-    if (!accepted) value.privacyRejected = true;
+    // Contact captions/names are not incident text, including rejected contacts.
+    // Keep a separate marker so invalid stage/signature is not reported as PII.
+    if (!accepted) value.contactRejected = true;
   }
   if (residentMessage && message?.body) {
     const rejected = containsPersonalData(message.body.text ?? '') || !!message.link ||

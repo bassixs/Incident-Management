@@ -1,14 +1,14 @@
 {
   "user-agreement": {
-    "version": "3.3",
-    "sha256": "168a8af593ec4c38a467b6fec1c7aecaad8b82086c6a95c7df4534feb6bb7c9d"
+    "version": "3.4",
+    "sha256": "e7114f6220c5516552695a0ae5df685a44af4f72649d74e41d313f2530fe285e"
   },
   "privacy-policy": {
-    "version": "3.3",
-    "sha256": "51ccf75e2c1c58a744c0985e0b93b9797ba921d6249f78d4c1b050a7d586229c"
+    "version": "3.4",
+    "sha256": "c84449d34702d6d35f65ad9b01f9bc0d3de50b72f9265f87bd8bbea600f590fc"
   },
   "personal-data-consent": {
-    "version": "3.3",
-    "sha256": "97f44623fe09236d5b6fd94dfe353a1f145871606b062ab6b62224c8690e21a0"
+    "version": "3.4",
+    "sha256": "d5c1f03c6b80e117d161820ae801bf07aa5c8ee76a6b993b00038d1072a74a9b"
   }
 }

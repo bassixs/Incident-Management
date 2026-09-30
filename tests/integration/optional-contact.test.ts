@@ -7,6 +7,8 @@ import { InboxStatus, UserRole, type PrismaClient } from '@prisma/client';
 import { actorFor, createHarness, createTestPrisma, describeIntegration, pushSchemaOnce, resetDatabase, seedCategories, type TestHarness } from '../helpers/integration';
 import { handleUserCallback } from '../../src/bot/callbacks/user.callbacks';
 import { handleRequesterMessage } from '../../src/bot/handlers/requester.handler';
+import { handleMessageUpdate } from '../../src/bot/handlers/message.handler';
+import { CONTACT_REJECTION } from '../../src/privacy/optional-contact';
 import { showIncidentDraftPreview } from '../../src/bot/requester-draft';
 import { minimiseInbound } from '../../src/privacy/inbound-privacy';
 import { revealResidentContact } from '../../src/privacy/staff-contact';
@@ -68,7 +70,7 @@ describeIntegration('optional per-message contact', () => {
     expect(h.messages.toUser(555n).at(-1)?.message.keyboard?.flat()).toContainEqual({ type: 'request_contact', text: '📞 Поделиться контактом' });
     await receive();
     expect((await data()).requesterPhone).toBe(phone);
-    expect((await minimiseInbound(rawContact() as never, prisma) as any).privacyRejected).toBe(true);
+    expect((await minimiseInbound(rawContact() as never, prisma) as any).contactRejected).toBe(true);
     await expect(click('draft-phone-use')).rejects.toThrow('устарела');
     await click('draft-edit');
     await expect(click('draft-phone-remove', oldEditToken)).rejects.toThrow('устарела');
@@ -82,7 +84,7 @@ describeIntegration('optional per-message contact', () => {
     expect(incident.requesterPhone).toBeNull();
     await handleRequesterMessage(h.services, actor, 555n, old.message, old.verifiedDraftContact);
     expect(await prisma.operatorSession.count()).toBe(0);
-    expect((await minimiseInbound(rawContact() as never, prisma) as any).privacyRejected).toBe(true);
+    expect((await minimiseInbound(rawContact() as never, prisma) as any).contactRejected).toBe(true);
     await preview();
     await handleRequesterMessage(h.services, actor, 555n, old.message, old.verifiedDraftContact);
     expect((await data()).requesterPhone).toBeUndefined();
@@ -130,7 +132,7 @@ describeIntegration('optional per-message contact', () => {
   it('rejects contacts timestamped before the preview but cannot identify an old native button pressed now', async () => {
     await preview(); const old = rawContact();
     old.message.timestamp = Number((await data()).previewStartedAt) - 1;
-    expect((await minimiseInbound(old as never, prisma) as any).privacyRejected).toBe(true);
+    expect((await minimiseInbound(old as never, prisma) as any).contactRejected).toBe(true);
     await click('draft-cancel'); await preview();
     // MAX provides no draft/button ID. A fresh signed event from an old button
     // is indistinguishable from pressing the current native button.
@@ -224,7 +226,7 @@ describeIntegration('optional per-message contact', () => {
     const old = await minimiseInbound(rawContact() as never, prisma) as any;
     const oldToken = (await data()).previewToken;
     await click('draft-cancel'); expect(await prisma.operatorSession.count()).toBe(0);
-    expect((await minimiseInbound(rawContact() as never, prisma) as any).privacyRejected).toBe(true);
+    expect((await minimiseInbound(rawContact() as never, prisma) as any).contactRejected).toBe(true);
     await preview();
     await handleRequesterMessage(h.services, actor, 555n, old.message, old.verifiedDraftContact);
     expect((await data()).requesterPhone).toBeUndefined();
@@ -361,11 +363,21 @@ describeIntegration('optional per-message contact', () => {
   });
   it('deduplicates incoming contact and double registration without leaking raw contact', async () => {
     await preview(); const update = rawContact();
-    const dispatch = new UpdateDispatcher(prisma, { dispatch: async (value: any) => handleRequesterMessage(h.services, actor, 555n, value.message, value.verifiedDraftContact) } as never, 2);
+    // MAX contact captions and FN are not the resident's incident description.
+    update.message.body.text = 'Иванов Иван Иванович +79991234567' as never;
+    const route = vi.fn(async (value: any) => handleMessageUpdate(h.services, { update: value } as never));
+    const dispatch = new UpdateDispatcher(prisma, { dispatch: route } as never, 2);
     const result = await Promise.all([dispatch.handle(update as never), dispatch.handle(update as never)]);
     expect(result.sort()).toEqual(['duplicate', 'processed']);
     expect((await prisma.inboundUpdate.findFirstOrThrow()).payload).toEqual({});
     expect((await data()).requesterPhone).toBe(phone);
+    expect((await data()).draftText).toBe(draft.draftText);
+    expect(route).toHaveBeenCalledTimes(1);
+    expect(await prisma.incident.count()).toBe(0);
+    const cards = h.messages.toUser(555n).map(m => m.message);
+    expect(cards.some(m => /Сообщение не принято|Контакт не добавлен/.test(m.text))).toBe(false);
+    expect(cards.at(-1)?.text).toContain(phone);
+    expect(cards.at(-1)?.keyboard?.flat().some(b => b.type === 'request_contact')).toBe(false);
     const token = (await data()).previewToken;
     await Promise.allSettled([click('draft-confirm', token), click('draft-confirm', token)]);
     expect(await prisma.incident.count()).toBe(1); expect((await prisma.incident.findFirstOrThrow()).requesterPhone).toBe(phone);
@@ -374,15 +386,57 @@ describeIntegration('optional per-message contact', () => {
     await preview();
     for (const override of [{ hash: undefined }, { max_info: { user_id: 999 } }]) {
       const value = await minimiseInbound(rawContact(override) as never, prisma) as any;
-      expect(value.privacyRejected).toBe(true); expect(JSON.stringify(value)).not.toContain(phone);
+      expect(value.contactRejected).toBe(true); expect(JSON.stringify(value)).not.toContain(phone);
     }
-    const text = rawContact(); text.message.body = { ...text.message.body, text: 'Телефон +79991234567', attachments: [] } as never;
+    const text = rawContact(); text.message.body = { ...text.message.body, text: 'Паспорт 45 12 123456, телефон +79991234567', attachments: [] } as never;
     expect((await minimiseInbound(text as never, prisma) as any).privacyRejected).toBe(true);
-    await click('draft-edit'); expect((await minimiseInbound(rawContact() as never, prisma) as any).privacyRejected).toBe(true);
+    await click('draft-edit'); expect((await minimiseInbound(rawContact() as never, prisma) as any).contactRejected).toBe(true);
     await preview(); await prisma.operatorSession.updateMany({ data: { expiresAt: new Date(0) } });
-    expect((await minimiseInbound(rawContact() as never, prisma) as any).privacyRejected).toBe(true);
+    expect((await minimiseInbound(rawContact() as never, prisma) as any).contactRejected).toBe(true);
     expect(await h.services.sessions.find(555n, 555n)).toBeNull(); expect(await prisma.operatorSession.count()).toBe(0);
   });
+  it.each(['unsigned', 'foreign', 'cancel', 'sent', 'edit', 'repeat'] as const)(
+    'routes %s contact to a contact-specific refusal without processing its caption as text', async reason => {
+      await preview();
+      if (reason === 'cancel') await click('draft-cancel');
+      if (reason === 'sent') await register();
+      if (reason === 'edit') { await click('draft-edit'); await click('draft-field', 'text'); }
+      if (reason === 'repeat') await receive();
+      const before = await prisma.operatorSession.findMany();
+      const count = await prisma.incident.count();
+      const update = rawContact(reason === 'unsigned' ? { hash: undefined } : reason === 'foreign' ? { max_info: { user_id: 999 } } : {});
+      update.message.body.text = 'Иванов Иван Иванович +79991234567' as never;
+      const dispatcher = new UpdateDispatcher(prisma, { dispatch: async (value: any) => handleMessageUpdate(h.services, { update: value } as never) } as never);
+      const reservation = await dispatcher.reserve(update as never);
+      const pending = await prisma.inboundUpdate.findUniqueOrThrow({ where: { id: reservation.id } });
+      expect(pending.payload).toHaveProperty('contactRejected', true);
+      expect(JSON.stringify(pending.payload)).not.toMatch(/Иванов|79991234567|vcf_info|Private Name/);
+      await dispatcher.kick();
+      expect(h.messages.toUser(555n).at(-1)?.message.text).toBe(CONTACT_REJECTION);
+      expect(await prisma.operatorSession.findMany()).toEqual(before);
+      expect(await prisma.incident.count()).toBe(count);
+      expect((await prisma.inboundUpdate.findUniqueOrThrow({ where: { id: pending.id } })).status).toBe('PROCESSED');
+    },
+  );
+  it.each(['+7 (900) 123-45-67', '8 900 123 45 67', '79001234567', '89001234567', '+7 4842 123456'])(
+    'preserves text phone %s in normal delivery without extracting a private contact', async textPhone => {
+      await preview(); await click('draft-edit'); await click('draft-field', 'text');
+      const update = rawContact();
+      const text = `Яма у дома 12 по ул. Ленина. Для связи ${textPhone}`;
+      update.message.body = { ...update.message.body, mid: 'text-phone', text, attachments: [] } as never;
+      const dispatcher = new UpdateDispatcher(prisma, { dispatch: async (value: any) => handleMessageUpdate(h.services, { update: value } as never) } as never);
+      await dispatcher.handle(update as never);
+      expect((await data()).draftText).toBe(text);
+      expect((await data()).requesterPhone).toBeUndefined();
+      expect(await prisma.incident.count()).toBe(0);
+      const token = (await data()).previewToken;
+      const incident = await register();
+      expect(incident.text).toBe(text); expect(incident.requesterPhone).toBeNull();
+      expect(h.messages.toChat(TEST_CHATS.distribution).some(m => m.message.text.includes(textPhone))).toBe(true);
+      await expect(click('draft-confirm', token)).rejects.toThrow();
+      expect(await prisma.incident.count()).toBe(1);
+    },
+  );
   it('clears minimal contact payload even when processing fails', async () => {
     await preview();
     const dispatcher = new UpdateDispatcher(prisma, { dispatch: async () => { throw new Error('sensitive failure'); } } as never);

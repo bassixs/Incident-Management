@@ -35,7 +35,7 @@ def main():
             if name != 'user-agreement':
                 assert 'min_digital@adm.kaluga.ru' in current
                 assert '1194027000221' in current
-            assert f"Редакция {meta['version']} от 29.09.2026" in current
+            assert f"Редакция {meta['version']} от 30.09.2026" in current
             if name != 'user-agreement':
                 assert normalized('Защитники Отечества') in normalized(current)
                 assert normalized('Социального фонда России') in normalized(current)

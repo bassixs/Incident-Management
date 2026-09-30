@@ -303,7 +303,7 @@ export async function handleUserCallback(
       switch (payload.argument) {
         case 'text':
           await services.sessions.start({ maxUserId: actor.maxUserId, chatId, type: SessionType.WAITING_INCIDENT_EDIT_VALUE, data: { ...draft, draftEditField: 'text' } });
-          await services.messages.send(target, { text: 'Отправьте новый текст сообщения без персональных данных.' });
+          await services.messages.send(target, { text: 'Отправьте новый текст сообщения. Телефон для связи можно указать; ФИО, документы и другие запрещённые личные сведения указывать нельзя.' });
           return;
         case 'category': {
           const categories = await services.categories.listActive();

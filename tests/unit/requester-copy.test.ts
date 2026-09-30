@@ -1,5 +1,8 @@
 import { IncidentStatus, type Incident } from '@prisma/client';
 import { describe, expect, it } from 'vitest';
+import { PRIVACY_NOTICE, PRIVACY_REJECTION } from '../../src/privacy/personal-data';
+import { CONTACT_REJECTION, OPTIONAL_PHONE_OFFER } from '../../src/privacy/optional-contact';
+import { REJECTION_REASONS } from '../../src/distribution/rejection-reasons';
 
 import {
   greetingText,
@@ -15,6 +18,17 @@ const incident = {
 } as Incident;
 
 describe('requester-facing copy', () => {
+  it('allows a text phone and distinguishes its visibility from a separate contact', () => {
+    expect(OPTIONAL_PHONE_OFFER).toBe('Для более оперативной обработки можно поделиться телефоном. Это необязательно.');
+    expect(rulesText()).toContain(PRIVACY_NOTICE);
+    expect(PRIVACY_NOTICE).toContain('Номер в тексте виден вместе с текстом сообщения.');
+    expect(PRIVACY_NOTICE).toContain('Отдельно переданный контакт доступен распределителю и текущему исполнителю');
+    expect(PRIVACY_REJECTION).toBe('Сообщение не принято: обнаружены возможные запрещённые персональные данные. Уберите ФИО, паспортные данные, СНИЛС, банковские реквизиты, адреса электронной почты и другие запрещённые личные сведения. Телефон для связи разрешён. Исправьте текст и отправьте заново.');
+    expect(REJECTION_REASONS.find(r => r.id === '9')?.reason).toContain('Телефон для связи разрешён.');
+    expect(CONTACT_REJECTION).toContain('Контакт не добавлен.');
+    expect(CONTACT_REJECTION).not.toContain('персональные данные');
+    expect(CONTACT_REJECTION).toContain('Сообщение этим действием не отправлено.');
+  });
   it('does not disclose the internal response deadline', () => {
     const requesterCopy = [greetingText(), rulesText(), registrationConfirmation(incident)].join('\n');
     expect(requesterCopy).not.toMatch(/срок\s+ответа|не\s+позднее|72\s*час|3\s*(?:дня|дней)/i);

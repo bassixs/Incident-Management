@@ -73,8 +73,8 @@ export async function handleIncidentCallback(
       await services.distributionQueue.claim(actor, chatId, incident.id);
       if (payload.argument !== 'confirm') {
         await services.messages.send({ chatId }, {
-          text: `${incident.publicCode}: проверьте весь текст и каждую фотографию. Нет ФИО, телефонов, документов, лиц и других персональных данных? Телефон, переданный отдельной кнопкой, к этой проверке не относится. Если в тексте или фото данные есть — выберите «Отклонить» и причину «Персональные данные».`,
-          keyboard: [[{ type: 'callback', text: 'Проверено, персональных данных нет', payload: `incident:privacy-pass:${incident.id}:confirm` }], [{ type: 'callback', text: 'Отмена', payload: `incident:cancel:${incident.id}` }]],
+          text: `${incident.publicCode}: проверьте весь текст и каждую фотографию. Нет ФИО, документов, лиц и других запрещённых личных сведений? Телефон для связи разрешён в тексте и через отдельную кнопку. Само наличие телефона не является причиной отказа. Если в тексте или фото запрещённые данные есть — выберите «Отклонить» и причину «Персональные данные».`,
+          keyboard: [[{ type: 'callback', text: 'Проверено, запрещённых данных нет', payload: `incident:privacy-pass:${incident.id}:confirm` }], [{ type: 'callback', text: 'Отмена', payload: `incident:cancel:${incident.id}` }]],
         });
         return;
       }
