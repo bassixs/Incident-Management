@@ -46,7 +46,7 @@ describeIntegration('optional per-message contact', () => {
 
   it('keeps the no-phone path and does not consume quota for previews', async () => {
     await preview(); expect(await prisma.incident.count()).toBe(0);
-    expect(h.messages.toUser(555n).at(-1)?.message.text).toContain('Для более оперативной обработки можно поделиться телефоном — он будет доступен распределителю и исполнителю. Это необязательно.');
+    expect(h.messages.toUser(555n).at(-1)?.message.text).toContain('Для более оперативной обработки можно поделиться телефоном. Это необязательно.');
     const incident = await register(); expect(incident.requesterPhone).toBeNull();
     expect(await prisma.legalAcceptance.count()).toBe(0);
   });

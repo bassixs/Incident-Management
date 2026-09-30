@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { normaliseRequesterPhone } from '../incidents/incident.service';
 
-export const OPTIONAL_PHONE_OFFER = 'Для более оперативной обработки можно поделиться телефоном — он будет доступен распределителю и исполнителю. Это необязательно.';
+export const OPTIONAL_PHONE_OFFER = 'Для более оперативной обработки можно поделиться телефоном. Это необязательно.';
 export const OPTIONAL_PHONE_ADDED = 'Специалист сможет связаться с вами для уточнения деталей';
 
 /** Trusted, minimal inbox extension. Never contains the original contact or signature. */
