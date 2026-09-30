@@ -44,6 +44,7 @@ describeIntegration('optional per-message contact', () => {
 
   it('keeps the no-phone path and does not consume quota for previews', async () => {
     await preview(); expect(await prisma.incident.count()).toBe(0);
+    expect(h.messages.toUser(555n).at(-1)?.message.text).toContain('Для более оперативной обработки можно поделиться телефоном — он будет доступен распределителю и исполнителю. Это необязательно.');
     const incident = await register(); expect(incident.requesterPhone).toBeNull();
     expect(await prisma.legalAcceptance.count()).toBe(0);
   });
@@ -117,7 +118,12 @@ describeIntegration('optional per-message contact', () => {
     });
     await receive();
     expect(await prisma.operatorSession.count()).toBe(action === 'replace' ? 1 : 0);
-    if (action === 'replace') expect((await data()).requesterPhone).toBeUndefined();
+    if (action === 'replace') {
+      const replacement = await data();
+      expect(replacement.requesterPhone).toBeUndefined();
+      expect(h.messages.deleted).not.toContain(replacement.previewMessageId);
+      expect(h.messages.edits.some(edit => edit.messageId === replacement.previewMessageId)).toBe(false);
+    }
     expect(h.messages.deleted).toContain(lateMessageId);
     expect(await prisma.incident.count()).toBe(action === 'submit' ? 1 : 0);
     if (action === 'submit') expect((await prisma.incident.findFirstOrThrow()).requesterPhone).toBe(phone);
@@ -140,6 +146,56 @@ describeIntegration('optional per-message contact', () => {
     const currentId = (await data()).previewMessageId!;
     await register();
     expect(h.messages.edits.some(edit => edit.messageId === currentId && edit.mode === 'finalize')).toBe(true);
+  });
+  it.each(['contact', 'draft-edit', 'draft-cancel', 'draft-confirm', 'new'] as const)(
+    'retires only the owner draft preview during %s, including the keyboard-removal fallback', async (action) => {
+      await preview(); const ownId = (await data()).previewMessageId!;
+      await showIncidentDraftPreview(h.services, 556n, 556n, draft);
+      await showIncidentDraftPreview(h.services, 555n, 777n, draft);
+      const otherSessions = await prisma.operatorSession.findMany({ where: { NOT: { maxUserId: 555n, chatId: 555n } } });
+      expect(otherSessions).toHaveLength(2);
+      const workCard = await h.services.messages.send({ chatId: TEST_CHATS.sector }, { text: 'Рабочая карточка' });
+      const deleteSpy = vi.spyOn(h.services.messages, 'deleteCard').mockResolvedValue(false);
+      if (action === 'contact') await receive();
+      else await handleUserCallback({ services: h.services, actor, chatId: 555n, callbackId: 'scope', messageId: workCard.firstMessageId },
+        { kind: 'user', action, argument: (await data()).previewToken });
+      expect(deleteSpy.mock.calls).toEqual([[ownId]]);
+      expect(h.messages.edits).toEqual([{ messageId: ownId, text: 'Карточка устарела. Используйте текущую карточку сообщения.', mode: 'finalize' }]);
+      for (const session of otherSessions) {
+        expect(await prisma.operatorSession.findUniqueOrThrow({ where: { id: session.id } })).toEqual(session);
+      }
+    },
+  );
+  it('never falls back to the callback message when a preview ID is missing', async () => {
+    await preview(); const withoutId = await data(); delete withoutId.previewMessageId;
+    await prisma.operatorSession.updateMany({ data: { data: withoutId as never } });
+    await handleUserCallback({ services: h.services, actor, chatId: 555n, callbackId: 'missing-preview', messageId: 'unrelated-card' },
+      { kind: 'user', action: 'draft-confirm', argument: withoutId.previewToken });
+    expect(await prisma.incident.count()).toBe(1);
+    expect(h.messages.deleted).toEqual([]);
+    expect(h.messages.edits).toEqual([]);
+  });
+  it('does not finalize arbitrary callback messages when removing a phone or returning from corrections', async () => {
+    await withPhone(); await click('draft-edit');
+    const deleted = [...h.messages.deleted]; const edits = [...h.messages.edits];
+    await handleUserCallback({ services: h.services, actor, chatId: 555n, callbackId: 'remove', messageId: 'unrelated-card' },
+      { kind: 'user', action: 'draft-phone-remove', argument: (await data()).previewToken });
+    expect((await data()).requesterPhone).toBeUndefined();
+    expect(h.messages.deleted).toEqual(deleted); expect(h.messages.edits).toEqual(edits);
+    await click('draft-edit'); const beforeBack = [...h.messages.deleted];
+    await handleUserCallback({ services: h.services, actor, chatId: 555n, callbackId: 'back', messageId: 'unrelated-card' },
+      { kind: 'user', action: 'draft-edit', argument: 'back' });
+    expect(h.messages.deleted).toEqual(beforeBack); expect(h.messages.edits).toEqual(edits);
+  });
+  it('rejects obsolete callbacks without retiring the new draft preview', async () => {
+    await preview(); const old = await data(); await click('draft-cancel'); await preview();
+    const current = await data(); const deleted = [...h.messages.deleted]; const edits = [...h.messages.edits];
+    for (const action of ['draft-confirm', 'draft-cancel', 'draft-edit'] as const) {
+      await expect(handleUserCallback({ services: h.services, actor, chatId: 555n, callbackId: action, messageId: old.previewMessageId },
+        { kind: 'user', action, argument: old.previewToken })).rejects.toThrow('устарела');
+    }
+    expect(await data()).toEqual(current);
+    expect(h.messages.deleted).toEqual(deleted); expect(h.messages.edits).toEqual(edits);
   });
   it('drops an old pending phone on upgrade instead of binding it or keeping the old confirmation', async () => {
     await preview();

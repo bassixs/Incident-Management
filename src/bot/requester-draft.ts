@@ -14,7 +14,11 @@ import { incidentDraftPreview } from './views/cards';
 
 const log = moduleLogger('requester-draft');
 
-/** Best effort: a native contact button has no draft token, so retire old cards. */
+/** Best effort: a native contact button has no draft token, so retire old cards.
+ * Only pass previewMessageId from the validated owner/chat-scoped draft session,
+ * or the ID returned by sending that preview in this operation. Never fall back
+ * to callback message IDs, search chat history, or touch working-chat cards.
+ */
 export async function retireIncidentDraftPreview(services: AppServices, messageId?: string): Promise<void> {
   if (!messageId) return;
   const deleted = await services.messages.deleteCard(messageId).catch(() => false);

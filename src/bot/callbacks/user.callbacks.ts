@@ -193,7 +193,7 @@ export async function handleUserCallback(
         return 'Не удалось зарегистрировать';
       }
       // create() atomically consumed this session; never clear a newer draft.
-      await retireIncidentDraftPreview(services, data.previewMessageId ?? context.messageId);
+      await retireIncidentDraftPreview(services, data.previewMessageId);
       await services.distribution.publishCard(incident.id).catch((error) =>
         log.error(
           incidentLogFields({
@@ -231,7 +231,6 @@ export async function handleUserCallback(
       delete data.requesterPhone;
       delete data.pendingPhone;
       await showIncidentDraftPreview(services, actor.maxUserId, chatId, data, current);
-      if (context.messageId) await services.messages.finalizeCard(context.messageId, 'Номер удалён. Проверьте карточку ниже.');
       return;
     }
 
@@ -251,17 +250,8 @@ export async function handleUserCallback(
       delete data.pendingPhone;
       const draft = requireCompleteIncidentDraft(data);
       if (payload.argument === 'back') {
-        if (context.messageId) {
-          await services.messages.finalizeCard(context.messageId, 'Исправление завершено. Проверьте карточку ниже.');
-        }
         await showIncidentDraftPreview(services, actor.maxUserId, chatId, draft);
         return undefined;
-      }
-      if (context.messageId && allowed.includes(SessionType.WAITING_INCIDENT_CONFIRMATION)) {
-        await services.messages.finalizeCard(
-          context.messageId,
-          '✏️ Сообщение пока не отправлено. Выберите поле для исправления ниже.',
-        );
       }
       await retireIncidentDraftPreview(services, data.previewMessageId);
       delete draft.previewMessageId;

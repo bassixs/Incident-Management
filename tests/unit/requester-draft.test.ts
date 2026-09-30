@@ -29,7 +29,7 @@ describe('requester incident draft', () => {
     });
     expect(text).toContain('Сообщение ещё не отправлено. Если всё указано правильно, нажмите «Всё верно».');
     if ('requesterPhone' in contact) expect(text).not.toContain(OPTIONAL_PHONE_OFFER);
-    else expect(text).toContain('Для более оперативной обработки сообщения можно оставить телефон по кнопке "поделится контактом"');
+    else expect(text).toContain('Для более оперативной обработки можно поделиться телефоном — он будет доступен распределителю и исполнителю. Это необязательно.');
     expect(text).not.toContain('Добавить номер к этому сообщению');
   });
 
