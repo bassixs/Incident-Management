@@ -1,4 +1,3 @@
-import { PRIVACY_NOTICE } from '../../privacy/personal-data';
 import { randomUUID } from 'node:crypto';
 import { SessionType } from '@prisma/client';
 
@@ -14,34 +13,26 @@ import type { SessionData } from '../../sessions/operator-session.service';
 import { RateLimitError, ValidationError } from '../../utils/errors';
 import { incidentLogFields, moduleLogger } from '../../utils/logger';
 import {
-  agreementAcceptanceKeyboard,
   incidentDraftEditKeyboard,
   incidentDraftPhotoKeyboard,
   LOCALITY_OTHER,
   LOCALITY_SKIP,
-  legalDocumentsKeyboard,
   mainMenuKeyboard,
-  personalDataConsentKeyboard,
   requesterCategoryKeyboard,
   requesterLocalityKeyboard,
   requesterMunicipalityKeyboard,
 } from '../keyboards';
 import { requireCompleteIncidentDraft, showIncidentDraftPreview, retireIncidentDraftPreview } from '../requester-draft';
 import {
-  agreementAcceptanceText,
   categoryPromptText,
   customLocalityPromptText,
   greetingText,
   incidentPromptText,
   incidentDraftEditPrompt,
   incidentDraftPhotoPrompt,
-  legalAcceptanceCompleteText,
-  legalDocumentsText,
-  legalGateText,
   localityPromptText,
   municipalityPromptText,
   myIncidentsText,
-  personalDataConsentText,
   registrationConfirmation,
   rulesText,
 } from '../views/cards';
@@ -58,18 +49,6 @@ export type UserCallbackContext = {
   /** Evidence id of the physical confirmation action in MAX. */
   callbackId: string;
 };
-
-const CONSENT_GATED_ACTIONS = new Set([
-  'category',
-  'page',
-  'location-page',
-  'municipality',
-  'locality',
-  'draft-confirm',
-  'draft-edit',
-  'draft-field',
-  'draft-photo',
-]);
 
 /** Requester-side buttons (§53, §7, §54, §55). Never touches other people's data. */
 export async function handleUserCallback(
@@ -98,7 +77,7 @@ export async function handleUserCallback(
     }
 
     case 'documents': {
-      await services.messages.send(target, { text: PRIVACY_NOTICE, keyboard: mainMenuKeyboard() });
+      await services.messages.send(target, { text: greetingText(), keyboard: mainMenuKeyboard() });
       return;
     }
 
@@ -135,7 +114,7 @@ export async function handleUserCallback(
     case 'legal-continue':
     case 'accept-agreement':
     case 'accept-consent':
-      await services.messages.send(target, { text: 'Подтверждать документы больше не нужно. '+PRIVACY_NOTICE, keyboard: mainMenuKeyboard() });
+      await services.messages.send(target, { text: greetingText(), keyboard: mainMenuKeyboard() });
       return;
 
     case 'draft-retry': {

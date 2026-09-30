@@ -20,7 +20,6 @@ export function mainMenuKeyboard(): Button[][] {
   return [
     [button.callback('📝 Создать сообщение', userCallback('new'))],
     [button.callback('🔎 Мои сообщения', userCallback('my-incidents'))],
-    [button.callback('Об обработке данных', userCallback('documents'))],
     [button.callback('ℹ️ Правила', userCallback('rules'))],
   ];
 }

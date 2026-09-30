@@ -15,7 +15,6 @@ import { classifyAttachments } from '../../media/media.service';
 import { ValidationError } from '../../utils/errors';
 import { normaliseIncidentText, unicodeLength } from '../../utils/text';
 import {
-  legalDocumentsKeyboard,
   mainMenuKeyboard,
   requesterCategoryKeyboard,
 } from '../keyboards';
@@ -28,8 +27,6 @@ import {
   categoryPromptText,
   greetingText,
   incidentPromptText,
-  legalGateText,
-  personalDataConsentText,
 } from '../views/cards';
 import type { ResolvedActor } from './helpers';
 
