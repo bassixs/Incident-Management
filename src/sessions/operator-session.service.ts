@@ -17,6 +17,8 @@ export type SessionData = {
   previewToken?: string;
   previewStartedAt?: number;
   previewMessageId?: string;
+  /** Persisted preview delivery failed/in flight; never submit until shown. */
+  previewDeliveryPending?: boolean;
   /** Legacy unconfirmed contact. Never promote it automatically after an upgrade. */
   pendingPhone?: string;
   /** Requester draft: the тема the requester selected, if any. */

@@ -37,6 +37,7 @@ describeIntegration('MAX photo references in persistent delivery', () => {
     const incident = await services.incidents.create({ requester: { maxUserId: TEST_USERS.requesterA, name: 'Иван Иванов', phone: '+79001112233' }, text: 'Фонарь', media: [{ kind: 'IMAGE', token: 'resident' }] });
     await messages.flush();
     const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { maxChatId: TEST_CHATS.sector } });
+    await services.distribution.confirmPrivacyCheck(incident.id, actor);
     await services.distribution.assign(incident.id, group.id, actor); await messages.flush();
     const { answer } = await services.answers.submit(incident.id, actor, 'Готово', [{ kind: 'IMAGE', token: 'answer-expired' }]);
     await messages.flush();

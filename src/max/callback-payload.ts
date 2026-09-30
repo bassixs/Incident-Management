@@ -50,6 +50,7 @@ export const INCIDENT_ACTIONS = [
 export type IncidentAction = (typeof INCIDENT_ACTIONS)[number];
 
 export const USER_ACTIONS = [
+  'draft-retry',
   'draft-phone-use',
   'draft-phone-remove',
   'draft-cancel',

@@ -177,7 +177,7 @@ export class IncidentService {
       if (input.draftSessionId) {
         const session = await tx.operatorSession.findFirst({ where: { id: input.draftSessionId, maxUserId: input.requester.maxUserId, type: 'WAITING_INCIDENT_CONFIRMATION', expiresAt: { gt: new Date() } } });
         const data = session?.data as import('../sessions/operator-session.service').SessionData | null;
-        if (!session || !data?.previewToken || data.previewToken !== input.draftPreviewToken || data.pendingPhone) throw new ConflictError('Черновик уже подтверждён или устарел.');
+        if (!session || !data?.previewToken || data.previewToken !== input.draftPreviewToken || data.pendingPhone || data.previewDeliveryPending) throw new ConflictError('Черновик уже подтверждён или устарел.');
         requesterPhone = data.requesterPhone ? normaliseRequesterPhone(data.requesterPhone) : null;
         const consumed = await tx.operatorSession.deleteMany({ where: { id: session.id, data: { equals: session.data! }, expiresAt: { gt: new Date() } } });
         if (consumed.count !== 1) throw new ConflictError('Черновик уже подтверждён или устарел.');

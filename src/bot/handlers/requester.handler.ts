@@ -77,6 +77,10 @@ export async function handleRequesterMessage(
     await showIncidentDraftPreview(services, actor.maxUserId, chatId, { ...data, requesterPhone: contactInfo.phone }, session);
     return;
   }
+  if (session.type === SessionType.WAITING_INCIDENT_CONFIRMATION && data.previewDeliveryPending) {
+    await showIncidentDraftPreview(services, actor.maxUserId, chatId, data, session);
+    return;
+  }
   const media = classifyAttachments(message.body.attachments);
   const text = message.body.text ?? '';
 
@@ -199,9 +203,14 @@ export async function handleRequesterMessage(
 }
 
 /** `/start` and `bot_started`. */
-export async function sendMainMenu(services: AppServices, actor: ResolvedActor, includeWork = true): Promise<void> {
+export async function sendMainMenu(services: AppServices, actor: ResolvedActor, includeWork = true, chatId = actor.maxUserId): Promise<void> {
   if (await services.bans.isBanned(actor.maxUserId)) {
     await services.messages.send({ userId: actor.maxUserId }, { text: REJECTION_MESSAGES.banned });
+    return;
+  }
+  const current = await services.sessions.find(actor.maxUserId, chatId);
+  if (current?.type === SessionType.WAITING_INCIDENT_CONFIRMATION && services.sessions.readData(current).previewDeliveryPending) {
+    await showIncidentDraftPreview(services, actor.maxUserId, chatId, services.sessions.readData(current), current);
     return;
   }
   await services.messages.send(

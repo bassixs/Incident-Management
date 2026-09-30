@@ -1,3 +1,4 @@
+import { MaxError } from '@maxhub/max-bot-api';
 import type { PrismaClient } from '@prisma/client';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { handleRequesterMessage } from '../../src/bot/handlers/requester.handler';
@@ -38,15 +39,19 @@ describeIntegration('requester recovery from preview photo errors', () => {
   });
   const session = () => h.services.sessions.find(actor.maxUserId, actor.maxUserId);
 
-  it.each(['oversized', 'network'])('preserves the draft after %s failure and registers only after replacement and confirmation', async failure => {
+  it.each(['oversized', 'expired'])('preserves the draft after %s failure and registers only after replacement and confirmation', async failure => {
     const download = vi.spyOn(h.services.max, 'downloadFromUrl');
-    vi.spyOn(h.messages, 'send').mockRejectedValueOnce(failure === 'oversized' ? new ValidationError('MAX отклонил фотографию.') : new Error('offline'));
+    if (failure === 'expired') vi.spyOn(h.messages, 'send').mockRejectedValueOnce(new MaxError(400, { code: 'attachment.invalid', message: 'Invalid photo token' }));
     vi.spyOn(h.services.media, 'ingestAll').mockImplementation(async (prefix, photos) => photos.map((photo, i) => ({
       type: 'IMAGE', storageKey: `${prefix}/${i}.jpg`, size: 5, sourceUrl: photo.url,
     })));
     await h.services.sessions.start({ maxUserId: actor.maxUserId, chatId: actor.maxUserId,
       type: 'WAITING_INCIDENT_TEXT', data: draft });
-    await handleRequesterMessage(h.services, actor, actor.maxUserId, incoming(draft.draftText, 'failed') as never);
+    if (failure === 'oversized') {
+      await h.services.sessions.start({ maxUserId: actor.maxUserId, chatId: actor.maxUserId, type: 'WAITING_INCIDENT_EDIT_VALUE',
+        data: { ...draft, draftEditField: 'text', draftMedia: [{ kind: 'IMAGE', token: 'failed', size: 21 * 1024 * 1024 }] } });
+    }
+    await handleRequesterMessage(h.services, actor, actor.maxUserId, incoming(draft.draftText, failure === 'expired' ? 'failed' : undefined) as never);
     const recovery = (await session())!;
     expect(recovery.type).toBe('WAITING_INCIDENT_EDIT_VALUE');
     expect(h.services.sessions.readData(recovery)).toMatchObject({ ...draft, draftPhotoRetry: true, draftMedia: [] });
@@ -72,7 +77,7 @@ describeIntegration('requester recovery from preview photo errors', () => {
 
   it('preserves an edited field when an old photo expires and permits explicit continuation without photos', async () => {
     const download = vi.spyOn(h.services.max, 'downloadFromUrl').mockRejectedValue(new Error('expired URL'));
-    vi.spyOn(h.messages, 'send').mockRejectedValueOnce(new Error('expired token'));
+    vi.spyOn(h.messages, 'send').mockRejectedValueOnce(new MaxError(400, { code: 'attachment.invalid', message: 'Expired photo token' }));
     await h.services.sessions.start({ maxUserId: actor.maxUserId, chatId: actor.maxUserId,
       type: 'WAITING_INCIDENT_EDIT_VALUE', data: { ...draft, draftEditField: 'text',
         draftMedia: [{ kind: 'IMAGE', url: 'expired', token: 'expired' }] } });

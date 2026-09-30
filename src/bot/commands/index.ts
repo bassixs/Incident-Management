@@ -49,13 +49,13 @@ export const COMMANDS: Record<string, CommandHandler> = {
     await assertWorkingChat(services, chatId, isDialog);
     await services.workQueues.list(actor, chatId, 0, false, true);
   },
-  start: async ({ services, actor, isDialog, args }) => {
+  start: async ({ services, actor, chatId, isDialog, args }) => {
     if (!isDialog) return;
     if (args[0] === 'staff_home' || (args[0]?.startsWith('staff_') && /^[0-9a-f-]{36}$/i.test(args[0].slice(6)))) {
       await withPersonalWorkLock(services, actor.maxUserId, () => args[0] === 'staff_home' ? personalHome(services, actor) : enterPersonalWork(services, actor, args[0]!.slice(6))); return;
     }
     await exitPersonalWork(services, actor.maxUserId);
-    await sendMainMenu(services, actor);
+    await sendMainMenu(services, actor, true, chatId);
   },
 
   info: async ({ services, actor, chatId, isDialog }) => {

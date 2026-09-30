@@ -138,6 +138,16 @@ export async function handleUserCallback(
       await services.messages.send(target, { text: 'Подтверждать документы больше не нужно. '+PRIVACY_NOTICE, keyboard: mainMenuKeyboard() });
       return;
 
+    case 'draft-retry': {
+      const chatId = context.chatId ?? actor.maxUserId;
+      const current = await services.sessions.find(actor.maxUserId, chatId);
+      if (!current || current.type !== SessionType.WAITING_INCIDENT_CONFIRMATION) throw new ValidationError('Кнопка устарела.');
+      const data = services.sessions.readData(current);
+      assertPreviewToken(data, payload.argument);
+      if (!data.previewDeliveryPending) throw new ValidationError('Используйте текущую карточку сообщения.');
+      await showIncidentDraftPreview(services, actor.maxUserId, chatId, data, current);
+      return;
+    }
     case 'draft-confirm': {
       const chatId = context.chatId ?? actor.maxUserId;
       const data = await requireDraftForSession(
@@ -148,6 +158,7 @@ export async function handleUserCallback(
       );
       const draft = requireCompleteIncidentDraft(data);
       assertPreviewToken(data, payload.argument);
+      if (data.previewDeliveryPending) throw new ValidationError('Сначала восстановите карточку сообщения.');
       if (draft.pendingPhone) {
         // Do not silently attach an unconfirmed contact left by the old release.
         const current = await services.sessions.find(actor.maxUserId, chatId);

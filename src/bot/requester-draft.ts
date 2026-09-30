@@ -1,3 +1,4 @@
+import { MaxError } from '@maxhub/max-bot-api';
 import type { AppServices } from '../app/container';
 import type { IncomingMedia } from '../media/media.service';
 import type { OutboundAttachment } from '../max/max-message.service';
@@ -81,19 +82,23 @@ export async function showIncidentDraftPreview(
   cleanDraft.previewStartedAt = Date.now();
   const previousMessageId = cleanDraft.previewMessageId;
   delete cleanDraft.previewMessageId;
+  cleanDraft.previewDeliveryPending = true;
+  expectedSession ??= await services.sessions.find(maxUserId, chatId) ?? undefined;
   if (expectedSession) {
     if (!await services.sessions.replaceCurrent(expectedSession, SessionType.WAITING_INCIDENT_CONFIRMATION, cleanDraft)) {
       throw new ValidationError('Черновик изменился. Используйте текущую карточку сообщения.');
     }
     expectedSession = { ...expectedSession, type: SessionType.WAITING_INCIDENT_CONFIRMATION, data: { ...cleanDraft } as never };
-  }
+  } else expectedSession = await services.sessions.start({
+    maxUserId, chatId, type: SessionType.WAITING_INCIDENT_CONFIRMATION, data: cleanDraft,
+  });
   await retireIncidentDraftPreview(services, previousMessageId);
-  const category = draft.selectedCategoryId
-    ? await services.categories.findById(draft.selectedCategoryId)
-    : null;
   let attachments: OutboundAttachment[];
+  let validatingPhotos = true;
   try {
     attachments = await loadPreviewPhotos(draft.draftMedia);
+    validatingPhotos = false;
+    const category = draft.selectedCategoryId ? await services.categories.findById(draft.selectedCategoryId) : null;
     const sent = await services.messages.send({ userId: maxUserId }, {
       text: incidentDraftPreview({
         problemMunicipalityName: draft.problemMunicipalityName, problemLocality: draft.problemLocality,
@@ -102,20 +107,33 @@ export async function showIncidentDraftPreview(
       keyboard: incidentDraftConfirmationKeyboard(cleanDraft.previewToken, !!draft.requesterPhone), immediatePreview: true,
       ...(attachments.length ? { attachments } : {}),
     });
-    if (sent?.firstMessageId) cleanDraft.previewMessageId = sent.firstMessageId;
+    if (!sent?.firstMessageId || sent.state !== 'sent') throw new Error('Preview delivery not confirmed');
+    cleanDraft.previewMessageId = sent.firstMessageId;
   } catch (error) {
-    if (!draft.draftMedia.length) throw error;
+    // Only local photo validation or an explicit MAX token error proves that
+    // replacement is necessary. Network/5xx failures preserve the whole draft.
+    if (!draft.draftMedia.length || !(isUnavailablePhoto(error) || (validatingPhotos && error instanceof ValidationError))) {
+      log.warn({ status: error instanceof MaxError ? error.status : undefined }, 'draft preview delivery pending; resident can retry');
+      const current = await services.sessions.find(maxUserId, chatId);
+      if (!current || current.id !== expectedSession.id || current.type !== SessionType.WAITING_INCIDENT_CONFIRMATION) return;
+      const currentData = services.sessions.readData(current);
+      if (currentData.draftToken !== cleanDraft.draftToken || currentData.previewToken !== cleanDraft.previewToken) return;
+      // Do not enqueue a static preview/phone or stale retry notice in the outbox.
+      // If MAX is still down, /start or a plain message resumes the saved session.
+      await services.messages.send({ userId: maxUserId }, {
+        text: 'Не удалось показать карточку. Данные сохранены, сообщение не отправлено. Нажмите «Повторить показ карточки» или отправьте «Продолжить». Также можно использовать /start.',
+        keyboard: [[{ type: 'callback', text: 'Повторить показ карточки', payload: `user:draft-retry:${cleanDraft.previewToken}` }],
+          [{ type: 'callback', text: 'Отмена', payload: `user:draft-cancel:${cleanDraft.previewToken}` }]],
+        immediatePreview: true,
+      }).catch(() => undefined);
+      return;
+    }
     // The failed set must never become confirmable or be silently omitted.
     // Preserve the entered fields and let the requester replace all photos.
     log.warn({ err: error instanceof Error ? error.message : String(error) }, 'draft photos require replacement');
     const retryData = { ...cleanDraft, draftMedia: [], draftEditField: 'photo' as const, draftPhotoRetry: true };
-    if (expectedSession) {
-      if (!await services.sessions.replaceCurrent(expectedSession, SessionType.WAITING_INCIDENT_EDIT_VALUE, retryData)) return;
-    } else await services.sessions.start({
-      maxUserId, chatId,
-      type: SessionType.WAITING_INCIDENT_EDIT_VALUE,
-      data: retryData,
-    });
+    delete retryData.previewDeliveryPending;
+    if (!await services.sessions.replaceCurrent(expectedSession, SessionType.WAITING_INCIDENT_EDIT_VALUE, retryData)) return;
     const reason = isUnavailablePhoto(error) ? 'Фотография больше недоступна в MAX.' : error instanceof ValidationError
       ? error.message
       : 'Не удалось показать фотографии через MAX.';
@@ -125,16 +143,10 @@ export async function showIncidentDraftPreview(
     });
     return;
   }
-  if (expectedSession) {
-    if (!await services.sessions.replaceCurrent(expectedSession, SessionType.WAITING_INCIDENT_CONFIRMATION, cleanDraft)) {
-      await retireIncidentDraftPreview(services, cleanDraft.previewMessageId);
-    }
-  } else await services.sessions.start({
-    maxUserId,
-    chatId,
-    type: SessionType.WAITING_INCIDENT_CONFIRMATION,
-    data: cleanDraft,
-  });
+  delete cleanDraft.previewDeliveryPending;
+  if (!await services.sessions.replaceCurrent(expectedSession, SessionType.WAITING_INCIDENT_CONFIRMATION, cleanDraft)) {
+    await retireIncidentDraftPreview(services, cleanDraft.previewMessageId);
+  }
 }
 
 async function loadPreviewPhotos(
