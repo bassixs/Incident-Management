@@ -11,8 +11,13 @@ export function containsPersonalData(raw: string): boolean {
   // never a substring of a longer account/card number. Do not alter stored text.
   if (/(?:паспорт|снилс|инн|номер\s+карты|расч[её]тный\s+сч[её]т)\s*(?:номер|серия|№|:|—|-)?\s*[+\d][\d\s().-]{4,}/iu.test(text)) return true;
   if (/(?<!\d)\d{3}[- ]\d{3}[- ]\d{3}[- ]\d{2}(?!\d)/u.test(text)) return true;
-  const withoutPhones = text.replace(/\+?\d[\d ()\t.-]*\d/g, span =>
-    /^(?:\+7|7|8)/u.test(span) && /^[78]\d{10}$/u.test(span.replace(/\D/g, '')) ? ' ' : span);
+  // A sentence-ending dot separates numeric spans; dots directly between digits
+  // stay in the span, so a dotted account cannot lose its phone-shaped prefix.
+  // Mask only a whole span of complete phones, separated by whitespace. Never
+  // cut eleven digits out of a longer digit block or leave an account suffix.
+  const phones = /^(?:\+7|[78])(?:[ ()\t.-]*\d){10}(?:[ \t]+(?:\+7|[78])(?:[ ()\t.-]*\d){10})*$/u;
+  const withoutPhones = text.replace(/\+?\d(?:[\d+ ()\t-]|\.(?=\d))*\d/g, span =>
+    phones.test(span) ? ' ' : span);
   return [
     /(?<!\d)\d{10,}(?!\d)/u,
     /(?<!\d)\d{4}(?:[ -]\d{4}){3}(?!\d)/u,

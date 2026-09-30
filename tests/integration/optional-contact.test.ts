@@ -418,21 +418,34 @@ describeIntegration('optional per-message contact', () => {
       expect((await prisma.inboundUpdate.findUniqueOrThrow({ where: { id: pending.id } })).status).toBe('PROCESSED');
     },
   );
-  it.each(['+7 (900) 123-45-67', '8 900 123 45 67', '79001234567', '89001234567', '+7 4842 123456'])(
-    'preserves text phone %s in normal delivery without extracting a private contact', async textPhone => {
+  it.each([
+    ...['+7 (900) 123-45-67', '8 900 123 45 67', '79001234567', '89001234567', '+7 4842 123456']
+      .map(phone => `Яма у дома 12 по ул. Ленина. Для связи ${phone}`),
+    'Яма, Ленина 12. 89001234567',
+    'Телефон 89001234567. 12 подъезд',
+    'Для связи 89001234567 89007654321',
+  ])(
+    'preserves phone text through inbox and normal delivery without extracting a private contact: %s', async text => {
       await preview(); await click('draft-edit'); await click('draft-field', 'text');
       const update = rawContact();
-      const text = `Яма у дома 12 по ул. Ленина. Для связи ${textPhone}`;
       update.message.body = { ...update.message.body, mid: 'text-phone', text, attachments: [] } as never;
-      const dispatcher = new UpdateDispatcher(prisma, { dispatch: async (value: any) => handleMessageUpdate(h.services, { update: value } as never) } as never);
+      const dispatch = vi.fn(async (value: any) => handleMessageUpdate(h.services, { update: value } as never));
+      const dispatcher = new UpdateDispatcher(prisma, { dispatch } as never);
       await dispatcher.handle(update as never);
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      const delivered = dispatch.mock.calls[0]![0];
+      expect(delivered).not.toHaveProperty('privacyRejected');
+      expect(delivered).toHaveProperty('message.body.text', text);
+      const inbox = await prisma.inboundUpdate.findFirstOrThrow();
+      expect(inbox.status).toBe(InboxStatus.PROCESSED);
+      expect(inbox.payload).toEqual({});
       expect((await data()).draftText).toBe(text);
       expect((await data()).requesterPhone).toBeUndefined();
       expect(await prisma.incident.count()).toBe(0);
       const token = (await data()).previewToken;
       const incident = await register();
       expect(incident.text).toBe(text); expect(incident.requesterPhone).toBeNull();
-      expect(h.messages.toChat(TEST_CHATS.distribution).some(m => m.message.text.includes(textPhone))).toBe(true);
+      expect(h.messages.toChat(TEST_CHATS.distribution).some(m => m.message.text.includes(text))).toBe(true);
       await expect(click('draft-confirm', token)).rejects.toThrow();
       expect(await prisma.incident.count()).toBe(1);
     },
