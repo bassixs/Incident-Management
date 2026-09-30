@@ -372,7 +372,6 @@ export function greetingText(): string {
 }
 
 export type IncidentDraftView = {
-  pendingPhone?: string;
   requesterName?: string;
   requesterPhone?: string;
   problemMunicipalityName: string;
@@ -400,11 +399,8 @@ export function incidentDraftPreview(draft: IncidentDraftView, categoryName?: st
     `Фотографии: ${draft.photoCount > 0 ? draft.photoCount : 'нет'}`,
     '',
     ...(draft.requesterPhone ? [`Телефон для связи: ${draft.requesterPhone}`, OPTIONAL_PHONE_ADDED]
-      : draft.pendingPhone ? [`Телефон для связи: ${draft.pendingPhone}`, 'Номер ещё не прикреплён. Проверьте сообщение выше и нажмите «Добавить номер к этому сообщению» или «Убрать номер».']
       : [OPTIONAL_PHONE_OFFER]),
-    draft.pendingPhone
-      ? 'Сообщение ещё не отправлено. Добавьте номер к этому сообщению или уберите его, чтобы продолжить'
-      : 'Сообщение ещё не отправлено. Если всё указано правильно, нажмите «Всё верно».',
+    'Сообщение ещё не отправлено. Если всё указано правильно, нажмите «Всё верно».',
   ].join('\n');
 }
 
@@ -457,7 +453,7 @@ export function legalGateText(): string {
 
 export function agreementAcceptanceText(version: string): string {
   return [
-    'Шаг 1 из 2. Пользовательское соглашение',
+    'Пользовательское соглашение',
     '',
     `Откройте и прочитайте документ редакции ${version}.`,
     'Если принимаете его условия, нажмите отдельную кнопку подтверждения.',
@@ -466,7 +462,7 @@ export function agreementAcceptanceText(version: string): string {
 
 export function personalDataConsentText(version: string): string {
   return [
-    'Шаг 2 из 2. Согласие на обработку персональных данных',
+    'Согласие на обработку персональных данных',
     '',
     `Откройте и прочитайте согласие редакции ${version}.`,
     'Нажмите кнопку ниже, только если добровольно даёте согласие на указанных условиях.',
@@ -481,39 +477,14 @@ export function legalAcceptanceCompleteText(): string {
   ].join('\n');
 }
 
-export function requesterNamePromptText(): string {
-  return [
-    'Шаг 1. Укажите ваши фамилию и имя.',
-    '',
-    'Отчество — если оно есть.',
-    'Отправьте ФИО одним текстовым сообщением.',
-    '',
-    'Это обязательное поле.',
-  ].join('\n');
-}
-
-export function requesterPhonePromptText(): string {
-  return [
-    'Шаг 2. Укажите номер телефона.',
-    '',
-    'Нажмите «Поделиться контактом» или введите номер текстом, например: +7 900 123-45-67.',
-    '',
-    'Это обязательное поле.',
-  ].join('\n');
-}
-
 /** §7 — heading above the paged сфера picker. */
-export function categoryPromptText(total: number): string {
-  return [
-    'Шаг 3. Выберите сферу сообщения.',
-    'Если вы не уверены — нажмите «Иное», сферу определит специалист.',
-    ...(total > 0 ? ['', `Всего сфер: ${total}. Листайте стрелками.`] : []),
-  ].join('\n');
+export function categoryPromptText(): string {
+  return 'Выберите тему сообщения';
 }
 
 export function municipalityPromptText(total: number): string {
   return [
-    'Шаг 4. Где произошла проблема?',
+    'Где произошла проблема?',
     '',
     'Выберите город или округ.',
     'Если вопрос относится ко всей области, выберите общий вариант.',
@@ -542,7 +513,7 @@ export function customLocalityPromptText(municipalityName: string): string {
 export function incidentPromptText(): string {
   const config = getConfig();
   return [
-    'Шаг 5. Опишите проблему одним сообщением.',
+    'Опишите проблему одним сообщением.',
     '',
     'Укажите адрес проблемы (улицу, номер дома) или точное место, если адреса нет.',
     '',

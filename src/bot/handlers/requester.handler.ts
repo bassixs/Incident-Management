@@ -29,7 +29,6 @@ import {
   incidentPromptText,
   legalGateText,
   personalDataConsentText,
-  requesterPhonePromptText,
 } from '../views/cards';
 import type { ResolvedActor } from './helpers';
 
@@ -72,10 +71,10 @@ export async function handleRequesterMessage(
   const data = services.sessions.readData(session);
   if (contactInfo) {
     if (session.type !== SessionType.WAITING_INCIDENT_CONFIRMATION || data.draftToken !== contactInfo.draftToken ||
-        data.previewToken !== contactInfo.previewToken || data.requesterPhone || data.pendingPhone) {
+        data.previewToken !== contactInfo.previewToken || data.requesterPhone) {
       await services.messages.send(target, { text: 'Запрос контакта устарел. Используйте кнопки текущей карточки.' }); return;
     }
-    await showIncidentDraftPreview(services, actor.maxUserId, chatId, { ...data, pendingPhone: contactInfo.phone });
+    await showIncidentDraftPreview(services, actor.maxUserId, chatId, { ...data, requesterPhone: contactInfo.phone }, session);
     return;
   }
   const media = classifyAttachments(message.body.attachments);

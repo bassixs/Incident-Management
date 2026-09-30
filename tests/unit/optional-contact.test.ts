@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { verifyOwnContact } from '../../src/privacy/optional-contact';
-import { incidentDraftConfirmationKeyboard, distributionKeyboard, sectorKeyboard, reviewKeyboard } from '../../src/bot/keyboards';
+import { incidentDraftConfirmationKeyboard, incidentDraftEditKeyboard, distributionKeyboard, sectorKeyboard, reviewKeyboard } from '../../src/bot/keyboards';
 
 const token = 'test-contact-token';
 const vcf = 'BEGIN:VCARD\r\nVERSION:3.0\r\nTEL;TYPE=cell:79991234567\r\nFN:Private Name\r\nEND:VCARD\r\n';
@@ -24,9 +24,11 @@ describe('native MAX own contact', () => {
     const rows = incidentDraftConfirmationKeyboard('preview');
     expect(rows.flat()).toContainEqual({ type: 'request_contact', text: '📞 Поделиться контактом' });
     for (const b of rows.flat()) if (b.type === 'callback') expect(b.payload.endsWith(':preview')).toBe(true);
-    const pending = incidentDraftConfirmationKeyboard('next', false, true).flat();
-    expect(pending.some(b => b.type === 'request_contact' || b.text === '✅ Всё верно')).toBe(false);
-    expect(pending.map(b => b.text)).toContain('Добавить номер к этому сообщению');
+    const attached = incidentDraftConfirmationKeyboard('next', true).flat();
+    expect(attached.some(b => b.type === 'request_contact' || b.text === 'Убрать номер')).toBe(false);
+    expect(attached.map(b => b.text)).toEqual(['✅ Всё верно', '✏️ Исправить', 'Отмена']);
+    expect(incidentDraftEditKeyboard(false, true, 'edit').flat()).toContainEqual({ type: 'callback', text: 'Убрать номер', payload: 'user:draft-phone-remove:edit' });
+    expect(incidentDraftEditKeyboard(false).flat().some(b => b.text === 'Убрать номер')).toBe(false);
   });
   it('exposes contact action only where a phone exists and stage permits it', () => {
     const has = (rows: ReturnType<typeof distributionKeyboard>) => rows.flat().some(b => b.text === '📞 Контакт жителя');

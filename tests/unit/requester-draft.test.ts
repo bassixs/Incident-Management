@@ -5,7 +5,8 @@ import {
   incidentDraftEditKeyboard,
   incidentDraftPhotoKeyboard,
 } from '../../src/bot/keyboards';
-import { incidentDraftPreview } from '../../src/bot/views/cards';
+import { incidentDraftPreview, categoryPromptText, municipalityPromptText, incidentPromptText, localityPromptText, customLocalityPromptText } from '../../src/bot/views/cards';
+import { OPTIONAL_PHONE_OFFER } from '../../src/privacy/optional-contact';
 import { parseCallbackPayload } from '../../src/max/callback-payload';
 
 function labels(rows: ReturnType<typeof incidentDraftEditKeyboard>): string[] {
@@ -19,7 +20,6 @@ function callback(rows: ReturnType<typeof incidentDraftEditKeyboard>, label: str
 
 describe('requester incident draft', () => {
   it.each([
-    { pendingPhone: '+7 900 123-45-67' },
     { requesterPhone: '+7 900 123-45-67' },
     {},
   ])('shows the next step appropriate to the phone state: %j', (contact) => {
@@ -27,11 +27,16 @@ describe('requester incident draft', () => {
       ...contact, problemMunicipalityName: 'Город Калуга',
       draftText: 'Не работает фонарь', photoCount: 0,
     });
-    if ('pendingPhone' in contact) {
-      expect(text).toContain('Сообщение ещё не отправлено. Добавьте номер к этому сообщению или уберите его, чтобы продолжить');
-      expect(text).not.toContain('«Всё верно»');
-    } else {
-      expect(text).toContain('Сообщение ещё не отправлено. Если всё указано правильно, нажмите «Всё верно».');
+    expect(text).toContain('Сообщение ещё не отправлено. Если всё указано правильно, нажмите «Всё верно».');
+    if ('requesterPhone' in contact) expect(text).not.toContain(OPTIONAL_PHONE_OFFER);
+    else expect(text).toContain('Для более оперативной обработки сообщения можно оставить телефон по кнопке "поделится контактом"');
+    expect(text).not.toContain('Добавить номер к этому сообщению');
+  });
+
+  it('keeps only the topic prompt and removes obsolete step numbering throughout the resident flow', () => {
+    expect(categoryPromptText()).toBe('Выберите тему сообщения');
+    for (const text of [categoryPromptText(), municipalityPromptText(10), incidentPromptText(), localityPromptText('Калуга'), customLocalityPromptText('Калуга')]) {
+      expect(text).not.toMatch(/Шаг\s*\d/);
     }
   });
 

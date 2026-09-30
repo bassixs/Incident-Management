@@ -38,7 +38,8 @@ describeIntegration('optional per-message contact', () => {
     await handleRequesterMessage(h.services, actor, 555n, value.message, value.verifiedDraftContact);
     return value;
   };
-  const withPhone = async () => { await preview(); await receive(); await click('draft-phone-use'); };
+  const withPhone = async () => { await preview(); await receive(); };
+  const removePhone = async () => { await click('draft-edit'); await click('draft-phone-remove'); };
   const register = async () => { await click('draft-confirm'); return prisma.incident.findFirstOrThrow(); };
 
   it('keeps the no-phone path and does not consume quota for previews', async () => {
@@ -46,13 +47,116 @@ describeIntegration('optional per-message contact', () => {
     const incident = await register(); expect(incident.requesterPhone).toBeNull();
     expect(await prisma.legalAcceptance.count()).toBe(0);
   });
-  it('minimizes before the inbox, asks to bind the contact, then stores phone atomically with message only', async () => {
+  it('starts with only the topic prompt and topic buttons', async () => {
+    await click('new', 'unused');
+    expect(h.messages.toUser(555n).at(-1)?.message.text).toBe('Выберите тему сообщения');
+    expect(h.messages.toUser(555n).at(-1)?.message.keyboard?.flat().length).toBeGreaterThan(0);
+    expect(await data()).toEqual({});
+  });
+  it('removes via correction and offers contact again, then adds it again without confirmation', async () => {
+    await withPhone();
+    await expect(click('draft-phone-remove')).rejects.toThrow('устарела');
+    await click('draft-edit');
+    const removal = h.messages.toUser(555n).at(-1)?.message.keyboard?.flat().find(b => b.text === 'Убрать номер');
+    expect(removal).toMatchObject({ type: 'callback', payload: `user:draft-phone-remove:${(await data()).previewToken}` });
+    const oldEditToken = (await data()).previewToken;
+    await click('draft-phone-remove');
+    expect((await data()).requesterPhone).toBeUndefined();
+    expect(h.messages.toUser(555n).at(-1)?.message.keyboard?.flat()).toContainEqual({ type: 'request_contact', text: '📞 Поделиться контактом' });
+    await receive();
+    expect((await data()).requesterPhone).toBe(phone);
+    expect((await minimiseInbound(rawContact() as never, prisma) as any).privacyRejected).toBe(true);
+    await expect(click('draft-phone-use')).rejects.toThrow('устарела');
+    await click('draft-edit');
+    await expect(click('draft-phone-remove', oldEditToken)).rejects.toThrow('устарела');
+    expect((await data()).requesterPhone).toBe(phone);
+    expect(await prisma.incident.count()).toBe(0);
+  });
+  it('does not attach a delayed verified contact after submission or to a later draft', async () => {
+    await preview();
+    const old = await minimiseInbound(rawContact() as never, prisma) as any;
+    const incident = await register();
+    expect(incident.requesterPhone).toBeNull();
+    await handleRequesterMessage(h.services, actor, 555n, old.message, old.verifiedDraftContact);
+    expect(await prisma.operatorSession.count()).toBe(0);
+    expect((await minimiseInbound(rawContact() as never, prisma) as any).privacyRejected).toBe(true);
+    await preview();
+    await handleRequesterMessage(h.services, actor, 555n, old.message, old.verifiedDraftContact);
+    expect((await data()).requesterPhone).toBeUndefined();
+    expect((await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).requesterPhone).toBeNull();
+  });
+  it.each(['cancel', 'submit', 'replace', 'expire'] as const)('rechecks the database before saving a contact racing with %s', async (action) => {
+    await preview();
+    const value = await minimiseInbound(rawContact() as never, prisma) as any;
+    const replace = h.services.sessions.replaceCurrent.bind(h.services.sessions);
+    const spy = vi.spyOn(h.services.sessions, 'replaceCurrent').mockImplementationOnce(async (...args) => {
+      if (action === 'submit') await register();
+      else if (action === 'expire') await prisma.operatorSession.updateMany({ data: { expiresAt: new Date(0) } });
+      else { await click('draft-cancel'); if (action === 'replace') await preview(); }
+      return replace(...args);
+    });
+    await expect(handleRequesterMessage(h.services, actor, 555n, value.message, value.verifiedDraftContact)).rejects.toThrow('Черновик изменился');
+    expect(spy).toHaveBeenCalledTimes(1);
+    const sessions = await prisma.operatorSession.findMany();
+    expect(sessions.every(s => !(s.data as SessionData).requesterPhone)).toBe(true);
+    expect((await prisma.incident.findMany()).every(i => i.requesterPhone === null)).toBe(true);
+  });
+  it.each(['cancel', 'replace', 'submit'] as const)('does not recreate the old session when MAX finishes sending after %s', async (action) => {
+    await preview();
+    let lateMessageId: string | undefined;
+    const send = h.services.messages.send.bind(h.services.messages);
+    vi.spyOn(h.services.messages, 'send').mockImplementationOnce(async (...args) => {
+      const result = await send(...args);
+      lateMessageId = result.firstMessageId;
+      if (action === 'submit') await register();
+      else {
+        await h.services.sessions.clear(555n, 555n);
+        if (action === 'replace') await preview();
+      }
+      return result;
+    });
+    await receive();
+    expect(await prisma.operatorSession.count()).toBe(action === 'replace' ? 1 : 0);
+    if (action === 'replace') expect((await data()).requesterPhone).toBeUndefined();
+    expect(h.messages.deleted).toContain(lateMessageId);
+    expect(await prisma.incident.count()).toBe(action === 'submit' ? 1 : 0);
+    if (action === 'submit') expect((await prisma.incident.findFirstOrThrow()).requesterPhone).toBe(phone);
+  });
+  it('rejects contacts timestamped before the preview but cannot identify an old native button pressed now', async () => {
+    await preview(); const old = rawContact();
+    old.message.timestamp = Number((await data()).previewStartedAt) - 1;
+    expect((await minimiseInbound(old as never, prisma) as any).privacyRejected).toBe(true);
+    await click('draft-cancel'); await preview();
+    // MAX provides no draft/button ID. A fresh signed event from an old button
+    // is indistinguishable from pressing the current native button.
+    await receive(); expect((await data()).requesterPhone).toBe(phone);
+    expect(await prisma.incident.count()).toBe(0);
+  });
+  it('falls back to removing controls when MAX refuses to delete an obsolete preview', async () => {
+    await preview(); const oldId = (await data()).previewMessageId!;
+    vi.spyOn(h.services.messages, 'deleteCard').mockResolvedValue(false);
+    await receive();
+    expect(h.messages.edits).toContainEqual({ messageId: oldId, text: 'Карточка устарела. Используйте текущую карточку сообщения.', mode: 'finalize' });
+    const currentId = (await data()).previewMessageId!;
+    await register();
+    expect(h.messages.edits.some(edit => edit.messageId === currentId && edit.mode === 'finalize')).toBe(true);
+  });
+  it('drops an old pending phone on upgrade instead of binding it or keeping the old confirmation', async () => {
+    await preview();
+    await prisma.operatorSession.updateMany({ data: { data: { ...(await data()), pendingPhone: phone } } });
+    await click('draft-confirm');
+    expect((await data()).requesterPhone).toBeUndefined();
+    expect((await data()).pendingPhone).toBeUndefined();
+    expect(await prisma.incident.count()).toBe(0);
+    expect(h.messages.toUser(555n).at(-1)?.message.text).not.toContain(phone);
+  });
+  it('minimizes before the inbox, immediately attaches own contact and waits for ordinary submission', async () => {
     await preview(); const value = await receive();
     expect(JSON.stringify(value)).not.toMatch(/Private Name|private-username|vcf_info|hash|79991234567/);
-    expect((await data()).requesterPhone).toBeUndefined(); expect((await data()).pendingPhone).toBe(phone);
+    expect((await data()).requesterPhone).toBe(phone); expect((await data()).pendingPhone).toBeUndefined();
     expect(await prisma.incident.count()).toBe(0);
-    await expect(click('draft-confirm')).rejects.toThrow('Сначала');
-    await click('draft-phone-use'); expect((await data()).requesterPhone).toBe(phone);
+    expect(h.messages.toUser(555n).at(-1)?.message.text).toContain(`Телефон для связи: ${phone}`);
+    expect(h.messages.toUser(555n).at(-1)?.message.keyboard?.flat().map(b => b.text)).toEqual(['✅ Всё верно', '✏️ Исправить', 'Отмена']);
     const incident = await register(); expect(incident.requesterPhone).toBe(phone);
     const user = await prisma.user.findUniqueOrThrow({ where: { maxUserId: 555n } });
     expect(user.requesterPhone).toBeNull(); expect(user.requesterName).toBeNull();
@@ -61,14 +165,14 @@ describeIntegration('optional per-message contact', () => {
     await click('new', 'unused'); expect(await data()).toEqual({});
   });
   it('removes a phone, cancels the draft and ignores delayed contact from the old preview', async () => {
-    await withPhone(); await click('draft-phone-remove'); expect((await data()).requesterPhone).toBeUndefined();
+    await withPhone(); await removePhone(); expect((await data()).requesterPhone).toBeUndefined();
     const old = await minimiseInbound(rawContact() as never, prisma) as any;
     const oldToken = (await data()).previewToken;
     await click('draft-cancel'); expect(await prisma.operatorSession.count()).toBe(0);
     expect((await minimiseInbound(rawContact() as never, prisma) as any).privacyRejected).toBe(true);
     await preview();
     await handleRequesterMessage(h.services, actor, 555n, old.message, old.verifiedDraftContact);
-    expect((await data()).pendingPhone).toBeUndefined();
+    expect((await data()).requesterPhone).toBeUndefined();
     await expect(click('draft-cancel', oldToken)).rejects.toThrow('устарела');
     await expect(click('draft-confirm', oldToken)).rejects.toThrow('устарела');
     expect(await prisma.incident.count()).toBe(0);
@@ -93,7 +197,7 @@ describeIntegration('optional per-message contact', () => {
     const incident = await register(); expect(incident.requesterPhone).toBe(phone);
   });
   it('removes phone even when MAX cannot deliver the refreshed preview', async () => {
-    await withPhone(); const oldToken = (await data()).previewToken;
+    await withPhone(); await click('draft-edit'); const oldToken = (await data()).previewToken;
     vi.spyOn(h.services.messages, 'send').mockRejectedValueOnce(new Error('MAX unavailable'));
     await expect(click('draft-phone-remove')).rejects.toThrow('MAX unavailable');
     expect((await data()).requesterPhone).toBeUndefined(); expect((await data()).pendingPhone).toBeUndefined();
@@ -105,7 +209,8 @@ describeIntegration('optional per-message contact', () => {
     const result = await Promise.all([dispatch.handle(update as never), dispatch.handle(update as never)]);
     expect(result.sort()).toEqual(['duplicate', 'processed']);
     expect((await prisma.inboundUpdate.findFirstOrThrow()).payload).toEqual({});
-    await click('draft-phone-use'); const token = (await data()).previewToken;
+    expect((await data()).requesterPhone).toBe(phone);
+    const token = (await data()).previewToken;
     await Promise.allSettled([click('draft-confirm', token), click('draft-confirm', token)]);
     expect(await prisma.incident.count()).toBe(1); expect((await prisma.incident.findFirstOrThrow()).requesterPhone).toBe(phone);
   });

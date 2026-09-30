@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { normaliseRequesterPhone } from '../incidents/incident.service';
 
-export const OPTIONAL_PHONE_OFFER = '📞 Для более оперативной обработки сообщения вы можете оставить номер телефона — это поможет специалистам быстрее связаться с вами и уточнить детали.\nНажав «Поделиться контактом», вы передадите свой номер сотрудникам, которые распределяют и рассматривают ваше сообщение. Это необязательно — сообщение можно отправить без номера телефона.';
+export const OPTIONAL_PHONE_OFFER = 'Для более оперативной обработки сообщения можно оставить телефон по кнопке "поделится контактом"';
 export const OPTIONAL_PHONE_ADDED = 'Специалист сможет связаться с вами для уточнения деталей';
 
 /** Trusted, minimal inbox extension. Never contains the original contact or signature. */

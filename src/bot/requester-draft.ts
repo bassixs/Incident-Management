@@ -2,7 +2,7 @@ import type { AppServices } from '../app/container';
 import type { IncomingMedia } from '../media/media.service';
 import type { OutboundAttachment } from '../max/max-message.service';
 import type { SessionData } from '../sessions/operator-session.service';
-import { SessionType } from '@prisma/client';
+import { SessionType, type OperatorSession } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 
 import { ValidationError } from '../utils/errors';
@@ -13,6 +13,13 @@ import { incidentDraftConfirmationKeyboard, incidentDraftPhotoRetryKeyboard } fr
 import { incidentDraftPreview } from './views/cards';
 
 const log = moduleLogger('requester-draft');
+
+/** Best effort: a native contact button has no draft token, so retire old cards. */
+export async function retireIncidentDraftPreview(services: AppServices, messageId?: string): Promise<void> {
+  if (!messageId) return;
+  const deleted = await services.messages.deleteCard(messageId).catch(() => false);
+  if (!deleted) await services.messages.finalizeCard(messageId, 'Карточка устарела. Используйте текущую карточку сообщения.').catch(() => false);
+}
 
 export type CompleteIncidentDraft = SessionData & {
   selectedCategoryId: string | null;
@@ -60,17 +67,23 @@ export async function showIncidentDraftPreview(
   maxUserId: bigint,
   chatId: bigint,
   data: SessionData,
+  expectedSession?: OperatorSession,
 ): Promise<void> {
-  const { requesterName: _name, ...minimal } = data;
+  const { requesterName: _name, pendingPhone: _legacyPhone, ...minimal } = data;
   const draft = requireCompleteIncidentDraft(minimal);
   const { draftEditField: _draftEditField, draftPhotoRetry: _draftPhotoRetry, ...cleanDraft } = draft;
   cleanDraft.draftToken ??= randomUUID();
   cleanDraft.previewToken = randomUUID();
   cleanDraft.previewStartedAt = Date.now();
-  if (cleanDraft.previewMessageId) {
-    await services.messages.deleteCard(cleanDraft.previewMessageId).catch(() => false);
-    delete cleanDraft.previewMessageId;
+  const previousMessageId = cleanDraft.previewMessageId;
+  delete cleanDraft.previewMessageId;
+  if (expectedSession) {
+    if (!await services.sessions.replaceCurrent(expectedSession, SessionType.WAITING_INCIDENT_CONFIRMATION, cleanDraft)) {
+      throw new ValidationError('Черновик изменился. Используйте текущую карточку сообщения.');
+    }
+    expectedSession = { ...expectedSession, type: SessionType.WAITING_INCIDENT_CONFIRMATION, data: { ...cleanDraft } as never };
   }
+  await retireIncidentDraftPreview(services, previousMessageId);
   const category = draft.selectedCategoryId
     ? await services.categories.findById(draft.selectedCategoryId)
     : null;
@@ -81,8 +94,8 @@ export async function showIncidentDraftPreview(
       text: incidentDraftPreview({
         problemMunicipalityName: draft.problemMunicipalityName, problemLocality: draft.problemLocality,
         draftText: draft.draftText, photoCount: attachments.length,
-        requesterPhone: draft.requesterPhone, pendingPhone: draft.pendingPhone }, category?.name),
-      keyboard: incidentDraftConfirmationKeyboard(cleanDraft.previewToken, !!draft.requesterPhone, !!draft.pendingPhone), immediatePreview: true,
+        requesterPhone: draft.requesterPhone }, category?.name),
+      keyboard: incidentDraftConfirmationKeyboard(cleanDraft.previewToken, !!draft.requesterPhone), immediatePreview: true,
       ...(attachments.length ? { attachments } : {}),
     });
     if (sent?.firstMessageId) cleanDraft.previewMessageId = sent.firstMessageId;
@@ -91,10 +104,13 @@ export async function showIncidentDraftPreview(
     // The failed set must never become confirmable or be silently omitted.
     // Preserve the entered fields and let the requester replace all photos.
     log.warn({ err: error instanceof Error ? error.message : String(error) }, 'draft photos require replacement');
-    await services.sessions.start({
+    const retryData = { ...cleanDraft, draftMedia: [], draftEditField: 'photo' as const, draftPhotoRetry: true };
+    if (expectedSession) {
+      if (!await services.sessions.replaceCurrent(expectedSession, SessionType.WAITING_INCIDENT_EDIT_VALUE, retryData)) return;
+    } else await services.sessions.start({
       maxUserId, chatId,
       type: SessionType.WAITING_INCIDENT_EDIT_VALUE,
-      data: { ...cleanDraft, draftMedia: [], draftEditField: 'photo', draftPhotoRetry: true },
+      data: retryData,
     });
     const reason = isUnavailablePhoto(error) ? 'Фотография больше недоступна в MAX.' : error instanceof ValidationError
       ? error.message
@@ -105,7 +121,11 @@ export async function showIncidentDraftPreview(
     });
     return;
   }
-  await services.sessions.start({
+  if (expectedSession) {
+    if (!await services.sessions.replaceCurrent(expectedSession, SessionType.WAITING_INCIDENT_CONFIRMATION, cleanDraft)) {
+      await retireIncidentDraftPreview(services, cleanDraft.previewMessageId);
+    }
+  } else await services.sessions.start({
     maxUserId,
     chatId,
     type: SessionType.WAITING_INCIDENT_CONFIRMATION,

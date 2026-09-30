@@ -180,24 +180,23 @@ export function requesterLocalityKeyboard(
 }
 
 /** Final requester checkpoint before an Incident row is created. */
-export function incidentDraftConfirmationKeyboard(token?: string, hasPhone = false, pendingPhone = false): Button[][] {
+export function incidentDraftConfirmationKeyboard(token?: string, hasPhone = false): Button[][] {
   return [
-    ...(pendingPhone ? [[button.callback('Добавить номер к этому сообщению', userCallback('draft-phone-use', token))]] : []),
-    ...(hasPhone || pendingPhone ? [[button.callback('Убрать номер', userCallback('draft-phone-remove', token))]]
-      : [[button.requestContact('📞 Поделиться контактом')]]),
-    ...(!pendingPhone ? [[button.callback('✅ Всё верно', userCallback('draft-confirm', token), { intent: 'positive' })]] : []),
+    ...(!hasPhone ? [[button.requestContact('📞 Поделиться контактом')]] : []),
+    [button.callback('✅ Всё верно', userCallback('draft-confirm', token), { intent: 'positive' })],
     [button.callback('✏️ Исправить', userCallback('draft-edit', token))],
     [button.callback('Отмена', userCallback('draft-cancel', token))],
   ];
 }
 
 /** Choose exactly one draft field; changing it never clears the other fields. */
-export function incidentDraftEditKeyboard(hasPhoto: boolean): Button[][] {
+export function incidentDraftEditKeyboard(hasPhoto: boolean, hasPhone = false, token?: string): Button[][] {
   return [
     [button.callback('Сфера сообщения', userCallback('draft-field', 'category'))],
     [button.callback('Территория и населённый пункт', userCallback('draft-field', 'location'))],
     [button.callback('Текст сообщения', userCallback('draft-field', 'text'))],
     [button.callback(hasPhoto ? 'Фотографии' : 'Добавить фотографию', userCallback('draft-field', 'photo'))],
+    ...(hasPhone ? [[button.callback('Убрать номер', userCallback('draft-phone-remove', token))]] : []),
     [button.callback('⬅️ Назад к проверке', userCallback('draft-edit', 'back'))],
   ];
 }

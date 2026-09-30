@@ -12,7 +12,7 @@ describeIntegration('requester recovery from preview photo errors', () => {
   let h: TestHarness;
   let actor: Awaited<ReturnType<typeof actorFor>>;
   const draft = {
-    requesterName: 'Иванов Иван', requesterPhone: '+7 900 111-22-33', selectedCategoryId: null,
+    requesterPhone: '+7 900 111-22-33', selectedCategoryId: null,
     problemMunicipalityCode: 'KALUGA_CITY', problemMunicipalityName: 'Город Калуга',
     problemLocality: null, draftText: 'Не работает фонарь',
   };
@@ -62,7 +62,7 @@ describeIntegration('requester recovery from preview photo errors', () => {
     expect(h.services.sessions.readData(ready).draftPhotoRetry).toBeUndefined();
     expect(h.messages.toUser(actor.maxUserId).at(-1)!.message.attachments).toHaveLength(1);
     expect(await prisma.incident.count()).toBe(0);
-    await handleUserCallback(context(), { kind: 'user', action: 'draft-confirm' });
+    await handleUserCallback(context(), { kind: 'user', action: 'draft-confirm', argument: h.services.sessions.readData(ready).previewToken });
     const incident = await prisma.incident.findFirstOrThrow({ include: { attachments: true } });
     expect(incident.text).toBe(draft.draftText);
     expect(incident.attachments).toHaveLength(1);
@@ -74,26 +74,30 @@ describeIntegration('requester recovery from preview photo errors', () => {
     const download = vi.spyOn(h.services.max, 'downloadFromUrl').mockRejectedValue(new Error('expired URL'));
     vi.spyOn(h.messages, 'send').mockRejectedValueOnce(new Error('expired token'));
     await h.services.sessions.start({ maxUserId: actor.maxUserId, chatId: actor.maxUserId,
-      type: 'WAITING_INCIDENT_EDIT_VALUE', data: { ...draft, draftEditField: 'name',
+      type: 'WAITING_INCIDENT_EDIT_VALUE', data: { ...draft, draftEditField: 'text',
         draftMedia: [{ kind: 'IMAGE', url: 'expired', token: 'expired' }] } });
-    await handleRequesterMessage(h.services, actor, actor.maxUserId, incoming('Петров Пётр') as never);
+    const correctedText = 'Не работает фонарь у дома 12';
+    await handleRequesterMessage(h.services, actor, actor.maxUserId, incoming(correctedText) as never);
     expect(h.services.sessions.readData((await session())!)).toMatchObject({
-      ...draft, requesterName: 'Петров Пётр', draftPhotoRetry: true, draftMedia: [],
+      ...draft, draftText: correctedText, draftPhotoRetry: true, draftMedia: [],
     });
     await handleUserCallback(context(), { kind: 'user', action: 'draft-photo', argument: 'remove' });
     expect(download).not.toHaveBeenCalled();
     expect((await session())!.type).toBe('WAITING_INCIDENT_CONFIRMATION');
     expect(h.messages.toUser(actor.maxUserId).at(-1)!.message.attachments).toBeUndefined();
     expect(await prisma.incident.count()).toBe(0);
-    await handleUserCallback(context(), { kind: 'user', action: 'draft-confirm' });
-    expect((await prisma.incident.findFirstOrThrow()).requesterName).toBe('Петров Пётр');
+    await handleUserCallback(context(), { kind: 'user', action: 'draft-confirm', argument: h.services.sessions.readData((await session())!).previewToken });
+    const incident = await prisma.incident.findFirstOrThrow();
+    expect(incident.text).toBe(correctedText);
+    expect(incident.requesterPhone).toBe(draft.requesterPhone);
+    expect(incident.requesterName).toBe('Житель');
   });
 
   it('does not let an old skip-photo button interrupt editing another field', async () => {
     await h.services.sessions.start({ maxUserId: actor.maxUserId, chatId: actor.maxUserId,
-      type: 'WAITING_INCIDENT_EDIT_VALUE', data: { ...draft, draftEditField: 'name' } });
+      type: 'WAITING_INCIDENT_EDIT_VALUE', data: { ...draft, draftEditField: 'text' } });
     await expect(handleUserCallback(context(), { kind: 'user', action: 'draft-photo', argument: 'remove' })).rejects.toThrow('Кнопка устарела');
-    expect(h.services.sessions.readData((await session())!).draftEditField).toBe('name');
+    expect(h.services.sessions.readData((await session())!).draftEditField).toBe('text');
     expect(await prisma.incident.count()).toBe(0);
   });
 });

@@ -26,7 +26,7 @@ import {
   requesterLocalityKeyboard,
   requesterMunicipalityKeyboard,
 } from '../keyboards';
-import { requireCompleteIncidentDraft, showIncidentDraftPreview } from '../requester-draft';
+import { requireCompleteIncidentDraft, showIncidentDraftPreview, retireIncidentDraftPreview } from '../requester-draft';
 import {
   agreementAcceptanceText,
   categoryPromptText,
@@ -42,8 +42,6 @@ import {
   municipalityPromptText,
   myIncidentsText,
   personalDataConsentText,
-  requesterNamePromptText,
-  requesterPhonePromptText,
   registrationConfirmation,
   rulesText,
 } from '../views/cards';
@@ -150,7 +148,14 @@ export async function handleUserCallback(
       );
       const draft = requireCompleteIncidentDraft(data);
       assertPreviewToken(data, payload.argument);
-      if (draft.pendingPhone) throw new ValidationError('Сначала добавьте номер к сообщению или уберите его.');
+      if (draft.pendingPhone) {
+        // Do not silently attach an unconfirmed contact left by the old release.
+        const current = await services.sessions.find(actor.maxUserId, chatId);
+        if (!current) throw new ValidationError('Черновик устарел.');
+        assertPreviewToken(services.sessions.readData(current), data.previewToken);
+        await showIncidentDraftPreview(services, actor.maxUserId, chatId, draft, current);
+        return 'Проверьте обновлённую карточку';
+      }
       let incident;
       try {
         const draftSession = await services.sessions.find(actor.maxUserId, chatId);
@@ -187,14 +192,8 @@ export async function handleUserCallback(
         });
         return 'Не удалось зарегистрировать';
       }
-      await services.sessions.clear(actor.maxUserId, chatId);
-      if (context.messageId) {
-        // Registration confirmation is already durable. Remove its draft
-        // preview instead of turning it into a second confirmation message.
-        await services.messages
-          .deleteCard(context.messageId)
-          .catch(() => false);
-      }
+      // create() atomically consumed this session; never clear a newer draft.
+      await retireIncidentDraftPreview(services, data.previewMessageId ?? context.messageId);
       await services.distribution.publishCard(incident.id).catch((error) =>
         log.error(
           incidentLogFields({
@@ -214,28 +213,25 @@ export async function handleUserCallback(
     }
 
     case 'draft-phone-use':
+      throw new ValidationError('Кнопка устарела. Используйте текущую карточку сообщения.');
     case 'draft-phone-remove':
     case 'draft-cancel': {
       const chatId = context.chatId ?? actor.maxUserId;
-      const data = await requireDraftForSession(services, actor.maxUserId, chatId, SessionType.WAITING_INCIDENT_CONFIRMATION);
+      const current = await services.sessions.find(actor.maxUserId, chatId);
+      const requiredType = payload.action === 'draft-phone-remove' ? SessionType.WAITING_INCIDENT_EDIT_SELECTION : SessionType.WAITING_INCIDENT_CONFIRMATION;
+      if (!current || current.type !== requiredType) throw new ValidationError('Кнопка устарела. Используйте текущую карточку сообщения.');
+      const data = { ...services.sessions.readData(current) };
       assertPreviewToken(data, payload.argument);
       if (payload.action === 'draft-cancel') {
-        await services.sessions.clear(actor.maxUserId, chatId);
-        if (data.previewMessageId) await services.messages.deleteCard(data.previewMessageId).catch(() => false);
+        if (!await services.sessions.clearCurrent(current)) throw new ValidationError('Черновик изменился. Используйте текущую карточку сообщения.');
+        await retireIncidentDraftPreview(services, data.previewMessageId);
         await services.messages.send(target, { text: 'Черновик и номер удалены. Сообщение не отправлено.', keyboard: mainMenuKeyboard() });
         return;
       }
-      if (payload.action === 'draft-phone-use') {
-        if (!data.pendingPhone) throw new ValidationError('Запрос контакта устарел.');
-        data.requesterPhone = data.pendingPhone;
-      } else delete data.requesterPhone;
+      delete data.requesterPhone;
       delete data.pendingPhone;
-      // Commit removal before any MAX call; a transport failure must not keep the old phone.
-      if (payload.action === 'draft-phone-remove') {
-        data.previewToken = randomUUID();
-        await services.sessions.start({ maxUserId: actor.maxUserId, chatId, type: SessionType.WAITING_INCIDENT_CONFIRMATION, data });
-      }
-      await showIncidentDraftPreview(services, actor.maxUserId, chatId, data);
+      await showIncidentDraftPreview(services, actor.maxUserId, chatId, data, current);
+      if (context.messageId) await services.messages.finalizeCard(context.messageId, 'Номер удалён. Проверьте карточку ниже.');
       return;
     }
 
@@ -267,6 +263,9 @@ export async function handleUserCallback(
           '✏️ Сообщение пока не отправлено. Выберите поле для исправления ниже.',
         );
       }
+      await retireIncidentDraftPreview(services, data.previewMessageId);
+      delete draft.previewMessageId;
+      draft.previewToken = randomUUID();
       await services.sessions.start({
         maxUserId: actor.maxUserId,
         chatId,
@@ -275,7 +274,7 @@ export async function handleUserCallback(
       });
       await services.messages.send(target, {
         text: incidentDraftEditPrompt(),
-        keyboard: incidentDraftEditKeyboard(draft.draftMedia.length > 0),
+        keyboard: incidentDraftEditKeyboard(draft.draftMedia.length > 0, !!draft.requesterPhone, draft.previewToken),
       });
       return undefined;
     }
@@ -314,7 +313,7 @@ export async function handleUserCallback(
             data: { ...draft, draftEditField: 'category' },
           });
           await services.messages.send(target, {
-            text: categoryPromptText(categories.length),
+            text: categoryPromptText(),
             keyboard: requesterCategoryKeyboard(categories, 0),
           });
           return undefined;
@@ -410,7 +409,7 @@ export async function handleUserCallback(
       const page = Number.parseInt(payload.argument ?? '0', 10);
       await services.messages.editCardKeyboard(
         context.messageId,
-        categoryPromptText(categories.length),
+        categoryPromptText(),
         requesterCategoryKeyboard(categories, Number.isFinite(page) ? page : 0),
       );
       return undefined;
@@ -601,11 +600,11 @@ async function beginNewIncident(context: UserCallbackContext): Promise<void> {
   }
   const previous = await services.sessions.find(actor.maxUserId, context.chatId ?? actor.maxUserId);
   const preview = previous && services.sessions.readData(previous).previewMessageId;
-  if (preview) await services.messages.deleteCard(preview).catch(() => false);
+  await retireIncidentDraftPreview(services, preview ?? undefined);
   await services.sessions.clear(actor.maxUserId, context.chatId ?? actor.maxUserId);
   const categories = await services.categories.listActive();
   await services.sessions.start({ maxUserId: actor.maxUserId, chatId: context.chatId ?? actor.maxUserId, type: SessionType.WAITING_INCIDENT_SELECTION, data: {} });
-  await services.messages.send(target, { text: PRIVACY_NOTICE+'\n\n'+categoryPromptText(categories.length), keyboard: requesterCategoryKeyboard(categories, 0) });
+  await services.messages.send(target, { text: categoryPromptText(), keyboard: requesterCategoryKeyboard(categories, 0) });
 }
 
 function assertPreviewToken(data: SessionData, token: string | undefined): void {

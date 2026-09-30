@@ -31,7 +31,7 @@ export async function minimiseInbound(update: Update, prisma: PrismaClient): Pro
         const data = session?.data as SessionData | null;
         const sentAt = message.timestamp ?? value.timestamp;
         if (session?.type === 'WAITING_INCIDENT_CONFIRMATION' && session.expiresAt > new Date() &&
-            data?.draftToken && data.previewToken && !data.requesterPhone && !data.pendingPhone &&
+            data?.draftToken && data.previewToken && !data.requesterPhone &&
             typeof sentAt === 'number' && sentAt >= Number(data.previewStartedAt)) {
           value.verifiedDraftContact = { phone, draftToken: data.draftToken, previewToken: data.previewToken };
           accepted = true;

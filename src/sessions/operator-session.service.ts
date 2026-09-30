@@ -17,7 +17,7 @@ export type SessionData = {
   previewToken?: string;
   previewStartedAt?: number;
   previewMessageId?: string;
-  /** A verified contact awaiting explicit binding to this preview (MAX has no button nonce). */
+  /** Legacy unconfirmed contact. Never promote it automatically after an upgrade. */
   pendingPhone?: string;
   /** Requester draft: the тема the requester selected, if any. */
   selectedCategoryId?: string | null;
@@ -100,6 +100,24 @@ export class OperatorSessionService {
 
   async clear(maxUserId: bigint, chatId: bigint, tx?: PrismaLike): Promise<void> {
     await (tx ?? this.prisma).operatorSession.deleteMany({ where: { maxUserId, chatId } });
+  }
+
+  /** Compare-and-swap: never recreate a cancelled, submitted or replaced draft. */
+  async replaceCurrent(session: OperatorSession, type: SessionType, data: SessionData): Promise<boolean> {
+    const changed = await this.prisma.operatorSession.updateMany({
+      where: { id: session.id, maxUserId: session.maxUserId, chatId: session.chatId,
+        type: session.type, expiresAt: { gt: new Date() }, data: { equals: session.data! } },
+      data: { type, data: data as never },
+    });
+    return changed.count === 1;
+  }
+
+  async clearCurrent(session: OperatorSession): Promise<boolean> {
+    const removed = await this.prisma.operatorSession.deleteMany({ where: {
+      id: session.id, maxUserId: session.maxUserId, chatId: session.chatId,
+      type: session.type, expiresAt: { gt: new Date() }, data: { equals: session.data! },
+    } });
+    return removed.count === 1;
   }
 
   async extend(sessionId: string): Promise<void> {
