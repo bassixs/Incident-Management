@@ -12,7 +12,7 @@ import { workingChatFor } from '../users/working-chat';
 import { hasPrivateWorkAccess } from '../users/private-work-access';
 import { sendMainMenu } from '../bot/handlers/requester.handler';
 import { ConflictError, ForbiddenError, ValidationError } from '../utils/errors';
-import { formatDateTime } from '../utils/datetime';
+import { formatMoscowDateTime } from '../utils/datetime';
 import { assertDispatcher, assertApprover, assertResponder, assertWorkingChat } from '../bot/middleware/authorize';
 import type { ResolvedActor } from '../bot/handlers/helpers';
 import { handleIncidentCallback } from '../bot/callbacks/incident.callbacks';
@@ -406,7 +406,7 @@ export async function sweepPersonalWork(services: AppServices) {
       const s = await scope(services, actor, item.id); const owned = await lease(services, s);
       if (!owned || owned.owner !== actor.maxUserId || owned.until.getTime() - Date.now() > 120_000) continue;
       await services.prisma.$transaction(tx => queueMessage(tx, { userId: actor.maxUserId }, {
-        text: `⏳ ${s.incident.publicCode}: закрепление заканчивается в ${formatDateTime(owned.until)} (МСК). Сохранённый черновик останется доступен. После окончания срока потребуется заново взять сообщение.`,
+        text: `⏳ ${s.incident.publicCode}: закрепление заканчивается в ${formatMoscowDateTime(owned.until)} (МСК). Сохранённый черновик останется доступен. После окончания срока потребуется заново взять сообщение.`,
         keyboard: [[button('Вернуться к сообщению', 'open', item.id)]], delivery: { dedupeKey: `private-warning:${item.id}:${owned.until.getTime()}` },
       }, item.incidentId), TRANSACTION_OPTIONS);
     } catch { /* Never notify from a cached permission when MAX is unavailable. */ }

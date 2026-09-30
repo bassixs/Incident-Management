@@ -1,4 +1,4 @@
-import { incidentWorkday } from './work-calendar';
+import { incidentWorkday, WORK_TIMEZONE } from './work-calendar';
 import { formatInTimeZone, fromZonedTime, toZonedTime } from 'date-fns-tz';
 
 import { getConfig } from '../config';
@@ -10,6 +10,11 @@ function tz(timeZone?: string): string {
 /** `23.08.2026 18:42` — the format used in every operator-facing card. */
 export function formatDateTime(date: Date, timeZone?: string): string {
   return formatInTimeZone(date, tz(timeZone), 'dd.MM.yyyy HH:mm');
+}
+
+/** Times explicitly labelled МСК must not inherit a configurable display zone. */
+export function formatMoscowDateTime(date: Date): string {
+  return formatDateTime(date, WORK_TIMEZONE);
 }
 
 /** `23.08.2026` — used where the time of day carries no meaning. */

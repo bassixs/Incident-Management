@@ -37,6 +37,7 @@ describeIntegration('private employee workspace', () => {
     const incident = await create();
     if (kind !== 'distribution') {
       const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: GROUP_CODES.facility } });
+      await h.services.distribution.confirmPrivacyCheck(incident.id, actor);
       await h.services.distribution.assign(incident.id, group.id, actor);
       if (kind === 'review') await h.services.answers.submit(incident.id, actor, 'Освещение восстановлено.', []);
     }
@@ -162,6 +163,7 @@ describeIntegration('private employee workspace', () => {
 
   it('handles assignment and review approval with private confirmation', async () => {
     const { incident, item, chat } = await open('distribution');
+    await h.services.distribution.confirmPrivacyCheck(incident.id, actor);
     await run(item, 'assign');
     const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: GROUP_CODES.facility } });
     await run(item, 'assign-group', group.id);
