@@ -31,6 +31,7 @@ import { SectorService } from '../sector/sector.service';
 import { OperatorSessionService } from '../sessions/operator-session.service';
 import { SlaService } from '../sla/sla.service';
 import { UserService } from '../users/user.service';
+import { BotStatusService } from '../monitoring/bot-status.service';
 
 /**
  * Composition root.
@@ -76,6 +77,7 @@ export type AppServices = {
 
   sla: SlaService;
   reports: ExcelReportService;
+  botStatus: BotStatusService;
 };
 
 /**
@@ -158,6 +160,7 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
   const workQueues = new WorkQueueService(prisma, messages, sector);
   const sla = new SlaService(prisma, repository, history, messages, sessions);
   const reports = new ExcelReportService(repository);
+  const botStatus = new BotStatusService(prisma, max, config);
 
   return {
     config,
@@ -192,5 +195,6 @@ export function buildServices(prisma: PrismaClient, overrides: ServiceOverrides 
     deliveryProblems,
     sla,
     reports,
+    botStatus,
   };
 }

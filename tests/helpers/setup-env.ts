@@ -18,6 +18,9 @@ process.env.BOT_MODE = 'webhook';
 process.env.WEBHOOK_SECRET = 'test-webhook-secret';
 process.env.WEBHOOK_URL = 'https://example.test/webhook/max';
 process.env.WEBHOOK_AUTO_REGISTER = 'false';
+process.env.BOT_STATUS_USER_IDS = '';
+process.env.BOT_STATUS_TIME = '08:00';
+process.env.BOT_STATUS_WEEKDAY = 'monday';
 
 process.env.DISTRIBUTION_CHAT_ID = '-1001';
 process.env.REVIEW_CHAT_ID = '-1002';

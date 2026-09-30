@@ -34,6 +34,7 @@ import { reviewKeyboard, revisionKeyboard } from '../bot/keyboards';
 import { sectorKeyboard } from '../bot/keyboards';
 import { slaNotification, slaStage, type SlaStage } from '../sla/sla-notification';
 import { incidentCallback } from './callback-payload';
+import { botStatusDeliveryText, type BotStatusOperation } from '../monitoring/bot-status.service';
 
 const log = moduleLogger('max-message');
 
@@ -59,6 +60,7 @@ export type CompositeMessage = {
     | { type: 'clarification-question' | 'clarification-reply'; incidentId: string; clarificationId: string }
     | { type: 'sector-refresh'; incidentId: string; textOnly?: boolean }
     | { type: 'distribution-panel' }
+    | BotStatusOperation
     | { type: 'work-panel' }
     | { type: 'staff-refresh'; incidentId: string }
     | { type: 'distribution-refresh'; incidentId: string; refreshActive?: boolean; messageIds?: string[] }
@@ -396,6 +398,18 @@ export class MaxMessageService {
     }
 
     try {
+      if (payload.operation?.type === 'bot-status') {
+        const text = botStatusDeliveryText(payload.operation, payload.text, row.targetId, getConfig(), new Date());
+        if (text === undefined) {
+          // Keep the dedupe marker but never send yesterday's or disabled report.
+          await durable.prisma.outboundMessage.update({ where: { id }, data: {
+            status: OutboxStatus.SENT, lockedAt: null, trackingApplied: true,
+            lastError: 'Плановый отчёт пропущен: истёк срок доставки или получатель отключён.',
+          } });
+          return { state: 'sent', trackingApplied: true };
+        }
+        payload.text = text;
+      }
       if (payload.operation?.type === 'sla-reminder') {
         // Retire notifications queued by the old multi-stage policy, retaining its marks.
         if (payload.operation.stage !== 24) {
@@ -486,6 +500,7 @@ export class MaxMessageService {
       const terminal = unavailablePhoto || row.attempts >= OUTBOX_MAX_ATTEMPTS;
       const detail = unavailablePhoto
         ? 'Фотография недоступна в MAX. Полное сообщение не доставлено; требуется проверка сотрудником.'
+        : payload.operation?.type === 'bot-status' ? 'Не удалось доставить плановый отчёт MAX.'
         : error instanceof Error ? error.message : String(error);
       if (unavailablePhoto) await this.queuePhotoRecovery(row, payload);
       await durable.prisma.outboundMessage.update({
