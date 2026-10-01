@@ -1,6 +1,6 @@
 import { reportActionError } from '../../utils/errors';
 import { PRIVACY_REJECTION } from '../../privacy/personal-data';
-import { CONTACT_REJECTION, type VerifiedDraftContact } from '../../privacy/optional-contact';
+import { CONTACT_REJECTION, type DraftPhoneInput } from '../../privacy/optional-contact';
 import type { Context } from '@maxhub/max-bot-api';
 
 import type { AppServices } from '../../app/container';
@@ -30,8 +30,9 @@ export async function handleMessageUpdate(services: AppServices, ctx: Context): 
   const message = update.message;
   const sender = message?.sender;
   if (!message || !sender || sender.is_bot) return;
-  const contact = (update as unknown as { verifiedDraftContact?: VerifiedDraftContact }).verifiedDraftContact;
-  if ((update as unknown as { contactRejected?: boolean }).contactRejected || message.body.attachments?.some(a => a.type === 'contact')) {
+  const legacyContact = (update as unknown as { verifiedDraftContact?: unknown }).verifiedDraftContact;
+  const phoneInput = (update as unknown as { draftPhoneInput?: DraftPhoneInput }).draftPhoneInput;
+  if (legacyContact || (update as unknown as { contactRejected?: boolean }).contactRejected || message.body.attachments?.some(a => a.type === 'contact')) {
     await services.messages.send({ userId: BigInt(sender.user_id) }, { text: CONTACT_REJECTION });
     return;
   }
@@ -49,10 +50,9 @@ export async function handleMessageUpdate(services: AppServices, ctx: Context): 
   if (chatId === undefined) return;
 
   const actor = await resolveActor(services, sender, message.recipient.chat_type === 'chat' ? chatId : undefined);
-  // A verified contact has its own route; it cannot become a command, employee
-  // reply or ordinary requester text, even if workspace selection changed.
-  if (contact) {
-    if (dialog) await handleRequesterMessage(services, actor, chatId, message, contact);
+  // Bound manual input never becomes a command, employee reply or incident text.
+  if (phoneInput) {
+    if (dialog) await handleRequesterMessage(services, actor, chatId, message, phoneInput);
     return;
   }
 

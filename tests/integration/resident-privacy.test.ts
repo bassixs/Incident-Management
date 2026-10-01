@@ -6,7 +6,7 @@ import { handleIncidentCallback } from '../../src/bot/callbacks/incident.callbac
 import { TEST_CHATS } from '../helpers/setup-env';
 import { UpdateDispatcher } from '../../src/server/update-dispatcher';
 
-describeIntegration('minimal resident data and mandatory staff screening', () => {
+describeIntegration('minimal resident data and optional staff rejection', () => {
   let prisma: PrismaClient; let h: TestHarness;
   beforeAll(async () => { pushSchemaOnce(); prisma = createTestPrisma(); await prisma.$connect(); });
   afterAll(async () => { await prisma.$disconnect(); });
@@ -29,24 +29,21 @@ describeIntegration('minimal resident data and mandatory staff screening', () =>
     expect(incident.requesterName).toBe('Житель'); expect(incident.requesterPhone).toBeNull();
     expect((await prisma.user.findFirstOrThrow()).requesterName).toBeNull();
   });
-  it('cannot distribute before checking; another employee cannot take over the check', async () => {
+  it('distributes without a privacy mark but another employee cannot take over the lease', async () => {
     const incident = await h.services.incidents.create({ requester: { maxUserId: 555n }, text: 'Не работает освещение во дворе' });
     const actor = await actorFor(prisma, 556n, 'Диспетчер', [UserRole.DISPATCHER]);
     const second = await actorFor(prisma, 557n, 'Другой диспетчер', [UserRole.DISPATCHER]);
     const group = await prisma.responsibleGroup.findFirstOrThrow({ where: { code: 'FACILITY' } });
     await h.services.distributionQueue.claim(actor, TEST_CHATS.distribution, incident.id);
-    await expect(h.services.distribution.assign(incident.id, group.id, actor)).rejects.toThrow('персональных');
-    await expect(h.services.distribution.confirmPrivacyCheck(incident.id, second)).rejects.toThrow();
-    await h.services.distribution.confirmPrivacyCheck(incident.id, actor);
-    await h.services.distribution.confirmPrivacyCheck(incident.id, actor);
-    expect(await prisma.incidentHistory.count({ where: { action: 'PRIVACY_CHECK_PASSED' } })).toBe(1);
+    await expect(h.services.distribution.assign(incident.id, group.id, second)).rejects.toThrow();
+    expect(await prisma.incidentHistory.count({ where: { action: 'PRIVACY_CHECK_PASSED' } })).toBe(0);
     await h.services.distribution.assign(incident.id, group.id, actor);
     expect((await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).status).toBe('ASSIGNED');
   });
   it('does not allow a resident to approve screening by forging a callback', async () => {
     const incident = await h.services.incidents.create({ requester: { maxUserId: 555n }, text: 'Не работает освещение во дворе' });
     const actor = await actorFor(prisma, 555n, 'Житель', []);
-    await expect(handleIncidentCallback({ services: h.services, actor, chatId: 555n, messageId: undefined }, { kind: 'incident', action: 'privacy-pass', incidentId: incident.id, argument: 'confirm' })).rejects.toThrow();
+    expect(await handleIncidentCallback({ services: h.services, actor, chatId: 555n, messageId: undefined }, { kind: 'incident', action: 'privacy-pass', incidentId: incident.id, argument: 'confirm' })).toContain('устарело');
     expect(await prisma.incidentHistory.count({ where: { action: 'PRIVACY_CHECK_PASSED' } })).toBe(0);
   });
   it('removes rejected content and photo references instead of retaining the personal material', async () => {

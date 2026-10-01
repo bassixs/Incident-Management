@@ -1,5 +1,6 @@
 import { assertNoPersonalData, PRIVACY_REJECTION } from '../../privacy/personal-data';
-import { CONTACT_REJECTION } from '../../privacy/optional-contact';
+import { CONTACT_REJECTION, PHONE_INPUT_ERROR, type DraftPhoneInput, parseManualPhone } from '../../privacy/optional-contact';
+import { sendPhoneInputPrompt } from '../requester-phone';
 import { reportActionError } from '../../utils/errors';
 import { hasPrivateWorkAccess } from '../../users/private-work-access';
 import { SessionType } from '@prisma/client';
@@ -38,13 +39,13 @@ export async function handleRequesterMessage(
   actor: ResolvedActor,
   chatId: bigint,
   message: Message,
-  contactInfo?: import('../../privacy/optional-contact').VerifiedDraftContact,
+  phoneInput?: DraftPhoneInput,
 ): Promise<void> {
   const target = { userId: actor.maxUserId } as const;
   if (message.body.attachments?.some(a => a.type === 'contact')) {
     await services.messages.send(target, { text: CONTACT_REJECTION }); return;
   }
-  try { if (!contactInfo) assertNoPersonalData(message.body.text ?? ''); } catch {
+  try { if (!phoneInput) assertNoPersonalData(message.body.text ?? ''); } catch {
     await services.messages.send(target, { text: PRIVACY_REJECTION }); return;
   }
 
@@ -60,20 +61,27 @@ export async function handleRequesterMessage(
     return;
   }
 
+  const data = services.sessions.readData(session);
+  if (phoneInput) {
+    if (session.type !== SessionType.WAITING_INCIDENT_EDIT_VALUE || data.draftEditField !== 'phone' ||
+        session.id !== phoneInput.sessionId || data.draftToken !== phoneInput.draftToken ||
+        data.previewToken !== phoneInput.previewToken) {
+      await services.messages.send(target, { text: 'Ввод номера устарел. Используйте текущую карточку сообщения.' }); return;
+    }
+    const phone = phoneInput.phone && parseManualPhone(phoneInput.phone);
+    if (!phone) { await sendPhoneInputPrompt(services, actor.maxUserId, data, PHONE_INPUT_ERROR); return; }
+    await showIncidentDraftPreview(services, actor.maxUserId, chatId, { ...data, requesterPhone: phone }, session);
+    return;
+  }
   if (session.type === SessionType.WAITING_CLARIFICATION_REPLY) {
     await services.prisma.operatorSession.deleteMany({ where: { id: session.id } });
     await services.messages.send(target, { text: 'Ответ на уточнение больше не требуется. Статус сообщения доступен в разделе «Мои сообщения».', keyboard: mainMenuKeyboard() });
     return;
   }
 
-  const data = services.sessions.readData(session);
-  if (contactInfo) {
-    if (session.type !== SessionType.WAITING_INCIDENT_CONFIRMATION || data.draftToken !== contactInfo.draftToken ||
-        data.previewToken !== contactInfo.previewToken || data.requesterPhone) {
-      await services.messages.send(target, { text: 'Запрос контакта устарел. Используйте кнопки текущей карточки.' }); return;
-    }
-    await showIncidentDraftPreview(services, actor.maxUserId, chatId, { ...data, requesterPhone: contactInfo.phone }, session);
-    return;
+  if (session.type === SessionType.WAITING_INCIDENT_EDIT_VALUE && data.draftEditField === 'phone') {
+    // Unbound/old inbox events cannot supply a number for the current draft.
+    await sendPhoneInputPrompt(services, actor.maxUserId, data); return;
   }
   if (session.type === SessionType.WAITING_INCIDENT_CONFIRMATION && data.previewDeliveryPending) {
     await showIncidentDraftPreview(services, actor.maxUserId, chatId, data, session);
@@ -207,6 +215,9 @@ export async function sendMainMenu(services: AppServices, actor: ResolvedActor, 
     return;
   }
   const current = await services.sessions.find(actor.maxUserId, chatId);
+  if (current?.type === SessionType.WAITING_INCIDENT_EDIT_VALUE && services.sessions.readData(current).draftEditField === 'phone') {
+    await sendPhoneInputPrompt(services, actor.maxUserId, services.sessions.readData(current)); return;
+  }
   if (current?.type === SessionType.WAITING_INCIDENT_CONFIRMATION && services.sessions.readData(current).previewDeliveryPending) {
     await showIncidentDraftPreview(services, actor.maxUserId, chatId, services.sessions.readData(current), current);
     return;

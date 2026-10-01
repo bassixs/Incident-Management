@@ -1,41 +1,25 @@
-import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { verifyOwnContact } from '../../src/privacy/optional-contact';
+import { parseManualPhone } from '../../src/privacy/optional-contact';
 import { incidentDraftConfirmationKeyboard, incidentDraftEditKeyboard, distributionKeyboard, sectorKeyboard, reviewKeyboard } from '../../src/bot/keyboards';
-
-const token = 'test-contact-token';
-const vcf = 'BEGIN:VCARD\r\nVERSION:3.0\r\nTEL;TYPE=cell:79991234567\r\nFN:Private Name\r\nEND:VCARD\r\n';
-const signed = (value = vcf) => ({ vcf_info: value, max_info: { user_id: 123 }, hash: createHmac('sha256', token).update(value).digest('hex') });
-describe('native MAX own contact', () => {
-  it('checks signature and sender; extracts only the normalized phone', () => {
-    expect(verifyOwnContact(signed(), 123, token)).toBe('+7 999 123-45-67');
-    expect(verifyOwnContact({ ...signed(), tam_info: { user_id: 123 }, max_info: undefined }, 123, token)).toBe('+7 999 123-45-67');
-    expect(verifyOwnContact({ ...signed(), hash: createHmac('sha256', token).update(vcf).digest('base64') }, 123, token)).toBe('+7 999 123-45-67');
+describe('manual optional phone', () => {
+  it.each(['+7 900 123-45-67', '8 (900) 123-45-67', '89001234567', '+79001234567', '+7 (900) 123 45 67'])('normalizes %s', raw => {
+    expect(parseManualPhone(raw)).toBe('+7 900 123-45-67');
   });
-  it('rejects unsigned, modified, foreign and ambiguous contacts', () => {
-    for (const value of [ { ...signed(), hash: undefined }, { ...signed(), hash: 'invalid' },
-      { ...signed(), vcf_info: vcf.replace('7999', '7888') }, { ...signed(), max_info: { user_id: 456 } },
-      { ...signed(), max_info: undefined }, signed(vcf.replace('END:VCARD', 'TEL:78881234567\r\nEND:VCARD')) ]) {
-      expect(verifyOwnContact(value, 123, token)).toBeNull();
-    }
-    expect(verifyOwnContact(signed(), 123, 'another-bot')).toBeNull();
+  it.each(['', '9001234567', '79001234567', '+1 900 1234567', '890012345678', '8 (900 1234567', '+7 900) 1234567', '+7 ((900))1234567', '+7.900.1234567', '+7 900 1234567 добавочный 12', 'паспорт 45 12 123456', '89001234567 89001234568', '+7 900\n1234567'])('rejects %s', raw => {
+    expect(parseManualPhone(raw)).toBeNull();
   });
-  it('offers native contact only in an empty preview and binds every callback to its token', () => {
-    const rows = incidentDraftConfirmationKeyboard('preview');
-    expect(rows.flat()).toContainEqual({ type: 'request_contact', text: '📞 Поделиться контактом' });
-    for (const b of rows.flat()) if (b.type === 'callback') expect(b.payload.endsWith(':preview')).toBe(true);
-    const attached = incidentDraftConfirmationKeyboard('next', true).flat();
-    expect(attached.some(b => b.type === 'request_contact' || b.text === 'Убрать номер')).toBe(false);
-    expect(attached.map(b => b.text)).toEqual(['✅ Всё верно', '✏️ Исправить', 'Отмена']);
-    expect(incidentDraftEditKeyboard(false, true, 'edit').flat()).toContainEqual({ type: 'callback', text: 'Убрать номер', payload: 'user:draft-phone-remove:edit' });
-    expect(incidentDraftEditKeyboard(false).flat().some(b => b.text === 'Убрать номер')).toBe(false);
+  it('uses token-bound callbacks, hides the offer after addition, allows editing/removal', () => {
+    const rows = incidentDraftConfirmationKeyboard('preview').flat();
+    expect(rows).toContainEqual({ type: 'callback', text: '📞 Поделиться контактом', payload: 'user:draft-phone-enter:preview' });
+    expect(rows.every(b => b.type === 'callback' && b.payload.endsWith(':preview'))).toBe(true);
+    expect(incidentDraftConfirmationKeyboard('next', true).flat().map(b => b.text)).toEqual(['✅ Всё верно', '✏️ Исправить', 'Отмена']);
+    expect(incidentDraftEditKeyboard(true, true, 'edit').flat()).toEqual(expect.arrayContaining([
+      { type: 'callback', text: 'Изменить номер', payload: 'user:draft-phone-enter:edit' },
+      { type: 'callback', text: 'Убрать номер', payload: 'user:draft-phone-remove:edit' },
+    ]));
   });
-  it('exposes contact action only where a phone exists and stage permits it', () => {
-    const has = (rows: ReturnType<typeof distributionKeyboard>) => rows.flat().some(b => b.text === '📞 Контакт жителя');
-    expect(has(distributionKeyboard('id', true))).toBe(true);
-    expect(has(distributionKeyboard('id'))).toBe(false);
-    for (const status of ['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED']) expect(has(sectorKeyboard('id', { hasTemplate: false, status, hasPhone: true }))).toBe(true);
-    for (const status of ['WAITING_REVIEW', 'RESOLVED', 'REJECTED']) expect(has(sectorKeyboard('id', { hasTemplate: false, status, hasPhone: true }))).toBe(false);
-    expect(has(reviewKeyboard('id', 'answer'))).toBe(false);
+  it('has no separate contact or mandatory privacy verification buttons at any stage', () => {
+    const rows = [distributionKeyboard('id', true), reviewKeyboard('id', 'answer'), ...['ASSIGNED','IN_PROGRESS','REVISION_REQUIRED','WAITING_REVIEW','RESOLVED','REJECTED'].map(status=>sectorKeyboard('id', { hasTemplate:false, status, hasPhone:true }))].flat(2);
+    expect(rows.some(b=> b.type==='callback' && /incident:(contact|privacy-pass):/.test(b.payload))).toBe(false);
   });
 });

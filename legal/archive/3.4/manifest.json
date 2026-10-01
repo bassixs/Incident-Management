@@ -1,0 +1,14 @@
+{
+  "user-agreement": {
+    "version": "3.4",
+    "sha256": "e7114f6220c5516552695a0ae5df685a44af4f72649d74e41d313f2530fe285e"
+  },
+  "privacy-policy": {
+    "version": "3.4",
+    "sha256": "c84449d34702d6d35f65ad9b01f9bc0d3de50b72f9265f87bd8bbea600f590fc"
+  },
+  "personal-data-consent": {
+    "version": "3.4",
+    "sha256": "d5c1f03c6b80e117d161820ae801bf07aa5c8ee76a6b993b00038d1072a74a9b"
+  }
+}

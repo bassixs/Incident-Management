@@ -64,7 +64,6 @@ describeIntegration('persistent distribution queue', () => {
   const advance = (minutes: number) => vi.setSystemTime(Date.now() + minutes * 60_000);
   async function create(age = 0) {
     const incident = await services.incidents.create({ requester: { maxUserId: 6000n + BigInt(++requesterSequence), name: 'Иванов Иван', phone: '+79001112233' }, text: 'Не работает фонарь' });
-    await services.distribution.confirmPrivacyCheck(incident.id, actor);
     cards.set(`original-${incident.id}`, { text: incident.text, attachments: [{ type: 'inline_keyboard' }] });
     return prisma.incident.update({ where: { id: incident.id }, data: { createdAt: new Date(Date.now() - age * 60_000), distributionMessageId: `original-${incident.id}` } });
   }

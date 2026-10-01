@@ -57,7 +57,7 @@ describe('resident privacy screening', () => {
   });
   it('does not apply resident screening to a selected employee workspace', async () => {
     const update = { update_type: 'message_created', message: { sender: { user_id: 1, name: 'Сотрудник' }, recipient: { chat_type: 'dialog' }, body: { text: 'Контакт службы +79001234567' } } };
-    const result = await minimiseInbound(update as never, { privateWorkItem: { findFirst: async () => ({ id: 'work' }) } } as never);
+    const result = await minimiseInbound(update as never, { privateWorkItem: { findFirst: async () => ({ id: 'work' }) }, operatorSession: { findUnique: async () => null } } as never);
     expect(result).not.toHaveProperty('privacyRejected');
     expect(JSON.stringify(result)).toContain('+79001234567');
   });

@@ -1,5 +1,4 @@
 import { SECTOR_LEASE_ACTION } from '../../work-queues/leases';
-import { revealResidentContact } from '../../privacy/staff-contact';
 import { IncidentStatus, ResponsibleGroupKind, SessionType } from '@prisma/client';
 
 import type { AppServices } from '../../app/container';
@@ -66,22 +65,8 @@ export async function handleIncidentCallback(
 
   switch (payload.action) {
     case 'contact':
-      await revealResidentContact(services, actor, chatId, incident.id);
-      return 'Контакт отправлен вам в личный диалог с ботом.';
-    case 'privacy-pass': {
-      assertDispatcher(services, actor, chatId);
-      await services.distributionQueue.claim(actor, chatId, incident.id);
-      if (payload.argument !== 'confirm') {
-        await services.messages.send({ chatId }, {
-          text: `${incident.publicCode}: проверьте весь текст и каждую фотографию. Нет ФИО, документов, лиц и других запрещённых личных сведений? Телефон для связи разрешён в тексте и через отдельную кнопку. Само наличие телефона не является причиной отказа. Если в тексте или фото запрещённые данные есть — выберите «Отклонить» и причину «Персональные данные».`,
-          keyboard: [[{ type: 'callback', text: 'Проверено, запрещённых данных нет', payload: `incident:privacy-pass:${incident.id}:confirm` }], [{ type: 'callback', text: 'Отмена', payload: `incident:cancel:${incident.id}` }]],
-        });
-        return;
-      }
-      await services.distribution.confirmPrivacyCheck(incident.id, actor);
-      await services.messages.send({ chatId }, { text: `${incident.publicCode}: проверка выполнена. Можно распределить сообщение.` });
-      return 'Проверка сохранена';
-    }
+    case 'privacy-pass':
+      return 'Действие устарело. Используйте текущую карточку сообщения.';
     case 'personal':
       return withPersonalWorkLock(services, actor.maxUserId, () => invitePersonalWork(services, actor, chatId, incident.id));
     case 'review-take': {

@@ -65,10 +65,10 @@ it('never routes an unverified raw contact to the ordinary requester flow', asyn
   expect(services.sessions.find).not.toHaveBeenCalled();
 });
 
-it('routes a verified contact exactly once before commands and staff text processing', async () => {
+it('routes bound manual phone input exactly once before commands and staff text processing', async () => {
   const { services, ctx, message } = setup([], '/start');
-  const contact = { phone: '+7 900 111-22-33', draftToken: 'draft', previewToken: 'preview' };
-  Object.assign(ctx.update, { verifiedDraftContact: contact });
+  const contact = { sessionId: 'session', phone: '+7 900 111-22-33', draftToken: 'draft', previewToken: 'preview' };
+  Object.assign(ctx.update, { draftPhoneInput: contact });
   await handleMessageUpdate(services as never, ctx as never);
   expect(handleRequesterMessage).toHaveBeenCalledTimes(1);
   expect(handleRequesterMessage).toHaveBeenCalledWith(services, expect.anything(), 5001n, message, contact);

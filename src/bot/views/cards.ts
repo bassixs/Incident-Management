@@ -75,6 +75,7 @@ export function distributionCard(incident: IncidentWithRelations): string {
     '',
     'Сообщение:',
     incident.text,
+    ...(incident.requesterPhone ? [`Телефон для связи: ${incident.requesterPhone}`] : []),
     ...(photoCount > 0 ? ['', ...attachmentLine(photoCount)] : []),
     '',
     '⏱ Срок:',
@@ -133,6 +134,7 @@ export function sectorCard(incident: IncidentWithRelations, group: ResponsibleGr
     '',
     'Сообщение:',
     incident.text,
+    ...(incident.requesterPhone ? [`Телефон для связи: ${incident.requesterPhone}`] : []),
     ...(photoCount > 0 ? ['', ...attachmentLine(photoCount)] : []),
     ...(incident.currentResponder && (lease === undefined || lease || !['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)) ? ['', '👤 Исполнитель:', incident.currentResponder.displayName] : []),
   ].join('\n');
@@ -178,6 +180,7 @@ export function reviewCard(
     '',
     'Сообщение:',
     incident.text,
+    ...(incident.requesterPhone ? [`Телефон для связи: ${incident.requesterPhone}`] : []),
     '',
     ...revisionHistory,
     repeatedReview ? `📝 НОВЫЙ ОТВЕТ (версия ${answer.version}):` : 'Ответ:',
@@ -281,6 +284,7 @@ export function incidentLookupCard(incident: IncidentWithRelations, lease?: Leas
     ...(incident.rejectionReason ? ['', 'Причина отклонения:', incident.rejectionReason] : []),
     ...(incident.revisionReason ? ['', 'Последняя причина возврата:', incident.revisionReason] : []),
     '',
+    ...(incident.requesterPhone ? [`Телефон для связи: ${incident.requesterPhone}`] : []),
     'Автор:',
     incident.requesterMaxUserId.toString(),
     '',
@@ -342,7 +346,7 @@ export function rulesText(): string {
     "• состояние сообщения доступно в разделе «Мои сообщения»;",
     "• итоговый ответ придёт в этот личный чат.",
     "",
-    'Перед отправкой можно добровольно указать телефон в тексте, поделиться им через кнопку «📞 Поделиться контактом» или отправить сообщение без номера.',
+    'Перед отправкой можно добровольно указать телефон в тексте или нажать «📞 Поделиться контактом» и ввести номер вручную. Номер виден участникам рабочих чатов в карточке сообщения. Проверяется только формат, не принадлежность номера. Можно отправить сообщение без телефона.',
   ].join('\n');
 }
 

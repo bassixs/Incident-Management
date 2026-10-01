@@ -47,7 +47,6 @@ describeIntegration('review, revision and delivery (PostgreSQL)', () => {
     const category = (await harness.services.responsibleGroups.findByCode(CATEGORY_CODES.facility))!;
     const dispatcher = await actorFor(prisma, TEST_USERS.dispatcher, 'Диспетчер', [UserRole.DISPATCHER]);
     await harness.services.distributionQueue.claim(dispatcher, TEST_CHATS.distribution, incident.id);
-    await harness.services.distribution.confirmPrivacyCheck(incident.id, dispatcher);
     await harness.services.distribution.assign(incident.id, category.id, dispatcher);
     const responder = await actorFor(prisma, TEST_USERS.responder, 'Ответственный', [UserRole.RESPONDER]);
     const { answer } = await harness.services.answers.submit(incident.id, responder, answerText);
@@ -64,7 +63,6 @@ describeIntegration('review, revision and delivery (PostgreSQL)', () => {
     const regional = (await harness.services.responsibleGroups.findByCode(GROUP_CODES.regional))!;
     const dispatcher = await actorFor(prisma, TEST_USERS.dispatcher, 'Диспетчер', [UserRole.DISPATCHER]);
     await harness.services.distributionQueue.claim(dispatcher, TEST_CHATS.distribution, incident.id);
-    await harness.services.distribution.confirmPrivacyCheck(incident.id, dispatcher);
     await harness.services.distribution.assign(incident.id, regional.id, dispatcher);
 
     const result = await harness.services.answers.submit(

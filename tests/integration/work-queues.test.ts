@@ -48,7 +48,6 @@ describeIntegration('working chat queues and obsolete actions', () => {
   async function create(age = 0, groupCode: string = GROUP_CODES.facility) {
     const i = await services.incidents.create({ requester: { maxUserId: 6000n + BigInt(++sequence), name: 'Иван Иванов', phone: '+79001112233' }, text: 'Не работает освещение' });
     const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: groupCode } });
-    await services.distribution.confirmPrivacyCheck(i.id, actor);
     await services.distribution.assign(i.id, group.id, actor);
     return prisma.incident.update({ where: { id: i.id }, data: { createdAt: new Date(Date.now() - age * 60_000) } });
   }
