@@ -266,6 +266,8 @@ export async function personalHome(services: AppServices, actor: ResolvedActor, 
 
 export async function enterPersonalWork(services: AppServices, actor: ResolvedActor, id: string) {
   const s = await scope(services, actor, id);
+  // selected is the input mode; leave the separate resident session untouched
+  // so personal:resident can resume it while its normal TTL remains valid.
   await select(services, s.item);
   if (s.active) await take(services, s).catch(async error => services.messages.send({ userId: actor.maxUserId }, { text: error instanceof Error ? error.message : 'Не удалось взять сообщение.', keyboard: navigation() }));
   await showPersonalWork(services, actor, id, true);

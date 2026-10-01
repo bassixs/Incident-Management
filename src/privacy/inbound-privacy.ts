@@ -24,8 +24,13 @@ export async function minimiseInbound(update: Update, prisma: PrismaClient): Pro
       maxUserId: BigInt(userId), chatId: BigInt(message.recipient.chat_id ?? userId),
     } } }) : null;
   const data = session?.data as SessionData | null;
-  const phoneStep = session?.type === 'WAITING_INCIDENT_EDIT_VALUE' && data?.draftEditField === 'phone';
-  const residentMessage = dialog && !value.callback && (!staffDraft || phoneStep);
+  // Selection is the dialog mode: entering personal work keeps the resident
+  // draft for later, but it must not intercept newly admitted employee input.
+  // Previously admitted draftPhoneInput events retain their binding in inbox
+  // and are still handled before the employee route (message.handler.ts).
+  const residentMessage = dialog && !value.callback && !staffDraft;
+  const phoneStep = residentMessage && session?.type === 'WAITING_INCIDENT_EDIT_VALUE' &&
+    data?.draftEditField === 'phone' && session.expiresAt > new Date();
   const contacts = message?.body?.attachments?.filter((a: any) => a.type === 'contact') ?? [];
   if (contacts.length) {
     // Legacy native contacts never enter a text/employee route or survive in inbox.
@@ -35,7 +40,7 @@ export async function minimiseInbound(update: Update, prisma: PrismaClient): Pro
     value.contactRejected = true;
   } else if (phoneStep && message?.body && !/^\/(?:start|cancel)(?:\s|$)/i.test(message.body.text ?? '')) {
     const sentAt = message.timestamp ?? value.timestamp;
-    const timely = session.expiresAt > new Date() && typeof sentAt === 'number' &&
+    const timely = typeof sentAt === 'number' &&
       typeof data.phoneInputStartedAt === 'number' && sentAt >= data.phoneInputStartedAt;
     const phone = timely && !message.link && !message.body.attachments?.length
       ? parseManualPhone(message.body.text ?? '') : null;
@@ -78,7 +83,7 @@ export async function minimiseInbound(update: Update, prisma: PrismaClient): Pro
     delete message.link;
   }
   // Work-chat names remain available for employee attribution; private resident profiles do not.
-  if ((dialog && (!staffDraft || phoneStep)) || value.update_type === 'bot_started') {
+  if ((dialog && !staffDraft) || value.update_type === 'bot_started') {
     if (message) { delete message.constructor; delete message.url; delete message.stat; }
     for (const user of [message?.sender, value.callback?.user, value.user]) {
       if (!user) continue;
