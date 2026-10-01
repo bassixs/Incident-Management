@@ -1,3 +1,4 @@
+import { deliveryTrace, latency, withDeliveryTrace, type DeliveryTrace } from '../utils/latency';
 import { leaseView, leaseText, SECTOR_LEASE_ACTION } from '../work-queues/leases';
 import { AsyncActivity } from '../utils/async-activity';
 import { workingHours } from '../utils/work-calendar';
@@ -89,6 +90,7 @@ export type MessageSendResult = {
 type DurableMessageDependencies = { prisma: PrismaClient; storage: MediaStorage };
 
 type StoredPayload = {
+  trace?: DeliveryTrace;
   text: string;
   keyboardMessageId?: string;
   operation?: CompositeMessage['operation'];
@@ -126,6 +128,12 @@ export class MaxMessageService {
   private readonly activity = new AsyncActivity();
   private timer?: NodeJS.Timeout;
   private drainPromise?: Promise<void>;
+  private wakeScheduled?: NodeJS.Immediate;
+  private wakeAfterDrain = false;
+  private signalWake!: () => void;
+  private wakeSignal = this.newWakeSignal();
+  private newWakeSignal(): Promise<void> { return new Promise(resolve => { this.signalWake = resolve; }); }
+  private readonly waitingTargets = new Set<string>();
   // Shared by immediate sends and background retries, including long messages.
   private readonly activeTargets = new Map<string, { target: OutboxTarget; done: Promise<unknown> }>();
 
@@ -170,7 +178,10 @@ export class MaxMessageService {
       };
     }
     if (this.stopping) return { state: 'queued', trackingApplied: false };
-    return this.attemptInOrder(row);
+    latency('screen-created', { outboxId: row.id, ageMs: Date.now() - row.createdAt.getTime() });
+    const result = await this.attemptInOrder(row);
+    if (result.state === 'queued') this.wake();
+    return result;
   }
 
   private async withTarget<T>(target: OutboxTarget, work: () => Promise<T>): Promise<T> {
@@ -178,12 +189,21 @@ export class MaxMessageService {
     const done = this.activity.run(work);
     this.activeTargets.set(key, { target, done });
     try { return await done; }
-    finally { if (this.activeTargets.get(key)?.done === done) this.activeTargets.delete(key); }
+    finally {
+      if (this.activeTargets.get(key)?.done === done) {
+        this.activeTargets.delete(key);
+        if (this.waitingTargets.delete(key)) this.wake();
+      }
+    }
   }
 
   /** Deferred business reminders do not block a chat; an actual failed send does. */
   private async attemptInOrder(row: OutboundMessage): Promise<MessageSendResult> {
-    if (this.stopping || this.activeTargets.has(targetKey(row))) return { state: 'queued', trackingApplied: false };
+    if (this.stopping) return { state: 'queued', trackingApplied: false };
+    if (this.activeTargets.has(targetKey(row))) {
+      this.waitingTargets.add(targetKey(row));
+      return { state: 'queued', trackingApplied: false };
+    }
     return this.withTarget(row, async () => {
       const predecessor = await this.durable!.prisma.outboundMessage.findFirst({
         where: {
@@ -196,7 +216,12 @@ export class MaxMessageService {
       });
       if (predecessor) return { state: 'queued', trackingApplied: false };
       if (this.stopping) return { state: 'queued', trackingApplied: false };
-      return this.attempt(row.id);
+      const trace = (row.payload as unknown as StoredPayload).trace ?? {};
+      const result = await withDeliveryTrace({ ...trace, outboxId: row.id }, () => this.attempt(row.id));
+      // Completion can transactionally create more jobs (tracking/status cards).
+      // A successful transition is a finite wake source; a blocked/backoff row is not.
+      if (result.state === 'sent') this.wake();
+      return result;
     });
   }
 
@@ -265,11 +290,29 @@ export class MaxMessageService {
     this.stopping = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+    if (this.wakeScheduled) clearImmediate(this.wakeScheduled);
+    this.wakeScheduled = undefined;
+    this.wakeAfterDrain = false;
   }
 
   async waitForIdle(): Promise<void> {
     await this.drainPromise;
     await this.activity.waitForIdle();
+  }
+
+  /** Notify the durable worker AFTER committing business changes. No delivery is
+   * held only by this signal: restart and the existing sweep recover missed wakes.
+   * Coalesced, event-driven, and never starts a second global drain. */
+  wake(): void {
+    if (!this.durable || this.stopping) return;
+    if (this.drainPromise) { this.wakeAfterDrain = true; this.signalWake(); return; }
+    if (this.wakeScheduled) return;
+    withDeliveryTrace({}, () => {
+      this.wakeScheduled = setImmediate(() => {
+        this.wakeScheduled = undefined;
+        void this.kick().catch(() => log.error({ code: 'OUTBOX_WAKE_FAILED' }, 'outbox wake failed; sweep will retry'));
+      });
+    });
   }
 
   async flush(): Promise<void> {
@@ -307,6 +350,7 @@ export class MaxMessageService {
       }
 
       const payload: StoredPayload = {
+        trace: deliveryTrace(),
         text: message.text,
         ...(message.operation ? { operation: message.operation } : {}),
         ...(message.replyToMessageId ? { replyToMessageId: message.replyToMessageId } : {}),
@@ -374,6 +418,7 @@ export class MaxMessageService {
 
     const row = await durable.prisma.outboundMessage.findUniqueOrThrow({ where: { id } });
     const payload = row.payload as unknown as StoredPayload;
+    latency('outbox-start', { attempt: row.attempts, waitMs: Math.max(0, now.getTime() - Math.max(row.createdAt.getTime(), row.nextAttemptAt.getTime())), ageMs: now.getTime() - row.createdAt.getTime() });
     const staged = row.attachments as unknown as StagedAttachment[];
     // Retired questions from older releases must never reach a resident.
     if (payload.operation?.type === 'clarification-question' || row.dedupeKey?.startsWith('clarification-preview:')) {
@@ -493,6 +538,7 @@ export class MaxMessageService {
         ? await this.refreshDeliveryCard(payload.operation)
         : await this.deliverLogical(target, { ...payload, attachments }, true);
       await this.complete(row, result.firstMessageId, 'keyboardMessageId' in result ? result.keyboardMessageId as string | undefined : undefined);
+      latency('outbox-sent', { attempt: row.attempts, durationMs: Date.now() - now.getTime(), ageMs: Date.now() - row.createdAt.getTime() });
       await this.cleanupAttachments(staged);
       return { firstMessageId: result.firstMessageId, state: 'sent', trackingApplied: true };
     } catch (error) {
@@ -826,9 +872,14 @@ export class MaxMessageService {
   private async kick(): Promise<void> {
     if (!this.durable || this.stopping) return;
     if (this.drainPromise) return this.drainPromise;
-    this.drainPromise = this.drain().finally(() => {
-      this.drainPromise = undefined;
-    });
+    if (this.wakeScheduled) clearImmediate(this.wakeScheduled);
+    this.wakeScheduled = undefined;
+    this.drainPromise = (async () => {
+      do {
+        this.wakeAfterDrain = false;
+        await this.drain();
+      } while (this.wakeAfterDrain && !this.stopping);
+    })().finally(() => { this.drainPromise = undefined; });
     return this.drainPromise;
   }
 
@@ -860,10 +911,14 @@ export class MaxMessageService {
             if (blocked.some(target => !deferred.has(targetKey(target)) && !this.activeTargets.has(targetKey(target)))) continue;
             break;
           }
+          // An immediate send can acquire this lane during the database read.
+          // Do not keep it deferred after its owner releases and signals us.
+          const occupied = this.activeTargets.has(targetKey(candidate));
           const task = this.attemptInOrder(candidate)
             .then(async result => {
-              if (result.state !== 'queued') return;
+              if (result.state !== 'queued' || occupied) return;
               const current = await prisma.outboundMessage.findUnique({ where: { id: candidate.id } });
+              if (!current || current.status === 'SENT' || current.status === 'FAILED') return;
               // A business hold (rating/SLA) must let later ready messages pass.
               if (current?.status === 'PENDING' && current.attempts === 0 && current.nextAttemptAt > new Date()) return;
               deferred.set(targetKey(candidate), candidate);
@@ -873,7 +928,8 @@ export class MaxMessageService {
           active.add(task);
         }
         if (!active.size) break;
-        await Promise.race(active);
+        await Promise.race([...active, this.wakeSignal]);
+        this.wakeSignal = this.newWakeSignal();
       }
     } finally {
       await Promise.all(active);

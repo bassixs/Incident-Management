@@ -1,3 +1,4 @@
+import { deliveryTrace, latency } from '../../utils/latency';
 import type { Context } from '@maxhub/max-bot-api';
 
 import type { AppServices } from '../../app/container';
@@ -42,9 +43,12 @@ export async function answerCallback(
   callbackId: string,
   notification?: string,
 ): Promise<void> {
+  const started = Date.now();
   try {
     await services.max.answerCallback(callbackId, notification);
+    latency('callback-ack', { ok: true, durationMs: Date.now() - started, ageMs: Date.now() - (deliveryTrace().receivedAt ?? started) });
   } catch (error) {
+    latency('callback-ack', { ok: false, durationMs: Date.now() - started, ageMs: Date.now() - (deliveryTrace().receivedAt ?? started) });
     log.warn(
       { callbackId, err: error instanceof Error ? error.message : String(error) },
       'failed to answer callback',

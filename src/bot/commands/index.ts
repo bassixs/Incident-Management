@@ -42,7 +42,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
     }
     services.distributionQueue.authorize(actor, chatId);
     await services.distributionQueue.refresh();
-    await services.messages.flush();
+    services.messages.wake();
     await services.distributionQueue.list(actor, chatId, 0);
   },
   today: async ({ services, actor, chatId, isDialog }) => {
@@ -507,7 +507,7 @@ export const COMMANDS: Record<string, CommandHandler> = {
     if (result.status === 'ambiguous') {
       throw new ValidationError('Код совпал с несколькими ошибками. Укажите больше символов кода.');
     }
-    if (result.count > 0) await services.messages.flush();
+    if (result.count > 0) services.messages.wake();
     const label = result.reference
       ? `Ошибка ${result.reference}${result.incidentCode ? ` (${result.incidentCode})` : ''}`
       : 'Все неудачные исходящие сообщения';

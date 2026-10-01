@@ -1,3 +1,4 @@
+import { observeMembership } from '../utils/latency';
 import type { AppServices } from '../app/container';
 
 /** A stored role or an old work item is not proof of current MAX membership. */
@@ -17,7 +18,7 @@ export async function hasPrivateWorkAccess(services: AppServices, maxUserId: big
   for (let offset = 0; offset < chats.length; offset += 4) {
     const results = await Promise.all(chats.slice(offset, offset + 4).map(async chatId => {
       try {
-        const result = await services.max.api.getChatMembers(Number(chatId), { user_ids: [Number(maxUserId)] });
+        const result = await observeMembership(() => services.max.api.getChatMembers(Number(chatId), { user_ids: [Number(maxUserId)] }));
         return result.members.some(member => BigInt(member.user_id) === maxUserId && !member.is_bot);
       } catch { return false; } // Never grant access from a failed or cached check.
     }));

@@ -1,3 +1,4 @@
+import { MaxError } from '@maxhub/max-bot-api';
 import type { PrismaClient } from '@prisma/client';
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { MaxMessageService } from '../../src/max/max-message.service';
@@ -15,6 +16,105 @@ describeIntegration('parallel outbox with recipient ordering', () => {
     // Every row has the same timestamp: sequence, not UUID, decides the order.
     createdAt: new Date('2026-01-01T00:00:00Z'),
   } });
+
+  it('releasing an immediate send wakes its queued successor without starting the periodic worker', async () => {
+    const blocked = gate(), entered = gate(); const sent: string[] = [];
+    const worker = new MaxMessageService({ sendToUser: async (_id: bigint, text: string) => {
+      if (text === 'first') { entered.resolve(); await blocked.promise; }
+      sent.push(text); return { body: { mid: text } };
+    } } as never, { prisma, storage: {} as never });
+    const first = worker.send({ userId: 1n }, { text: 'first' });
+    try {
+      await entered.promise;
+      expect((await worker.send({ userId: 1n }, { text: 'second' })).state).toBe('queued');
+      // Let the initial wake find this address occupied and finish its scan.
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(sent).toEqual([]); blocked.resolve(); await first;
+      await vi.waitFor(() => expect(sent).toEqual(['first', 'second']), { timeout: 1000 });
+    } finally { blocked.resolve(); await first; worker.stop(); await worker.waitForIdle(); }
+    expect(await prisma.outboundMessage.count({ where: { status: 'SENT' } })).toBe(2);
+  });
+
+  it('a wake refills free lanes while an unrelated slow drain is still active', async () => {
+    const blocked = gate(), entered = gate(); const sent: string[] = [];
+    const worker = new MaxMessageService({ sendToUser: async (_id: bigint, text: string) => {
+      if (text === 'slow') { entered.resolve(); await blocked.promise; }
+      sent.push(text); return { body: { mid: text } };
+    } } as never, { prisma, storage: {} as never }, 2);
+    await enqueue('slow'); const work = worker.flush(); await entered.promise;
+    try {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      await enqueue('new-screen', 2n); worker.wake();
+      await vi.waitFor(() => expect(sent).toEqual(['new-screen']), { timeout: 1000 });
+    } finally { blocked.resolve(); await work; worker.stop(); await worker.waitForIdle(); }
+  });
+
+
+  it('release wakes a successor even while another recipient remains blocked', async () => {
+    const firstGate = gate(), slowGate = gate(), firstEntered = gate(), slowEntered = gate();
+    const sent: string[] = [];
+    const worker = new MaxMessageService({ sendToUser: async (_id: bigint, text: string) => {
+      if (text === 'first') { firstEntered.resolve(); await firstGate.promise; }
+      if (text === 'slow') { slowEntered.resolve(); await slowGate.promise; }
+      sent.push(text); return { body: { mid: text } };
+    } } as never, { prisma, storage: {} as never }, 2);
+    const first = worker.send({ userId: 1n }, { text: 'first' }); await firstEntered.promise;
+    await enqueue('slow', 2n); const draining = worker.flush(); await slowEntered.promise;
+    try {
+      expect((await worker.send({ userId: 1n }, { text: 'successor' })).state).toBe('queued');
+      await new Promise(resolve => setTimeout(resolve, 50));
+      firstGate.resolve(); await first;
+      await vi.waitFor(() => expect(sent).toEqual(['first', 'successor']), { timeout: 1000 });
+    } finally { firstGate.resolve(); slowGate.resolve(); await first; await draining; worker.stop(); await worker.waitForIdle(); }
+  });
+
+  it('a lane acquired during candidate selection is released without waiting for another slow lane', async () => {
+    const firstRow = await enqueue('first');
+    await prisma.outboundMessage.update({ where: { id: firstRow.id }, data: { dedupeKey: 'selection-race' } });
+    await enqueue('successor'); await enqueue('slow', 2n);
+    const selected = gate(), returnCandidate = gate(), firstEntered = gate(), firstGate = gate(), slowEntered = gate(), slowGate = gate();
+    const sent: string[] = [];
+    const find = prisma.outboundMessage.findFirst.bind(prisma.outboundMessage);
+    let intercept = true;
+    const lookup = vi.spyOn(prisma.outboundMessage, 'findFirst').mockImplementation((async (args: any) => {
+      const row = await find(args);
+      if (intercept && row?.id === firstRow.id) { intercept = false; selected.resolve(); await returnCandidate.promise; }
+      return row;
+    }) as never);
+    const worker = new MaxMessageService({ sendToUser: async (_id: bigint, text: string) => {
+      if (text === 'first') { firstEntered.resolve(); await firstGate.promise; }
+      if (text === 'slow') { slowEntered.resolve(); await slowGate.promise; }
+      sent.push(text); return { body: { mid: text } };
+    } } as never, { prisma, storage: {} as never }, 2);
+    const draining = worker.flush(); await selected.promise;
+    const immediate = worker.send({ userId: 1n }, { text: 'first', delivery: { dedupeKey: 'selection-race' } });
+    try {
+      await firstEntered.promise; returnCandidate.resolve(); await slowEntered.promise;
+      firstGate.resolve(); await immediate;
+      await vi.waitFor(() => expect(sent).toEqual(['first', 'successor']), { timeout: 1000 });
+    } finally {
+      returnCandidate.resolve(); firstGate.resolve(); slowGate.resolve(); await immediate; await draining;
+      worker.stop(); await worker.waitForIdle(); lookup.mockRestore();
+    }
+  });
+
+  it('coalesced wakes do not spin or bypass a failed predecessor backoff', async () => {
+    const first = await enqueue('failed'); await enqueue('next');
+    const send = vi.fn().mockRejectedValue(new Error('503 simulated'));
+    const worker = new MaxMessageService({ sendToUser: send } as never, { prisma, storage: {} as never });
+    const reads = vi.spyOn(prisma.outboundMessage, 'findFirst');
+    try {
+      worker.wake(); await worker.flush();
+      reads.mockClear();
+      for (let n = 0; n < 20; n++) worker.wake();
+      await worker.flush(); await new Promise(resolve => setTimeout(resolve, 100));
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(reads.mock.calls.length).toBeLessThan(12);
+      const row = await prisma.outboundMessage.findUniqueOrThrow({ where: { id: first.id } });
+      expect(row.status).toBe('PENDING'); expect(row.nextAttemptAt.getTime()).toBeGreaterThan(Date.now());
+      expect(await prisma.outboundMessage.count({ where: { status: 'PENDING' } })).toBe(2);
+    } finally { worker.stop(); await worker.waitForIdle(); reads.mockRestore(); }
+  });
 
   it('a slow chat does not block other recipients; all parts finish before the next message in that chat', async () => {
     const blocked = gate(); const entered = gate(); const sent: string[] = [];
@@ -103,11 +203,11 @@ describeIntegration('parallel outbox with recipient ordering', () => {
     expect(sent).toEqual([]); await worker.flush(); expect(sent).toEqual(['first','second']);
   });
 
-  it('retry backoff holds only its recipient; a restarted worker preserves that order', async () => {
+  it.each([429, 503])('HTTP %s backoff holds only its recipient; a restarted worker preserves that order', async status => {
     const first=await enqueue('first'); await enqueue('second'); await enqueue('other',2n);
     let fail=true; const sent:string[]=[];
     const max={sendToUser:async (_id:bigint,text:string)=>{
-      if(text==='first'&&fail) throw new Error('Temporary MAX failure');
+      if(text==='first'&&fail) throw new MaxError(status, { code: 'temporary', message: 'Simulated MAX failure' });
       sent.push(text); return {body:{mid:text}};
     }};
     await new MaxMessageService(max as never,{prisma,storage:{} as never}).flush();

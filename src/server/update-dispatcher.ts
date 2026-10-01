@@ -1,3 +1,4 @@
+import { latency, withDeliveryTrace } from '../utils/latency';
 import { AsyncActivity } from '../utils/async-activity';
 import { minimiseInbound } from '../privacy/inbound-privacy';
 import { getConfig } from '../config';
@@ -40,15 +41,16 @@ export class UpdateDispatcher {
   }
 
   async reserve(update: Update): Promise<Reservation> {
+    const receivedAt = new Date();
     const key = updatePartition(update);
     const previous = this.reservations.get(key) ?? Promise.resolve();
-    const operation = previous.catch(() => undefined).then(() => this.reserveNow(update));
+    const operation = previous.catch(() => undefined).then(() => this.reserveNow(update, receivedAt));
     this.reservations.set(key, operation);
     try { return await operation; }
     finally { if (this.reservations.get(key) === operation) this.reservations.delete(key); }
   }
 
-  private async reserveNow(update: Update): Promise<Reservation> {
+  private async reserveNow(update: Update, receivedAt: Date): Promise<Reservation> {
     if (this.stopping) throw new Error('Dispatcher is shutting down; retry update later');
     const key = buildUpdateKey(update);
     const legacy = await this.prisma.processedUpdate.findUnique({
@@ -62,6 +64,7 @@ export class UpdateDispatcher {
     try {
       const row = await this.prisma.inboundUpdate.create({
         data: {
+          receivedAt,
           externalUpdateKey: key,
           updateType: update.update_type,
           partitionKey: updatePartition(update),
@@ -175,6 +178,7 @@ export class UpdateDispatcher {
   }
 
   private async processClaimed(id: string): Promise<void> {
+    const processingStartedAt = Date.now();
     const claimed = await this.prisma.inboundUpdate.updateMany({
       where: { id, status: InboxStatus.PENDING },
       data: { status: InboxStatus.PROCESSING, lockedAt: new Date(), attempts: { increment: 1 } },
@@ -195,7 +199,10 @@ export class UpdateDispatcher {
       const payload = unboundPrivateText
         ? { ...saved, residentDraftInput: { sessionId: '', draftToken: '', screenToken: '' } }
         : saved;
-      await this.max.dispatch(payload as unknown as Update);
+      await withDeliveryTrace({ inboxId: row.id, receivedAt: row.receivedAt.getTime() }, async () => {
+        latency('inbox-start', { waitMs: processingStartedAt - row.receivedAt.getTime(), attempt: row.attempts });
+        await this.max.dispatch(payload as unknown as Update);
+      });
       await this.prisma.inboundUpdate.update({
         where: { id },
         data: {

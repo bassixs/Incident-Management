@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { latency } from '../utils/latency';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -72,19 +74,30 @@ export class MaxClient {
     return this.bot.api;
   }
 
+  private async measured<T>(name: string, operation: () => Promise<T>, target?: string, attempt = 1): Promise<T> {
+    const requestId = randomUUID();
+    const queuedAt = Date.now();
+    if (target) await this.rateGate.wait(target, 550, () => this.rateGate.wait('global', 45));
+    else await this.rateGate.wait('global', 45);
+    const started = Date.now();
+    try {
+      const result = await operation();
+      latency('max-request', { method: name, requestId, attempt, rateWaitMs: started - queuedAt, requestMs: Date.now() - started, ok: true });
+      return result;
+    } catch (error) {
+      latency('max-request', { method: name, requestId, attempt, rateWaitMs: started - queuedAt, requestMs: Date.now() - started,
+        ok: false, ...(error instanceof MaxError ? { status: error.status } : {}) });
+      throw error;
+    }
+  }
+
   private call<T>(name: string, operation: () => Promise<T>, target?: string): Promise<T> {
-    return retry(async () => {
-      if (target) await this.rateGate.wait(target, 550, () => this.rateGate.wait('global', 45));
-      else await this.rateGate.wait('global', 45);
-      return operation();
-    }, {
+    let attempt = 0;
+    return retry(() => this.measured(name, operation, target, ++attempt), {
       attempts: 4,
       shouldRetry: isRetryable,
       onRetry: (error, attempt, waitMs) =>
-        log.warn(
-          { method: name, attempt, waitMs, err: error instanceof Error ? error.message : String(error) },
-          'MAX API call failed, retrying',
-        ),
+        log.warn({ method: name, attempt, waitMs, status: error instanceof MaxError ? error.status : undefined }, 'MAX API call failed, retrying'),
     });
   }
 
@@ -102,8 +115,7 @@ export class MaxClient {
 
   /** Panel creation is reconciled by PinnedPanelService, never blindly retried. */
   async sendPanelOnce(chatId: bigint, text: string): Promise<Message> {
-    await this.rateGate.wait(`chat:${chatId}`, 550, () => this.rateGate.wait('global', 45));
-    return this.api.sendMessageToChat(toApiId(chatId), text, { notify: false });
+    return this.measured('sendPanelOnce', () => this.api.sendMessageToChat(toApiId(chatId), text, { notify: false }), `chat:${chatId}`);
   }
 
   async getPinnedMessage(chatId: bigint | number) {

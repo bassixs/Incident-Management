@@ -23,7 +23,7 @@ export async function handleQueueCallback(services: AppServices, actor: Resolved
       return 'Список обновлён';
     case 'refresh':
       await services.distributionQueue.refresh();
-      await services.messages.flush();
+      services.messages.wake();
       return 'Обновление панели запрошено';
   }
 }

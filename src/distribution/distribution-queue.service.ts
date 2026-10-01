@@ -28,6 +28,7 @@ export class DistributionQueueService {
 
   async claim(actor: ResolvedActor, chatId: bigint, incidentId?: string, showCard = false) {
     this.authorize(actor, chatId);
+    let enqueued = false;
     const incident = await this.prisma.$transaction(async tx => {
       await acquireAdvisoryLock(tx, ...CLAIM_LOCK);
       const now = new Date();
@@ -55,9 +56,10 @@ export class DistributionQueueService {
         delivery: { dedupeKey: `distribution-claim:${updated.id}:${actor.maxUserId}:${until.getTime()}` },
       }, updated.id, updated.attachments);
       if (!own || own.id !== updated.id) await queueDistributionRefresh(tx, updated.id, undefined, true);
+      enqueued = showCard || !own || own.id !== updated.id;
       return updated;
     }, TRANSACTION_OPTIONS);
-    await this.messages.flush();
+    if (enqueued) this.messages.wake();
     return incident;
   }
 
@@ -72,7 +74,7 @@ export class DistributionQueueService {
       await tx.operatorSession.deleteMany({ where: { incidentId: id, maxUserId: actor.maxUserId, chatId } });
       await queueDistributionRefresh(tx, id, undefined, true);
     }, TRANSACTION_OPTIONS);
-    await this.messages.flush();
+    this.messages.wake();
   }
 
   async list(actor: ResolvedActor, chatId: bigint, page: number) {
@@ -107,6 +109,7 @@ export class DistributionQueueService {
       await tx.outboundMessage.updateMany({ where: { dedupeKey, status: { in: ['SENT', 'FAILED'] } },
         data: { status: 'PENDING', attempts: 0, nextAttemptAt: new Date(), lastError: null } });
     });
+    this.messages.wake();
   }
 
   start() {

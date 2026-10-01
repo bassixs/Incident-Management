@@ -22,7 +22,7 @@ describeIntegration('staff reservations and redistribution', () => {
   let sequence: number;
   beforeAll(() => { pushSchemaOnce(); prisma = createTestPrisma(); });
   afterAll(() => prisma.$disconnect());
-  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+  afterEach(async () => { services.messages.stop(); await services.messages.waitForIdle(); vi.useRealTimers(); vi.restoreAllMocks(); });
   beforeEach(async () => {
     await resetDatabase(prisma); await seedCategories(prisma);
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -43,7 +43,7 @@ describeIntegration('staff reservations and redistribution', () => {
   async function create(age = 0, groupCode: string = GROUP_CODES.facility) {
     const i = await services.incidents.create({ requester: { maxUserId: 6000n + BigInt(++sequence), name: 'Иван Иванов', phone: '+79001112233' }, text: 'Не работает освещение' });
     const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: groupCode } });
-    await services.distribution.assign(i.id, group.id, actor);
+    await services.distribution.assign(i.id, group.id, actor); await services.messages.flush();
     return prisma.incident.update({ where: { id: i.id }, data: { createdAt: new Date(Date.now() - age * 60_000) } });
   }
   async function reviewing(age = 0) { const i = await create(age); await services.answers.submit(i.id, actor, 'Освещение восстановлено.', []); return i; }
@@ -51,30 +51,30 @@ describeIntegration('staff reservations and redistribution', () => {
 
   it('shows distribution owner on the original, then makes it free after release', async () => {
     const i = await services.incidents.create({ requester: { maxUserId: 7100n, name: 'Иван Иванов', phone: '+79001112233' }, text: 'Фонарь' });
-    await services.distributionQueue.claim(actor, TEST_CHATS.distribution, i.id);
+    await services.distributionQueue.claim(actor, TEST_CHATS.distribution, i.id); await services.messages.flush();
     const fresh = (await services.repository.findById(i.id))!;
     expect(lastEdit(fresh.distributionMessageId!)[1]).toContain(actor.displayName);
     expect(lastEdit(fresh.distributionMessageId!)[1]).toContain('До ');
-    await services.distributionQueue.release(actor, TEST_CHATS.distribution, i.id);
+    await services.distributionQueue.release(actor, TEST_CHATS.distribution, i.id); await services.messages.flush();
     expect(lastEdit(fresh.distributionMessageId!)[1]).toContain('Свободно');
     expect(lastEdit(fresh.distributionMessageId!)[1]).not.toContain(actor.displayName);
   });
   it('claims when preparing an answer and blocks a colleague from submitting or releasing it', async () => {
     const i = await create();
-    await handleIncidentCallback({ services, actor, chatId: TEST_CHATS.sector }, { kind: 'incident', action: 'answer', incidentId: i.id });
+    await handleIncidentCallback({ services, actor, chatId: TEST_CHATS.sector }, { kind: 'incident', action: 'answer', incidentId: i.id }); await services.messages.flush();
     const fresh = (await services.repository.findById(i.id))!;
     expect(lastEdit(fresh.sectorMessageId!)[1]).toContain(`Закреплено за: ${actor.displayName}`);
     await expect(services.answers.submit(i.id, colleague, 'Чужой ответ')).rejects.toThrow('закреплено');
     await expect(services.workQueues.release(colleague, TEST_CHATS.sector, i.id)).rejects.toThrow();
-    await services.workQueues.release(actor, TEST_CHATS.sector, i.id);
+    await services.workQueues.release(actor, TEST_CHATS.sector, i.id); await services.messages.flush();
     expect((await services.repository.findById(i.id))!.status).toBe('ASSIGNED');
     expect(await services.sessions.find(actor.maxUserId, TEST_CHATS.sector)).toBeNull();
-    await services.sector.takeInWork(i.id, colleague);
+    await services.sector.takeInWork(i.id, colleague); await services.messages.flush();
     expect(lastEdit(fresh.sectorMessageId!)[1]).toContain(colleague.displayName);
   });
   it('expires sector claims, rejects an expired input and lets another employee claim', async () => {
     const i = await create();
-    await handleIncidentCallback({ services, actor, chatId: TEST_CHATS.sector }, { kind: 'incident', action: 'answer', incidentId: i.id });
+    await handleIncidentCallback({ services, actor, chatId: TEST_CHATS.sector }, { kind: 'incident', action: 'answer', incidentId: i.id }); await services.messages.flush();
     const session = (await services.sessions.find(actor.maxUserId, TEST_CHATS.sector))!;
     vi.setSystemTime(Date.now() + 16 * 60_000);
     expect(await discardObsoleteSession(services, session)).toBe(true);
@@ -84,25 +84,25 @@ describeIntegration('staff reservations and redistribution', () => {
     const fresh = (await services.repository.findById(i.id))!;
     expect(fresh.currentResponderId).toBeNull(); expect(fresh.status).toBe('ASSIGNED');
     expect(lastEdit(fresh.sectorMessageId!)[1]).toContain('Свободно');
-    await services.workQueues.claim(colleague, TEST_CHATS.sector);
+    await services.workQueues.claim(colleague, TEST_CHATS.sector); await services.messages.flush();
     expect((await services.repository.findById(i.id))!.currentResponderId).toBe(colleague.userId);
   });
   it('claims review from the original card and displays the reviewer in card and queue', async () => {
     const i = await reviewing(); const fresh = (await services.repository.findById(i.id))!;
-    await handleIncidentCallback({ services, actor, chatId: TEST_CHATS.review }, { kind: 'incident', action: 'revision', incidentId: i.id, argument: fresh.answers.at(-1)!.id });
+    await handleIncidentCallback({ services, actor, chatId: TEST_CHATS.review }, { kind: 'incident', action: 'revision', incidentId: i.id, argument: fresh.answers.at(-1)!.id }); await services.messages.flush();
     expect(lastEdit(fresh.reviewMessageId!)[1]).toContain(actor.displayName);
     expect(lastEdit(fresh.reviewMessageId!)[2].flat().some((b: any) => b.text === 'Освободить сообщение')).toBe(true);
-    await services.workQueues.list(colleague, TEST_CHATS.review);
+    await services.workQueues.list(colleague, TEST_CHATS.review); await services.messages.flush();
     expect(sent.at(-1)!.text).toContain(`Закреплено за: ${actor.displayName}`);
-    await services.workQueues.release(actor, TEST_CHATS.review, i.id);
+    await services.workQueues.release(actor, TEST_CHATS.review, i.id); await services.messages.flush();
     expect(lastEdit(fresh.reviewMessageId!)[1]).toContain('Свободно');
   });
   it('returns without changing deadline/history, keeps original queue order and supports repeated reassignment', async () => {
     const i = await create(60); const before = (await services.repository.findById(i.id))!;
     const group = before.assignedGroup!;
-    await services.sector.takeInWork(i.id, actor); await services.workQueues.open(actor, TEST_CHATS.sector, i.id);
+    await services.sector.takeInWork(i.id, actor); await services.messages.flush(); await services.workQueues.open(actor, TEST_CHATS.sector, i.id); await services.messages.flush();
     const copies = await prisma.outboundMessage.findMany({ where: { incidentId: i.id, dedupeKey: { startsWith: 'work-copy:sector:' } } });
-    await services.sector.returnToDistribution(i.id, actor, TEST_CHATS.sector, 'Не относится к полномочиям');
+    await services.sector.returnToDistribution(i.id, actor, TEST_CHATS.sector, 'Не относится к полномочиям'); await services.messages.flush();
     const returned = (await services.repository.findById(i.id))!;
     expect(returned.status).toBe('DISTRIBUTION'); expect(returned.assignedGroupId).toBeNull();
     expect(returned.deadlineAt).toEqual(before.deadlineAt); expect(returned.createdAt).toEqual(before.createdAt);
@@ -111,19 +111,19 @@ describeIntegration('staff reservations and redistribution', () => {
     expect(lastEdit(before.distributionMessageId!)[1]).toContain('ВОЗВРАЩЕНО');
     expect(sent.filter(m => m.text.includes('ВОЗВРАЩЕНО НА ПЕРЕРАСПРЕДЕЛЕНИЕ')).length).toBeGreaterThan(0);
     await services.incidents.create({ requester: { maxUserId: 7101n, name: 'Иван Иванов', phone: '+79001112233' }, text: 'Новое сообщение' });
-    expect((await services.distributionQueue.claim(actor, TEST_CHATS.distribution))!.id).toBe(i.id);
-    await services.distribution.assign(i.id, group.id, actor);
+    expect((await services.distributionQueue.claim(actor, TEST_CHATS.distribution))!.id).toBe(i.id); await services.messages.flush();
+    await services.distribution.assign(i.id, group.id, actor); await services.messages.flush();
     const returnNotice = await prisma.outboundMessage.findFirstOrThrow({ where: { incidentId: i.id, dedupeKey: { startsWith: 'redistribution-notice:' } } });
     expect(max.editMessage.mock.calls.filter((c: any[]) => c[0] === returnNotice.firstMessageId).at(-1)[2]).toEqual([]);
     const reassigned = (await services.repository.findById(i.id))!;
     expect(reassigned.sectorMessageId).not.toBe(before.sectorMessageId); expect(reassigned.sectorMessageId).toBeTruthy();
-    await services.sector.returnToDistribution(i.id, actor, TEST_CHATS.sector, 'Нужно другое ведомство');
-    await services.distribution.assign(i.id, group.id, actor);
+    await services.sector.returnToDistribution(i.id, actor, TEST_CHATS.sector, 'Нужно другое ведомство'); await services.messages.flush();
+    await services.distribution.assign(i.id, group.id, actor); await services.messages.flush();
     expect((await services.repository.findById(i.id))!.sectorMessageId).not.toBe(reassigned.sectorMessageId);
     expect(await prisma.incidentHistory.count({ where: { incidentId: i.id, action: 'REDISTRIBUTION_REQUESTED' } })).toBe(2);
   });
   it('rejects returns from another chat/owner and after review; queue failures roll everything back', async () => {
-    const i = await create(); await services.sector.takeInWork(i.id, actor);
+    const i = await create(); await services.sector.takeInWork(i.id, actor); await services.messages.flush();
     await expect(services.sector.returnToDistribution(i.id, colleague, TEST_CHATS.sector, 'Ошибка')).rejects.toThrow();
     await expect(services.sector.returnToDistribution(i.id, actor, TEST_CHATS.review, 'Ошибка')).rejects.toThrow();
     vi.spyOn(outbox, 'queueDistributionRefresh').mockRejectedValueOnce(new Error('Queue failed'));
@@ -134,7 +134,7 @@ describeIntegration('staff reservations and redistribution', () => {
     await expect(services.sector.returnToDistribution(i.id, actor, TEST_CHATS.sector, 'Ошибка')).rejects.toThrow();
   });
   it('serializes return against answer submission with only one winning operation', async () => {
-    const i = await create(); await services.sector.takeInWork(i.id, actor);
+    const i = await create(); await services.sector.takeInWork(i.id, actor); await services.messages.flush();
     const result = await Promise.allSettled([services.sector.returnToDistribution(i.id, actor, TEST_CHATS.sector, 'Ошибка'), services.answers.submit(i.id, actor, 'Ответ')]);
     expect(result.filter(r => r.status === 'fulfilled')).toHaveLength(1);
     const fresh = (await services.repository.findById(i.id))!;
@@ -143,7 +143,7 @@ describeIntegration('staff reservations and redistribution', () => {
   });
   it('accepts a return reason through the real input session and keeps it across card refreshes', async () => {
     const i = await create();
-    await handleIncidentCallback({ services, actor, chatId: TEST_CHATS.sector }, { kind: 'incident', action: 'redistribute', incidentId: i.id });
+    await handleIncidentCallback({ services, actor, chatId: TEST_CHATS.sector }, { kind: 'incident', action: 'redistribute', incidentId: i.id }); await services.messages.flush();
     await prisma.$transaction(tx => queueStaffRefresh(tx, i.id)); await services.messages.flush();
     const session = (await services.sessions.find(actor.maxUserId, TEST_CHATS.sector))!;
     expect(session).toBeTruthy();
@@ -152,7 +152,7 @@ describeIntegration('staff reservations and redistribution', () => {
     await handleOperatorMessage(services, actor, TEST_CHATS.sector, { body: { text: 'Дорога в ведении другой организации', attachments: [] } } as never, session);
     expect((await services.repository.findById(i.id))!.status).toBe('IN_PROGRESS');
     const confirmation = (await services.sessions.find(actor.maxUserId, TEST_CHATS.sector))!.data as any;
-    await handleIncidentCallback({ services, actor, chatId: TEST_CHATS.sector }, { kind: 'incident', action: 'action-confirm', incidentId: i.id, argument: confirmation.confirmation.token });
+    await handleIncidentCallback({ services, actor, chatId: TEST_CHATS.sector }, { kind: 'incident', action: 'action-confirm', incidentId: i.id, argument: confirmation.confirmation.token }); await services.messages.flush();
     expect((await services.repository.findById(i.id))!.status).toBe('DISTRIBUTION');
     expect(await services.sessions.find(actor.maxUserId, TEST_CHATS.sector)).toBeNull();
   });

@@ -93,7 +93,7 @@ export class SectorService {
     if (!incident?.sectorMessageId || !incident.assignedGroup) return;
     await this.prisma.$transaction(tx => queueSectorRefresh(tx, incidentId,
       `sector-status:${incidentId}:refresh:${incident.updatedAt.getTime()}`, true), TRANSACTION_OPTIONS);
-    await this.messages.flush();
+    this.messages.wake();
   }
 
   /**
@@ -121,7 +121,7 @@ export class SectorService {
         metadata: { responder: actor.displayName, until: until.toISOString() } }, tx);
       await queueSectorRefresh(tx, incidentId, `sector-claim:${randomUUID()}`, true);
     }, TRANSACTION_OPTIONS);
-    await this.messages.flush();
+    this.messages.wake();
     return (await this.repository.findById(incidentId))!;
   }
 
@@ -140,7 +140,7 @@ export class SectorService {
       await this.history.record({ incidentId, action: 'SECTOR_RELEASED', actorMaxUserId: actor.maxUserId, actorRole: actor.role }, tx);
       await queueSectorRefresh(tx, incidentId, `sector-release:${randomUUID()}`, true);
     }, TRANSACTION_OPTIONS);
-    await this.messages.flush();
+    this.messages.wake();
   }
 
   async returnToDistribution(incidentId: string, actor: ResolvedActor, chatId: bigint, reason: string, expectedGroupId?: string): Promise<void> {
@@ -171,7 +171,7 @@ export class SectorService {
         delivery: { dedupeKey: `redistribution-notice:${event.id}` },
       }, incidentId);
     }, TRANSACTION_OPTIONS);
-    await this.messages.flush();
+    this.messages.wake();
   }
 
   /** §32 — send the rework request back to the sector chat. */

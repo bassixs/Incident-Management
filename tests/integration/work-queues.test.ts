@@ -19,7 +19,7 @@ describeIntegration('working chat queues and obsolete actions', () => {
   let sequence: number;
   beforeAll(() => { pushSchemaOnce(); prisma = createTestPrisma(); });
   afterAll(() => prisma.$disconnect());
-  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+  afterEach(async () => { services.messages.stop(); await services.messages.waitForIdle(); vi.useRealTimers(); vi.restoreAllMocks(); });
   beforeEach(async () => {
     await resetDatabase(prisma); await seedCategories(prisma);
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -48,7 +48,7 @@ describeIntegration('working chat queues and obsolete actions', () => {
   async function create(age = 0, groupCode: string = GROUP_CODES.facility) {
     const i = await services.incidents.create({ requester: { maxUserId: 6000n + BigInt(++sequence), name: 'Иван Иванов', phone: '+79001112233' }, text: 'Не работает освещение' });
     const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: groupCode } });
-    await services.distribution.assign(i.id, group.id, actor);
+    await services.distribution.assign(i.id, group.id, actor); await services.messages.flush();
     return prisma.incident.update({ where: { id: i.id }, data: { createdAt: new Date(Date.now() - age * 60_000) } });
   }
   async function reviewing(age = 0) { const i = await create(age); await services.answers.submit(i.id, actor, 'Освещение восстановлено.', []); return i; }
@@ -57,41 +57,42 @@ describeIntegration('working chat queues and obsolete actions', () => {
   it('gives concurrent profile workers distinct oldest incidents and never another organization', async () => {
     const oldest = await create(60); const next = await create(30); const foreign = await create(120, GROUP_CODES.it);
     await Promise.all([services.workQueues.claim(actor, TEST_CHATS.sector), services.workQueues.claim(colleague, TEST_CHATS.sector)]);
+    await services.messages.flush();
     const rows = await prisma.incident.findMany({ where: { id: { in: [oldest.id, next.id] } } });
     expect(rows.every(i => i.status === 'IN_PROGRESS')).toBe(true);
     expect(new Set(rows.map(i => i.currentResponderId)).size).toBe(2);
     expect((await prisma.incident.findUniqueOrThrow({ where: { id: foreign.id } })).status).toBe('ASSIGNED');
     await expect(services.workQueues.open(actor, TEST_CHATS.sector, foreign.id)).rejects.toThrow();
-    await services.workQueues.list(actor, TEST_CHATS.sector, 0, true);
+    await services.workQueues.list(actor, TEST_CHATS.sector, 0, true); await services.messages.flush();
     const mine = sent.at(-1)!.text; expect(mine).toContain('Всего: 1'); expect(mine).not.toContain(foreign.publicCode);
   });
   it('reserves review work, prevents another approval, releases and expires reservations', async () => {
     const one = await reviewing(60); const two = await reviewing(30);
-    await services.workQueues.claim(actor, TEST_CHATS.review);
-    await services.workQueues.claim(actor, TEST_CHATS.review);
+    await services.workQueues.claim(actor, TEST_CHATS.review); await services.messages.flush();
+    await services.workQueues.claim(actor, TEST_CHATS.review); await services.messages.flush();
     expect(await prisma.actionLock.count({ where: { action: 'review-queue', maxUserId: actor.maxUserId } })).toBe(1);
     await expect(services.review.approve(one.id, colleague)).rejects.toThrow('другим сотрудником');
     await expect(services.review.requestRevision(one.id, 'Дополнить', colleague)).rejects.toThrow('другим сотрудником');
-    await services.workQueues.claim(colleague, TEST_CHATS.review);
+    await services.workQueues.claim(colleague, TEST_CHATS.review); await services.messages.flush();
     expect(await prisma.actionLock.count({ where: { action: 'review-queue' } })).toBe(2);
-    await services.workQueues.release(actor, TEST_CHATS.review, one.id);
-    await services.workQueues.release(colleague, TEST_CHATS.review, two.id);
-    await services.workQueues.claim(actor, TEST_CHATS.review);
+    await services.workQueues.release(actor, TEST_CHATS.review, one.id); await services.messages.flush();
+    await services.workQueues.release(colleague, TEST_CHATS.review, two.id); await services.messages.flush();
+    await services.workQueues.claim(actor, TEST_CHATS.review); await services.messages.flush();
     vi.setSystemTime(Date.now() + 16 * 60_000);
-    await services.workQueues.claim(colleague, TEST_CHATS.review);
+    await services.workQueues.claim(colleague, TEST_CHATS.review); await services.messages.flush();
     expect((await prisma.actionLock.findUniqueOrThrow({ where: { key: `review-queue:${one.id}` } })).maxUserId).toBe(colleague.maxUserId);
   });
   it('removes actions from review originals and all copies after delivery and from sector copies after submission', async () => {
-    const i = await create(); await services.workQueues.open(actor, TEST_CHATS.sector, i.id);
+    const i = await create(); await services.workQueues.open(actor, TEST_CHATS.sector, i.id); await services.messages.flush();
     await services.answers.submit(i.id, actor, 'Работы выполнены.', []);
-    await services.workQueues.claim(actor, TEST_CHATS.review); await services.workQueues.open(colleague, TEST_CHATS.review, i.id);
+    await services.workQueues.claim(actor, TEST_CHATS.review); await services.messages.flush(); await services.workQueues.open(colleague, TEST_CHATS.review, i.id); await services.messages.flush();
     const copies = await prisma.outboundMessage.findMany({ where: { incidentId: i.id, dedupeKey: { startsWith: 'work-copy:' } } });
     await services.review.approve(i.id, actor); await services.messages.flush();
     const fresh = await services.repository.findById(i.id);
     for (const mid of [fresh!.reviewMessageId!, ...copies.map(c => c.firstMessageId!)]) expect(lastEdit(mid)[2]).toEqual([]);
     expect(lastEdit(fresh!.reviewMessageId!)[1]).toContain('доставлен');
     expect(await prisma.actionLock.count({ where: { incidentId: i.id, action: 'review-queue' } })).toBe(0);
-    await services.workQueues.list(actor, TEST_CHATS.review); expect(sent.at(-1)!.text).toContain('Всего: 0');
+    await services.workQueues.list(actor, TEST_CHATS.review); await services.messages.flush(); expect(sent.at(-1)!.text).toContain('Всего: 0');
   });
   it('retires revision buttons and does not resurrect an old review version after resubmission', async () => {
     const i = await reviewing(); const original = (await services.repository.findById(i.id))!.reviewMessageId!;
@@ -108,7 +109,7 @@ describeIntegration('working chat queues and obsolete actions', () => {
     await services.review.requestRevision(i.id, 'Добавьте результаты обследования.', actor);
     await services.answers.submit(i.id, actor, 'Подробный ответ. '.repeat(350), []);
     const latest = (await services.repository.findById(i.id))!.answers.at(-1)!;
-    await services.workQueues.open(actor, TEST_CHATS.review, i.id);
+    await services.workQueues.open(actor, TEST_CHATS.review, i.id); await services.messages.flush();
     const publications = await prisma.outboundMessage.findMany({ where: { incidentId: i.id, answerId: latest.id, OR: [{ trackingType: 'REVIEW_CARD' }, { dedupeKey: { startsWith: 'work-copy:review:' } }] } });
     expect(publications).toHaveLength(2);
     for (const row of publications) {
@@ -118,7 +119,7 @@ describeIntegration('working chat queues and obsolete actions', () => {
       expect((row.payload as any).text).toContain('НОВЫЙ ОТВЕТ (версия 2):');
     }
     expect(sent.filter(s => s.chat === TEST_CHATS.review).every(s => Array.from(s.text).length <= 4000)).toBe(true);
-    await services.workQueues.claimReview(actor, TEST_CHATS.review, i.id);
+    await services.workQueues.claimReview(actor, TEST_CHATS.review, i.id); await services.messages.flush();
     for (const row of publications) {
       expect(lastEdit(row.firstMessageId!)[1]).not.toContain('Свободно');
       expect(lastEdit((row.payload as any).keyboardMessageId)[1]).toContain(actor.displayName);
@@ -133,7 +134,7 @@ describeIntegration('working chat queues and obsolete actions', () => {
     const a = await reviewing(); const b = await reviewing();
     await services.review.approve(a.id, actor); await services.review.approve(b.id, actor);
     await prisma.incidentAnswer.updateMany({ where: { incidentId: b.id }, data: { deliveredAt: null } });
-    await services.workQueues.list(actor, TEST_CHATS.review, 0, false, true);
+    await services.workQueues.list(actor, TEST_CHATS.review, 0, false, true); await services.messages.flush();
     await services.messages.flush();
     const summary = sent.findLast(s => s.chat === TEST_CHATS.review && s.text.includes('СООБЩЕНИЯ ЗА СЕГОДНЯ'))!;
     expect(summary.text).toContain('Отработано: 1'); expect(summary.text).toContain('Ожидает доставки: 1');
@@ -143,7 +144,7 @@ describeIntegration('working chat queues and obsolete actions', () => {
     expect(routing).not.toMatch(/Отработано|Ожидает доставки|На согласовании/);
   });
   it('recreates only confirmed missing panels even when MAX would accept editing deleted messages', async () => {
-    await services.workQueues.refresh(actor, TEST_CHATS.sector);
+    await services.workQueues.refresh(actor, TEST_CHATS.sector); await services.messages.flush();
     const first = (await prisma.systemSetting.findUniqueOrThrow({ where: { key: workPanelKey(TEST_CHATS.sector) } })).value;
     const read = max.api.getMessage.getMockImplementation();
     max.api.getMessage.mockImplementation(async (mid: string) => {
@@ -152,10 +153,10 @@ describeIntegration('working chat queues and obsolete actions', () => {
     });
     const history = max.getChatMessages.getMockImplementation();
     max.getChatMessages.mockImplementation(async (chat: bigint) => ({ messages: (await history(chat)).messages.filter((m: any) => m.body.mid !== first) }));
-    await services.workQueues.refresh(actor, TEST_CHATS.sector);
+    await services.workQueues.refresh(actor, TEST_CHATS.sector); await services.messages.flush();
     expect((await prisma.systemSetting.findUniqueOrThrow({ where: { key: workPanelKey(TEST_CHATS.sector) } })).value).toBe(first);
     vi.setSystemTime(Date.now() + 40_000);
-    await services.workQueues.refresh(actor, TEST_CHATS.sector);
+    await services.workQueues.refresh(actor, TEST_CHATS.sector); await services.messages.flush();
     const second = (await prisma.systemSetting.findUniqueOrThrow({ where: { key: workPanelKey(TEST_CHATS.sector) } })).value;
     expect(second).not.toBe(first);
     await Promise.all([services.workQueues.refresh(actor, TEST_CHATS.sector), services.workQueues.refresh(colleague, TEST_CHATS.sector)]);
@@ -163,21 +164,21 @@ describeIntegration('working chat queues and obsolete actions', () => {
     expect((await prisma.systemSetting.findUniqueOrThrow({ where: { key: workPanelKey(TEST_CHATS.sector) } })).value).toBe(second);
     expect(sent.filter(s => s.text.includes('ОЧЕРЕДЬ ПРОФИЛЬНОГО')).length).toBe(2);
     max.api.getMessage.mockRejectedValueOnce(new Error('Network timeout'));
-    await services.workQueues.refresh(actor, TEST_CHATS.sector);
+    await services.workQueues.refresh(actor, TEST_CHATS.sector); await services.messages.flush();
     expect(sent.filter(s => s.text.includes('ОЧЕРЕДЬ ПРОФИЛЬНОГО')).length).toBe(2);
   });
   it('skips unchanged panel edits while checking existence and restoring a lost pin', async () => {
-    await services.workQueues.refresh(actor, TEST_CHATS.sector);
+    await services.workQueues.refresh(actor, TEST_CHATS.sector); await services.messages.flush();
     const panel = sent.find(s => s.text.includes('ОЧЕРЕДЬ ПРОФИЛЬНОГО'))!;
     max.api.getMessage.mockImplementation(async () => ({ sender: { user_id: 777, is_bot: true }, recipient: { chat_id: Number(TEST_CHATS.sector) }, body: { mid: panel.mid, text: panel.text, attachments: panel.extra.attachments } }));
     max.api.getPinnedMessage.mockResolvedValue({ message: { body: { mid: panel.mid } } });
     max.editMessage.mockClear(); max.api.pinMessage.mockClear();
-    await services.workQueues.refresh(actor, TEST_CHATS.sector);
+    await services.workQueues.refresh(actor, TEST_CHATS.sector); await services.messages.flush();
     expect(max.editMessage).not.toHaveBeenCalled(); expect(max.api.pinMessage).not.toHaveBeenCalled();
     max.api.getPinnedMessage.mockResolvedValue({ message: null });
-    await services.workQueues.refresh(actor, TEST_CHATS.sector);
+    await services.workQueues.refresh(actor, TEST_CHATS.sector); await services.messages.flush();
     expect(max.editMessage).not.toHaveBeenCalled(); expect(max.api.pinMessage).toHaveBeenCalledTimes(1);
-    await create(); await services.workQueues.refresh(actor, TEST_CHATS.sector);
+    await create(); await services.workQueues.refresh(actor, TEST_CHATS.sector); await services.messages.flush();
     expect(max.editMessage).toHaveBeenCalledWith(panel.mid, expect.stringContaining('Ожидают обработки: 1'), expect.anything());
   });
   it('uses Moscow creation-day boundaries, paginates, and keeps profile daily summaries scoped', async () => {
@@ -185,10 +186,10 @@ describeIntegration('working chat queues and obsolete actions', () => {
     const previous = await create(); const start = new Date(Date.now()); start.setUTCHours(-3, 0, 0, 0);
     await prisma.incident.update({ where: { id: previous.id }, data: { createdAt: new Date(start.getTime() - 1) } });
     await prisma.incident.update({ where: { id: mine.id }, data: { createdAt: start } });
-    await services.workQueues.list(actor, TEST_CHATS.sector, 0, false, true);
+    await services.workQueues.list(actor, TEST_CHATS.sector, 0, false, true); await services.messages.flush();
     expect(sent.at(-1)!.text).toContain(mine.publicCode); expect(sent.at(-1)!.text).not.toContain(foreign.publicCode); expect(sent.at(-1)!.text).not.toContain(previous.publicCode);
     for (let n = 0; n < 8; n++) await create();
-    await services.workQueues.list(actor, TEST_CHATS.review, 1, false, true);
+    await services.workQueues.list(actor, TEST_CHATS.review, 1, false, true); await services.messages.flush();
     expect(sent.at(-1)!.text).toContain('Всего: 10. Страница 2 из 2');
     await expect(services.workQueues.list(actor, 555n, 0, false, true)).rejects.toThrow();
   });
