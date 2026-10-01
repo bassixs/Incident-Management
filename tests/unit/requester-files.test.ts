@@ -71,7 +71,7 @@ it('routes bound manual phone input exactly once before commands and staff text 
   Object.assign(ctx.update, { draftPhoneInput: contact });
   await handleMessageUpdate(services as never, ctx as never);
   expect(handleRequesterMessage).toHaveBeenCalledTimes(1);
-  expect(handleRequesterMessage).toHaveBeenCalledWith(services, expect.anything(), 5001n, message, contact);
+  expect(handleRequesterMessage).toHaveBeenCalledWith(services, expect.anything(), 5001n, message, contact, undefined);
   expect(findCommand).not.toHaveBeenCalled();
   expect(services.prisma.privateWorkItem.findFirst).not.toHaveBeenCalled();
   expect(services.messages.send).not.toHaveBeenCalled();

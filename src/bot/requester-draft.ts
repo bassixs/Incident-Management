@@ -1,3 +1,4 @@
+import { bindDraftKeyboard, sendDraftScreen, STALE_DRAFT } from './draft-screen';
 import { MaxError } from '@maxhub/max-bot-api';
 import type { AppServices } from '../app/container';
 import type { IncomingMedia } from '../media/media.service';
@@ -83,15 +84,21 @@ export async function showIncidentDraftPreview(
   const previousMessageId = cleanDraft.previewMessageId;
   delete cleanDraft.previewMessageId;
   cleanDraft.previewDeliveryPending = true;
+  cleanDraft.draftTouchedAt = Date.now();
+  const keyboard = bindDraftKeyboard(cleanDraft, incidentDraftConfirmationKeyboard(cleanDraft.previewToken, !!draft.requesterPhone));
   expectedSession ??= await services.sessions.find(maxUserId, chatId) ?? undefined;
   if (expectedSession) {
+    if (data.draftToken && services.sessions.readData(expectedSession).draftToken !== data.draftToken) throw new ValidationError(STALE_DRAFT);
     if (!await services.sessions.replaceCurrent(expectedSession, SessionType.WAITING_INCIDENT_CONFIRMATION, cleanDraft)) {
       throw new ValidationError('Черновик изменился. Используйте текущую карточку сообщения.');
     }
     expectedSession = { ...expectedSession, type: SessionType.WAITING_INCIDENT_CONFIRMATION, data: { ...cleanDraft } as never };
-  } else expectedSession = await services.sessions.start({
-    maxUserId, chatId, type: SessionType.WAITING_INCIDENT_CONFIRMATION, data: cleanDraft,
-  });
+  } else {
+    if (data.draftToken) throw new ValidationError(STALE_DRAFT);
+    expectedSession = await services.sessions.start({
+      maxUserId, chatId, type: SessionType.WAITING_INCIDENT_CONFIRMATION, data: cleanDraft,
+    });
+  }
   await retireIncidentDraftPreview(services, previousMessageId);
   let attachments: OutboundAttachment[];
   let validatingPhotos = true;
@@ -104,7 +111,7 @@ export async function showIncidentDraftPreview(
         problemMunicipalityName: draft.problemMunicipalityName, problemLocality: draft.problemLocality,
         draftText: draft.draftText, photoCount: attachments.length,
         requesterPhone: draft.requesterPhone }, category?.name),
-      keyboard: incidentDraftConfirmationKeyboard(cleanDraft.previewToken, !!draft.requesterPhone), immediatePreview: true,
+      keyboard, immediatePreview: true,
       ...(attachments.length ? { attachments } : {}),
     });
     if (!sent?.firstMessageId || sent.state !== 'sent') throw new Error('Preview delivery not confirmed');
@@ -120,7 +127,7 @@ export async function showIncidentDraftPreview(
       if (currentData.draftToken !== cleanDraft.draftToken || currentData.previewToken !== cleanDraft.previewToken) return;
       // Do not enqueue a static preview/phone or stale retry notice in the outbox.
       // If MAX is still down, /start or a plain message resumes the saved session.
-      await services.messages.send({ userId: maxUserId }, {
+      await sendDraftScreen(services, maxUserId, chatId, {
         text: 'Не удалось показать карточку. Данные сохранены, сообщение не отправлено. Нажмите «Повторить показ карточки» или отправьте «Продолжить». Также можно использовать /start.',
         keyboard: [[{ type: 'callback', text: 'Повторить показ карточки', payload: `user:draft-retry:${cleanDraft.previewToken}` }],
           [{ type: 'callback', text: 'Отмена', payload: `user:draft-cancel:${cleanDraft.previewToken}` }]],
@@ -137,7 +144,7 @@ export async function showIncidentDraftPreview(
     const reason = isUnavailablePhoto(error) ? 'Фотография больше недоступна в MAX.' : error instanceof ValidationError
       ? error.message
       : 'Не удалось показать фотографии через MAX.';
-    await services.messages.send({ userId: maxUserId }, {
+    await sendDraftScreen(services, maxUserId, chatId, {
       text: `${reason}\n\nТекст сообщения и остальные данные сохранены. Отправьте все нужные фотографии заново, при необходимости уменьшив их размер, или нажмите «Продолжить без фотографий».`,
       keyboard: incidentDraftPhotoRetryKeyboard(),
     });

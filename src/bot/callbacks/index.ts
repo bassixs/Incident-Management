@@ -1,3 +1,4 @@
+import { isResidentDraft } from '../../sessions/operator-session.service';
 import { reportActionError } from '../../utils/errors';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -149,7 +150,7 @@ async function dispatchCallback(
       if (payload.action === 'release') return withConfirmationLock(services, actor.maxUserId, chatId!, () => handleQueueCallback(services, actor, chatId, payload));
       return handleQueueCallback(services, actor, chatId, payload);
     case 'user':
-      if (isDialog) await exitPersonalWork(services, actor.maxUserId);
+      if (!isDialog) return 'Откройте личный диалог с ботом.';
       return handleUserCallback({ services, actor, chatId, messageId, callbackId }, payload);
     case 'incident':
       await assertWorkingChat(services, chatId, isDialog);
@@ -212,6 +213,8 @@ async function handleSessionCallback(
 ): Promise<string> {
   if (chatId === undefined) return 'Действие недоступно.';
 
+  const resident = await services.sessions.find(maxUserId, chatId);
+  if (resident && isResidentDraft(resident.type)) return 'Используйте текущие кнопки черновика или /start.';
   if (action === 'cancel') {
     await cancelStaffSession(services, maxUserId, chatId);
     return 'Незавершённое действие отменено.';

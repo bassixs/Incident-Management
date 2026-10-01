@@ -1,3 +1,7 @@
+import { exitPersonalWork } from '../../work-queues/private-workspace';
+import { consumeDraftButton, isDraftAction, saveDraftStep, sendDraftScreen, STALE_DRAFT, withResidentDraftLock } from '../draft-screen';
+import { isResidentDraft } from '../../sessions/operator-session.service';
+import type { CompositeMessage } from '../../max/max-message.service';
 import { sendPhoneInputPrompt } from '../requester-phone';
 import { randomUUID } from 'node:crypto';
 import { SessionType } from '@prisma/client';
@@ -51,8 +55,25 @@ export type UserCallbackContext = {
   callbackId: string;
 };
 
+export async function handleUserCallback(context: UserCallbackContext, payload: Extract<CallbackPayload, { kind: 'user' }>): Promise<string | undefined> {
+  return withResidentDraftLock(context.services, context.actor.maxUserId, context.chatId ?? context.actor.maxUserId, async () => {
+    if (isDraftAction(payload.action)) payload = await consumeDraftButton(context.services, context.actor.maxUserId, context.chatId ?? context.actor.maxUserId, payload);
+    await exitPersonalWork(context.services, context.actor.maxUserId);
+    return dispatchUserCallback(context, payload);
+  });
+}
+
+async function sendResidentResponse(context: UserCallbackContext, message: CompositeMessage): Promise<void> {
+  const { services, actor } = context;
+  const chatId = context.chatId ?? actor.maxUserId;
+  const current = await services.sessions.find(actor.maxUserId, chatId);
+  const menu = message.keyboard?.flat().some(b => b.type === 'callback' && b.payload === 'user:new');
+  if (current && isResidentDraft(current.type) && !menu) await sendDraftScreen(services, actor.maxUserId, chatId, message);
+  else await services.messages.send({ userId: actor.maxUserId }, message);
+}
+
 /** Requester-side buttons (§53, §7, §54, §55). Never touches other people's data. */
-export async function handleUserCallback(
+async function dispatchUserCallback(
   context: UserCallbackContext,
   payload: Extract<CallbackPayload, { kind: 'user' }>,
 ): Promise<string | undefined> {
@@ -118,6 +139,19 @@ export async function handleUserCallback(
       await services.messages.send(target, { text: greetingText(), keyboard: mainMenuKeyboard() });
       return;
 
+    case 'draft-resume': {
+      const current = await services.sessions.find(actor.maxUserId, context.chatId ?? actor.maxUserId);
+      if (!current) throw new ValidationError(STALE_DRAFT);
+      await resumeResidentDraft(context, current);
+      return;
+    }
+    case 'draft-reset': {
+      const current = await services.sessions.find(actor.maxUserId, context.chatId ?? actor.maxUserId);
+      if (!current || !await services.sessions.clearCurrent(current)) throw new ValidationError(STALE_DRAFT);
+      await retireIncidentDraftPreview(services, services.sessions.readData(current).previewMessageId);
+      await beginNewIncident(context);
+      return;
+    }
     case 'draft-retry': {
       const chatId = context.chatId ?? actor.maxUserId;
       const current = await services.sessions.find(actor.maxUserId, chatId);
@@ -166,19 +200,19 @@ export async function handleUserCallback(
         });
       } catch (error) {
         if (error instanceof RateLimitError) {
-          await services.sessions.clear(actor.maxUserId, chatId);
-          await services.messages.send(target, { text: error.message, keyboard: mainMenuKeyboard() });
+          await services.messages.send(target, { text: error.message });
+          await offerResidentDraft(context);
           return 'Дневной лимит исчерпан';
         }
         if (error instanceof ValidationError) {
-          await services.messages.send(target, { text: error.message });
+          await sendResidentResponse(context, { text: error.message });
           return 'Проверьте данные';
         }
         log.error(
           incidentLogFields({ maxUserId: actor.maxUserId, chatId, action: 'INCIDENT_CREATED' }),
           `incident registration failed: ${error instanceof Error ? error.message : String(error)}`,
         );
-        await services.messages.send(target, {
+        await sendResidentResponse(context, {
           text: 'Не удалось зарегистрировать сообщение. Попробуйте ещё раз позже.',
         });
         return 'Не удалось зарегистрировать';
@@ -195,7 +229,7 @@ export async function handleUserCallback(
           `failed to publish distribution card: ${error instanceof Error ? error.message : String(error)}`,
         ),
       );
-      await services.messages.send(target, {
+      await sendResidentResponse(context, {
         text: registrationConfirmation(incident),
         keyboard: mainMenuKeyboard(),
         delivery: { dedupeKey: `registration:${incident.id}` },
@@ -221,7 +255,7 @@ export async function handleUserCallback(
       delete draft.previewMessageId;
       if (!await services.sessions.replaceCurrent(current, SessionType.WAITING_INCIDENT_EDIT_VALUE, draft)) throw new ValidationError('Черновик изменился.');
       await retireIncidentDraftPreview(services, data.previewMessageId);
-      await sendPhoneInputPrompt(services, actor.maxUserId, draft);
+      await sendPhoneInputPrompt(services, actor.maxUserId, draft, undefined, chatId);
       return;
     }
 
@@ -232,13 +266,13 @@ export async function handleUserCallback(
       const chatId = context.chatId ?? actor.maxUserId;
       const current = await services.sessions.find(actor.maxUserId, chatId);
       const requiredType = payload.action === 'draft-phone-remove' ? SessionType.WAITING_INCIDENT_EDIT_SELECTION : SessionType.WAITING_INCIDENT_CONFIRMATION;
-      if (!current || (current.type !== requiredType && !(payload.action === 'draft-cancel' && current.type === SessionType.WAITING_INCIDENT_EDIT_VALUE && services.sessions.readData(current).draftEditField === 'phone'))) throw new ValidationError('Кнопка устарела. Используйте текущую карточку сообщения.');
+      if (!current || (payload.action === 'draft-cancel' ? !isResidentDraft(current.type) : current.type !== requiredType)) throw new ValidationError('Кнопка устарела. Используйте текущую карточку сообщения.');
       const data = { ...services.sessions.readData(current) };
       assertPreviewToken(data, payload.argument);
       if (payload.action === 'draft-cancel') {
         if (!await services.sessions.clearCurrent(current)) throw new ValidationError('Черновик изменился. Используйте текущую карточку сообщения.');
         await retireIncidentDraftPreview(services, data.previewMessageId);
-        await services.messages.send(target, { text: 'Черновик и номер удалены. Сообщение не отправлено.', keyboard: mainMenuKeyboard() });
+        await sendResidentResponse(context, { text: 'Черновик и номер удалены. Сообщение не отправлено.', keyboard: mainMenuKeyboard() });
         return;
       }
       delete data.requesterPhone;
@@ -269,13 +303,13 @@ export async function handleUserCallback(
       await retireIncidentDraftPreview(services, data.previewMessageId);
       delete draft.previewMessageId;
       draft.previewToken = randomUUID();
-      await services.sessions.start({
+      await saveDraftStep(services, {
         maxUserId: actor.maxUserId,
         chatId,
         type: SessionType.WAITING_INCIDENT_EDIT_SELECTION,
         data: draft,
       });
-      await services.messages.send(target, {
+      await sendResidentResponse(context, {
         text: incidentDraftEditPrompt(),
         keyboard: incidentDraftEditKeyboard(draft.draftMedia.length > 0, !!draft.requesterPhone, draft.previewToken),
       });
@@ -299,36 +333,33 @@ export async function handleUserCallback(
       };
       const fieldLabel = payload.argument ? fieldLabels[payload.argument] : undefined;
       if (!fieldLabel) throw new ValidationError('Кнопка устарела. Вернитесь к проверке сообщения.');
-      if (context.messageId) {
-        await services.messages.finalizeCard(context.messageId, `Исправляется: ${fieldLabel}.`);
-      }
       switch (payload.argument) {
         case 'text':
-          await services.sessions.start({ maxUserId: actor.maxUserId, chatId, type: SessionType.WAITING_INCIDENT_EDIT_VALUE, data: { ...draft, draftEditField: 'text' } });
-          await services.messages.send(target, { text: 'Отправьте новый текст сообщения. Телефон для связи можно указать; ФИО, документы и другие запрещённые личные сведения указывать нельзя.' });
+          await saveDraftStep(services, { maxUserId: actor.maxUserId, chatId, type: SessionType.WAITING_INCIDENT_EDIT_VALUE, data: { ...draft, draftEditField: 'text' } });
+          await sendResidentResponse(context, { text: 'Отправьте новый текст сообщения. Телефон для связи можно указать; ФИО, документы и другие запрещённые личные сведения указывать нельзя.' });
           return;
         case 'category': {
           const categories = await services.categories.listActive();
-          await services.sessions.start({
+          await saveDraftStep(services, {
             maxUserId: actor.maxUserId,
             chatId,
             type: SessionType.WAITING_INCIDENT_SELECTION,
-            data: { ...draft, draftEditField: 'category' },
+            data: { ...draft, draftEditField: 'category', draftStage: 'category' },
           });
-          await services.messages.send(target, {
+          await sendResidentResponse(context, {
             text: categoryPromptText(),
             keyboard: requesterCategoryKeyboard(categories, 0),
           });
           return undefined;
         }
         case 'location':
-          await services.sessions.start({
+          await saveDraftStep(services, {
             maxUserId: actor.maxUserId,
             chatId,
             type: SessionType.WAITING_INCIDENT_SELECTION,
-            data: { ...draft, draftEditField: 'location' },
+            data: { ...draft, draftEditField: 'location', draftStage: 'municipality' },
           });
-          await services.messages.send(target, {
+          await sendResidentResponse(context, {
             text: municipalityPromptText(PROBLEM_MUNICIPALITIES.length),
             keyboard: requesterMunicipalityKeyboard(
               draft.selectedCategoryId,
@@ -338,7 +369,7 @@ export async function handleUserCallback(
           });
           return undefined;
         case 'photo':
-          await services.messages.send(target, {
+          await sendResidentResponse(context, {
             text: incidentDraftPhotoPrompt(draft.draftMedia.length > 0),
             keyboard: incidentDraftPhotoKeyboard(draft.draftMedia.length > 0),
           });
@@ -361,12 +392,6 @@ export async function handleUserCallback(
       if (payload.argument !== 'remove' && payload.argument !== 'replace') {
         throw new ValidationError('Кнопка устарела. Вернитесь к проверке сообщения.');
       }
-      if (context.messageId) {
-        await services.messages.finalizeCard(
-          context.messageId,
-          payload.argument === 'remove' ? 'Фотографии удаляются.' : 'Ожидаются новые фотографии.',
-        );
-      }
       if (payload.argument === 'remove') {
         await showIncidentDraftPreview(services, actor.maxUserId, chatId, {
           ...draft,
@@ -374,47 +399,43 @@ export async function handleUserCallback(
         });
         return 'Фотографии удалены';
       }
-      await services.sessions.start({
+      await saveDraftStep(services, {
         maxUserId: actor.maxUserId,
         chatId,
         type: SessionType.WAITING_INCIDENT_EDIT_VALUE,
         data: { ...draft, draftEditField: 'photo' },
       });
-      await services.messages.send(target, {
+      await sendResidentResponse(context, {
         text: 'Отправьте одну или несколько новых фотографий. Они заменят ранее приложенные.',
       });
       return undefined;
     }
 
     case 'location-page': {
-      if (!context.messageId) return undefined;
       await requireSelectionDraft(services, actor.maxUserId, context.chatId);
       const [categoryToken, pageToken] = parseLocationArgument(payload.argument, 2);
       const selectedCategoryId = await requireActiveCategory(services, categoryToken);
       const page = Number.parseInt(pageToken, 10);
-      await services.messages.editCardKeyboard(
-        context.messageId,
-        municipalityPromptText(PROBLEM_MUNICIPALITIES.length),
-        requesterMunicipalityKeyboard(
+      await sendDraftScreen(services, actor.maxUserId, context.chatId ?? actor.maxUserId, {
+        text: municipalityPromptText(PROBLEM_MUNICIPALITIES.length),
+        keyboard: requesterMunicipalityKeyboard(
           selectedCategoryId,
           PROBLEM_MUNICIPALITIES,
           Number.isFinite(page) ? page : 0,
         ),
-      );
+      });
       return undefined;
     }
 
-    /** Paging the сфера picker: rewrite the same message, no new ones. */
+    /** Paging publishes a new version; previous keyboards fail closed. */
     case 'page': {
-      if (!context.messageId) return undefined;
       await requireSelectionDraft(services, actor.maxUserId, context.chatId);
       const categories = await services.categories.listActive();
       const page = Number.parseInt(payload.argument ?? '0', 10);
-      await services.messages.editCardKeyboard(
-        context.messageId,
-        categoryPromptText(),
-        requesterCategoryKeyboard(categories, Number.isFinite(page) ? page : 0),
-      );
+      await sendDraftScreen(services, actor.maxUserId, context.chatId ?? actor.maxUserId, {
+        text: categoryPromptText(),
+        keyboard: requesterCategoryKeyboard(categories, Number.isFinite(page) ? page : 0),
+      });
       return undefined;
     }
 
@@ -427,7 +448,7 @@ export async function handleUserCallback(
         const category = await services.categories.findById(raw);
         if (!category?.isActive) {
           const categories = await services.categories.listActive();
-          await services.messages.send(target, {
+          await sendResidentResponse(context, {
             text: 'Эта сфера больше недоступна. Выберите другую.',
             keyboard: requesterCategoryKeyboard(categories, 0),
           });
@@ -437,10 +458,6 @@ export async function handleUserCallback(
         chosenName = category.name;
       }
 
-      // Retire the picker so a stale page cannot be tapped again later.
-      if (context.messageId) {
-        await services.messages.finalizeCard(context.messageId, `Сфера сообщения: ${chosenName}`);
-      }
 
       if (draft.draftEditField === 'category') {
         await showIncidentDraftPreview(
@@ -452,14 +469,14 @@ export async function handleUserCallback(
         return undefined;
       }
 
-      await services.sessions.start({
+      await saveDraftStep(services, {
         maxUserId: actor.maxUserId,
         chatId: context.chatId ?? actor.maxUserId,
         type: SessionType.WAITING_INCIDENT_SELECTION,
-        data: { ...draft, selectedCategoryId },
+        data: { ...draft, selectedCategoryId, draftStage: 'municipality' },
       });
 
-      await services.messages.send(target, {
+      await sendResidentResponse(context, {
         text: municipalityPromptText(PROBLEM_MUNICIPALITIES.length),
         keyboard: requesterMunicipalityKeyboard(selectedCategoryId, PROBLEM_MUNICIPALITIES, 0),
       });
@@ -474,26 +491,21 @@ export async function handleUserCallback(
       const municipality = findProblemMunicipality(municipalityCode);
       if (!municipality) throw new ValidationError('Эта территория больше недоступна. Выберите её заново.');
 
-      if (context.messageId) {
-        await services.messages.finalizeCard(
-          context.messageId,
-          `Территория проблемы: ${municipality.name}`,
-        );
-      }
 
       if (municipality.localities.length > 0) {
-        await services.sessions.start({
+        await saveDraftStep(services, {
           maxUserId: actor.maxUserId,
           chatId: context.chatId ?? actor.maxUserId,
           type: SessionType.WAITING_INCIDENT_SELECTION,
           data: {
             ...draft,
+            draftStage: 'locality',
             selectedCategoryId,
             problemMunicipalityCode: municipality.code,
             problemMunicipalityName: municipality.name,
           },
         });
-        await services.messages.send(target, {
+        await sendResidentResponse(context, {
           text: localityPromptText(municipality.name),
           keyboard: requesterLocalityKeyboard(selectedCategoryId, municipality),
         });
@@ -516,7 +528,7 @@ export async function handleUserCallback(
         );
       } else {
         await startIncidentTextSession(services, actor.maxUserId, context.chatId, nextData);
-        await services.messages.send(target, { text: incidentPromptText() });
+        await sendResidentResponse(context, { text: incidentPromptText() });
       }
       return undefined;
     }
@@ -531,24 +543,19 @@ export async function handleUserCallback(
       }
 
       if (localityCode === LOCALITY_OTHER) {
-        if (context.messageId) {
-          await services.messages.finalizeCard(
-            context.messageId,
-            `Территория проблемы: ${municipality.name} → другой населённый пункт`,
-          );
-        }
-        await services.sessions.start({
+        await saveDraftStep(services, {
           maxUserId: actor.maxUserId,
           chatId: context.chatId ?? actor.maxUserId,
           type: SessionType.WAITING_CUSTOM_LOCALITY,
           data: {
             ...draft,
+            draftStage: 'locality',
             selectedCategoryId,
             problemMunicipalityCode: municipality.code,
             problemMunicipalityName: municipality.name,
           },
         });
-        await services.messages.send(target, { text: customLocalityPromptText(municipality.name) });
+        await sendResidentResponse(context, { text: customLocalityPromptText(municipality.name) });
         return undefined;
       }
 
@@ -558,12 +565,6 @@ export async function handleUserCallback(
         throw new ValidationError('Этот населённый пункт больше недоступен. Выберите его заново.');
       }
 
-      if (context.messageId) {
-        await services.messages.finalizeCard(
-          context.messageId,
-          `Территория проблемы: ${municipality.name}${locality ? ` → ${locality.name}` : ''}`,
-        );
-      }
       const nextData = {
         ...draft,
         selectedCategoryId,
@@ -580,7 +581,7 @@ export async function handleUserCallback(
         );
       } else {
         await startIncidentTextSession(services, actor.maxUserId, context.chatId, nextData);
-        await services.messages.send(target, { text: incidentPromptText() });
+        await sendResidentResponse(context, { text: incidentPromptText() });
       }
       return undefined;
     }
@@ -593,21 +594,24 @@ export async function handleUserCallback(
 async function beginNewIncident(context: UserCallbackContext): Promise<void> {
   const { services, actor } = context;
   const target = { userId: actor.maxUserId } as const;
+  const existing = await services.sessions.find(actor.maxUserId, context.chatId ?? actor.maxUserId);
+  if (existing && isResidentDraft(existing.type)) { await offerResidentDraft(context); return; }
   const remaining = await services.incidents.remainingDailyQuota(actor.maxUserId);
   if (remaining <= 0) {
-    await services.messages.send(target, {
+    await sendResidentResponse(context, {
       text: dailyLimitMessage(services.config.DAILY_INCIDENT_LIMIT),
       keyboard: mainMenuKeyboard(),
     });
     return;
   }
   const previous = await services.sessions.find(actor.maxUserId, context.chatId ?? actor.maxUserId);
-  const preview = previous && services.sessions.readData(previous).previewMessageId;
-  await retireIncidentDraftPreview(services, preview ?? undefined);
-  await services.sessions.clear(actor.maxUserId, context.chatId ?? actor.maxUserId);
+  if (previous && isResidentDraft(previous.type)) { await offerResidentDraft(context); return; }
+  if (previous) throw new ValidationError('Сначала завершите текущее действие.');
   const categories = await services.categories.listActive();
-  await services.sessions.start({ maxUserId: actor.maxUserId, chatId: context.chatId ?? actor.maxUserId, type: SessionType.WAITING_INCIDENT_SELECTION, data: {} });
-  await services.messages.send(target, { text: categoryPromptText(), keyboard: requesterCategoryKeyboard(categories, 0) });
+  await services.sessions.start({ maxUserId: actor.maxUserId, chatId: context.chatId ?? actor.maxUserId,
+    type: SessionType.WAITING_INCIDENT_SELECTION,
+    data: { draftToken: randomUUID(), draftStage: 'category', draftTouchedAt: Date.now() } });
+  await sendResidentResponse(context, { text: categoryPromptText(), keyboard: requesterCategoryKeyboard(categories, 0) });
 }
 
 function assertPreviewToken(data: SessionData, token: string | undefined): void {
@@ -671,7 +675,7 @@ async function startIncidentTextSession(
     problemLocality: string | null;
   },
 ): Promise<void> {
-  await services.sessions.start({
+  await saveDraftStep(services, {
     maxUserId,
     chatId: chatId ?? maxUserId,
     type: SessionType.WAITING_INCIDENT_TEXT,
@@ -681,4 +685,38 @@ async function startIncidentTextSession(
     { maxUserId: maxUserId.toString(), municipalityCode: data.problemMunicipalityCode },
     'incident text requested',
   );
+}
+
+/** Called under the resident lock (or personal mode lock when returning to the menu). */
+export async function offerResidentDraft(context: UserCallbackContext): Promise<void> {
+  const { services, actor } = context;
+  await sendDraftScreen(services, actor.maxUserId, context.chatId ?? actor.maxUserId, {
+    text: 'У вас есть незавершённое сообщение. Продолжить черновик или начать заново? При выборе «Начать заново» сохранённый черновик будет удалён. Черновик хранится 24 часа после последнего действия.',
+    keyboard: [[{ type: 'callback', text: 'Продолжить черновик', payload: 'user:draft-resume' }],
+      [{ type: 'callback', text: 'Начать заново', payload: 'user:draft-reset' }]],
+  });
+}
+
+async function resumeResidentDraft(context: UserCallbackContext, current: import('@prisma/client').OperatorSession): Promise<void> {
+  const { services, actor } = context;
+  const chatId = context.chatId ?? actor.maxUserId;
+  const data = services.sessions.readData(current);
+  // A complete draft resumes at its actual preview, never the last stale edit keyboard.
+  if (data.draftText && data.problemMunicipalityCode) {
+    await showIncidentDraftPreview(services, actor.maxUserId, chatId, data, current); return;
+  }
+  if (current.type === SessionType.WAITING_INCIDENT_TEXT) {
+    await sendDraftScreen(services, actor.maxUserId, chatId, { text: incidentPromptText() }); return;
+  }
+  if (current.type === SessionType.WAITING_CUSTOM_LOCALITY) {
+    await sendDraftScreen(services, actor.maxUserId, chatId, { text: customLocalityPromptText(data.problemMunicipalityName ?? '') }); return;
+  }
+  const municipality = findProblemMunicipality(data.problemMunicipalityCode ?? '');
+  if (data.draftStage === 'locality' && municipality) {
+    await sendDraftScreen(services, actor.maxUserId, chatId, { text: localityPromptText(municipality.name), keyboard: requesterLocalityKeyboard(data.selectedCategoryId ?? null, municipality) }); return;
+  }
+  if (data.draftStage === 'municipality') {
+    await sendDraftScreen(services, actor.maxUserId, chatId, { text: municipalityPromptText(PROBLEM_MUNICIPALITIES.length), keyboard: requesterMunicipalityKeyboard(data.selectedCategoryId ?? null, PROBLEM_MUNICIPALITIES, 0) }); return;
+  }
+  await sendDraftScreen(services, actor.maxUserId, chatId, { text: categoryPromptText(), keyboard: requesterCategoryKeyboard(await services.categories.listActive(), 0) });
 }

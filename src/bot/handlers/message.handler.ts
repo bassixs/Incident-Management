@@ -1,3 +1,4 @@
+import type { ResidentInputBinding } from '../draft-screen';
 import { reportActionError } from '../../utils/errors';
 import { PRIVACY_REJECTION } from '../../privacy/personal-data';
 import { CONTACT_REJECTION, type DraftPhoneInput } from '../../privacy/optional-contact';
@@ -31,6 +32,8 @@ export async function handleMessageUpdate(services: AppServices, ctx: Context): 
   const sender = message?.sender;
   if (!message || !sender || sender.is_bot) return;
   const legacyContact = (update as unknown as { verifiedDraftContact?: unknown }).verifiedDraftContact;
+  const privateWorkInputId = (update as unknown as { privateWorkInputId?: string }).privateWorkInputId;
+  const residentInput = (update as unknown as { residentDraftInput?: ResidentInputBinding }).residentDraftInput;
   const phoneInput = (update as unknown as { draftPhoneInput?: DraftPhoneInput }).draftPhoneInput;
   if (legacyContact || (update as unknown as { contactRejected?: boolean }).contactRejected || message.body.attachments?.some(a => a.type === 'contact')) {
     await services.messages.send({ userId: BigInt(sender.user_id) }, { text: CONTACT_REJECTION });
@@ -51,8 +54,8 @@ export async function handleMessageUpdate(services: AppServices, ctx: Context): 
 
   const actor = await resolveActor(services, sender, message.recipient.chat_type === 'chat' ? chatId : undefined);
   // Bound manual input never becomes a command, employee reply or incident text.
-  if (phoneInput) {
-    if (dialog) await handleRequesterMessage(services, actor, chatId, message, phoneInput);
+  if (phoneInput || residentInput) {
+    if (dialog) await handleRequesterMessage(services, actor, chatId, message, phoneInput, residentInput);
     return;
   }
 
@@ -62,7 +65,16 @@ export async function handleMessageUpdate(services: AppServices, ctx: Context): 
   // applying the resident-only file restriction, including command captions.
   if (dialog && (!command || hasFile)) {
     try {
-      if (await withPersonalWorkLock(services, actor.maxUserId, () => receivePersonalText(services, actor, message))) return;
+      if (await withPersonalWorkLock(services, actor.maxUserId, async () => {
+        if (privateWorkInputId) {
+          const selected = await services.prisma.privateWorkItem.findFirst({ where: { maxUserId: actor.maxUserId, selected: true } });
+          if (selected?.id !== privateWorkInputId) {
+            await services.messages.send({ userId: actor.maxUserId }, { text: 'Рабочий режим изменился. Откройте нужную рабочую карточку и повторите ввод.' });
+            return true;
+          }
+        }
+        return await receivePersonalText(services, actor, message) || !!privateWorkInputId;
+      })) return;
     } catch (error) {
       await services.messages.send({ userId: actor.maxUserId }, { text: userFacingError(error), keyboard: [[{ type: 'callback', text: 'Моя работа', payload: 'personal:home' }, { type: 'callback', text: 'Меню жителя', payload: 'personal:resident' }]] });
       return;

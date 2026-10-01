@@ -2,7 +2,7 @@ import { MaxError } from '@maxhub/max-bot-api';
 import type { PrismaClient } from '@prisma/client';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { handleRequesterMessage } from '../../src/bot/handlers/requester.handler';
-import { handleUserCallback } from '../../src/bot/callbacks/user.callbacks';
+import { clickResidentAction as handleUserCallback } from '../helpers/resident-actions';
 import { ValidationError } from '../../src/utils/errors';
 import { actorFor, createHarness, createTestPrisma, describeIntegration, pushSchemaOnce,
   resetDatabase, seedCategories, type TestHarness } from '../helpers/integration';
@@ -57,7 +57,7 @@ describeIntegration('requester recovery from preview photo errors', () => {
     expect(h.services.sessions.readData(recovery)).toMatchObject({ ...draft, draftPhotoRetry: true, draftMedia: [] });
     expect(h.messages.toUser(actor.maxUserId).at(-1)!.message.text).toContain('данные сохранены');
     expect(await prisma.incident.count()).toBe(0);
-    await expect(handleUserCallback(context(), { kind: 'user', action: 'draft-confirm' })).rejects.toThrow('Кнопка устарела');
+    await expect(handleUserCallback(context(), { kind: 'user', action: 'draft-confirm' })).rejects.toThrow('Это действие устарело');
     expect(download).not.toHaveBeenCalled();
 
     await handleRequesterMessage(h.services, actor, actor.maxUserId, incoming('', 'replacement') as never);
@@ -101,7 +101,7 @@ describeIntegration('requester recovery from preview photo errors', () => {
   it('does not let an old skip-photo button interrupt editing another field', async () => {
     await h.services.sessions.start({ maxUserId: actor.maxUserId, chatId: actor.maxUserId,
       type: 'WAITING_INCIDENT_EDIT_VALUE', data: { ...draft, draftEditField: 'text' } });
-    await expect(handleUserCallback(context(), { kind: 'user', action: 'draft-photo', argument: 'remove' })).rejects.toThrow('Кнопка устарела');
+    await expect(handleUserCallback(context(), { kind: 'user', action: 'draft-photo', argument: 'remove' })).rejects.toThrow('Это действие устарело');
     expect(h.services.sessions.readData((await session())!).draftEditField).toBe('text');
     expect(await prisma.incident.count()).toBe(0);
   });

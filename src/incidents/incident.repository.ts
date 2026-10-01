@@ -18,6 +18,8 @@ export const INCIDENT_INCLUDE = {
 
 export type IncidentWithRelations = Prisma.IncidentGetPayload<{ include: typeof INCIDENT_INCLUDE }>;
 
+export type RequesterIncident = Incident & { answers: Array<{ id: string; version: number; deliveredAt: Date | null }> };
+
 export class IncidentRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
@@ -62,9 +64,10 @@ export class IncidentRepository {
     });
   }
 
-  async listForRequester(requesterMaxUserId: bigint, take: number): Promise<Incident[]> {
+  async listForRequester(requesterMaxUserId: bigint, take: number): Promise<RequesterIncident[]> {
     return this.prisma.incident.findMany({
       where: { requesterMaxUserId },
+      include: { answers: { orderBy: { version: 'desc' }, take: 1, select: { id: true, version: true, deliveredAt: true } } },
       orderBy: { createdAt: 'desc' },
       take,
     });

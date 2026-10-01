@@ -14,6 +14,11 @@ export type SessionData = {
   requesterName?: string;
   requesterPhone?: string;
   draftToken?: string;
+  screenToken?: string;
+  screenActions?: string[];
+  inputStartedAt?: number;
+  draftTouchedAt?: number;
+  draftStage?: 'category' | 'municipality' | 'locality';
   previewToken?: string;
   previewStartedAt?: number;
   /** Start of this manual phone-entry step; rejects older text events. */
@@ -41,6 +46,13 @@ export type SessionData = {
   [key: string]: unknown;
 };
 
+export const RESIDENT_DRAFT_TTL_MS = 24 * 60 * 60_000;
+export function isResidentDraft(type: SessionType): boolean {
+  return [SessionType.WAITING_INCIDENT_SELECTION, SessionType.WAITING_INCIDENT_TEXT,
+    SessionType.WAITING_CUSTOM_LOCALITY, SessionType.WAITING_INCIDENT_CONFIRMATION,
+    SessionType.WAITING_INCIDENT_EDIT_SELECTION, SessionType.WAITING_INCIDENT_EDIT_VALUE].includes(type as never);
+}
+
 /**
  * A pending "your next message means X" state.
  *
@@ -54,8 +66,8 @@ export type SessionData = {
 export class OperatorSessionService {
   constructor(private readonly prisma: PrismaClient) {}
 
-  private expiry(): Date {
-    return new Date(Date.now() + getConfig().SESSION_TTL_MINUTES * 60_000);
+  private expiry(type: SessionType, data?: SessionData | null): Date {
+    return new Date(isResidentDraft(type) ? (data?.draftTouchedAt ?? Date.now()) + RESIDENT_DRAFT_TTL_MS : Date.now() + getConfig().SESSION_TTL_MINUTES * 60_000);
   }
 
   async find(maxUserId: bigint, chatId: bigint, tx?: PrismaLike): Promise<OperatorSession | null> {
@@ -78,7 +90,7 @@ export class OperatorSessionService {
     incidentId?: string | null;
     data?: SessionData | null;
   }): Promise<OperatorSession> {
-    const expiresAt = this.expiry();
+    const expiresAt = this.expiry(input.type, input.data);
     const session = await this.prisma.operatorSession.upsert({
       where: { maxUserId_chatId: { maxUserId: input.maxUserId, chatId: input.chatId } },
       create: {
@@ -112,7 +124,7 @@ export class OperatorSessionService {
     const changed = await this.prisma.operatorSession.updateMany({
       where: { id: session.id, maxUserId: session.maxUserId, chatId: session.chatId,
         type: session.type, expiresAt: { gt: new Date() }, data: { equals: session.data! } },
-      data: { type, data: data as never },
+      data: { type, data: data as never, ...(isResidentDraft(type) ? { expiresAt: this.expiry(type, data) } : {}) },
     });
     return changed.count === 1;
   }
@@ -126,9 +138,11 @@ export class OperatorSessionService {
   }
 
   async extend(sessionId: string): Promise<void> {
-    await this.prisma.operatorSession.update({
-      where: { id: sessionId },
-      data: { expiresAt: this.expiry() },
+    const current = await this.prisma.operatorSession.findUnique({ where: { id: sessionId } });
+    if (!current || current.expiresAt <= new Date() || isResidentDraft(current.type)) return;
+    await this.prisma.operatorSession.updateMany({
+      where: { id: sessionId, expiresAt: current.expiresAt },
+      data: { expiresAt: this.expiry(current.type) },
     });
   }
 

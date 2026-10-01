@@ -2,7 +2,7 @@ import type { PrismaClient } from '@prisma/client';
 import type { Update } from '../max/max-types';
 import { containsPersonalData } from './personal-data';
 import { parseManualPhone } from './optional-contact';
-import type { SessionData } from '../sessions/operator-session.service';
+import { isResidentDraft, type SessionData } from '../sessions/operator-session.service';
 
 /** Drop resident profile/forward metadata before the durable inbox sees an event. */
 export async function minimiseInbound(update: Update, prisma: PrismaClient): Promise<Update> {
@@ -11,6 +11,8 @@ export async function minimiseInbound(update: Update, prisma: PrismaClient): Pro
   delete value.contactRejected;
   delete value.verifiedDraftContact;
   delete value.draftPhoneInput;
+  delete value.residentDraftInput;
+  delete value.privateWorkInputId;
   const message = value.message;
   const dialog = message?.recipient?.chat_type === 'dialog';
   const userId = value.callback?.user?.user_id ?? message?.sender?.user_id ?? value.user?.user_id;
@@ -18,6 +20,7 @@ export async function minimiseInbound(update: Update, prisma: PrismaClient): Pro
   if (dialog && message?.sender && !value.callback && Number.isSafeInteger(userId)) {
     const item = await prisma.privateWorkItem.findFirst({ where: { maxUserId: BigInt(userId), selected: true }, select: { id: true } });
     staffDraft = !!item;
+    if (item) value.privateWorkInputId = item.id;
   }
   const session = dialog && !value.callback && Number.isSafeInteger(userId)
     ? await prisma.operatorSession.findUnique({ where: { maxUserId_chatId: {
@@ -29,6 +32,12 @@ export async function minimiseInbound(update: Update, prisma: PrismaClient): Pro
   // Previously admitted draftPhoneInput events retain their binding in inbox
   // and are still handled before the employee route (message.handler.ts).
   const residentMessage = dialog && !value.callback && !staffDraft;
+  if (residentMessage && (!session || isResidentDraft(session.type)) && !/^\/[a-z_]+(?:\s|$)/i.test(message?.body?.text ?? '')) {
+    const sentAt = message?.timestamp ?? value.timestamp;
+    const timely = session && session.expiresAt > new Date() && typeof sentAt === 'number' &&
+      typeof data?.inputStartedAt === 'number' && sentAt >= data.inputStartedAt;
+    value.residentDraftInput = { sessionId: timely ? session.id : '', draftToken: timely ? data?.draftToken : '', screenToken: timely ? data?.screenToken : '' };
+  }
   const phoneStep = residentMessage && session?.type === 'WAITING_INCIDENT_EDIT_VALUE' &&
     data?.draftEditField === 'phone' && session.expiresAt > new Date();
   const contacts = message?.body?.attachments?.filter((a: any) => a.type === 'contact') ?? [];
@@ -45,7 +54,7 @@ export async function minimiseInbound(update: Update, prisma: PrismaClient): Pro
     const phone = timely && !message.link && !message.body.attachments?.length
       ? parseManualPhone(message.body.text ?? '') : null;
     // Bind even invalid input; it must never fall through into another draft or a staff reply.
-    value.draftPhoneInput = { sessionId: session.id, draftToken: data.draftToken, previewToken: data.previewToken,
+    value.draftPhoneInput = { sessionId: session.id, draftToken: data.draftToken, previewToken: data.previewToken, screenToken: data.screenToken,
       ...(phone ? { phone } : {}) };
     message.body.text = null;
     message.body.attachments = [];

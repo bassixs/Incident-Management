@@ -50,6 +50,9 @@ export const INCIDENT_ACTIONS = [
 export type IncidentAction = (typeof INCIDENT_ACTIONS)[number];
 
 export const USER_ACTIONS = [
+  'draft-action',
+  'draft-resume',
+  'draft-reset',
   'draft-phone-enter',
   'draft-phone-back',
   'draft-retry',
