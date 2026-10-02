@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { UserRole, type PrismaClient } from '@prisma/client';
 import { MaxError } from '@maxhub/max-bot-api';
 import { MaxMessageService } from '../../src/max/max-message.service';
@@ -10,8 +10,19 @@ import { TEST_CHATS, TEST_USERS } from '../helpers/setup-env';
 
 describeIntegration('MAX photo references in persistent delivery', () => {
   let prisma: PrismaClient;
+  const workers = new Set<MaxMessageService>();
+  const createMessages = (...args: ConstructorParameters<typeof MaxMessageService>) => {
+    const worker = new MaxMessageService(...args);
+    workers.add(worker);
+    return worker;
+  };
   beforeAll(() => { pushSchemaOnce(); prisma = createTestPrisma(); });
   beforeEach(async () => { await resetDatabase(prisma); await seedCategories(prisma); });
+  afterEach(async () => {
+    for (const worker of workers) worker.stop();
+    await Promise.all([...workers].map(worker => worker.waitForIdle()));
+    workers.clear();
+  });
   afterAll(() => prisma.$disconnect());
   const storage = () => ({ save: vi.fn(), load: vi.fn(), remove: vi.fn() });
 
@@ -31,7 +42,7 @@ describeIntegration('MAX photo references in persistent delivery', () => {
     const max = { sendToChat: (id: bigint, text: string, extra?: Parameters<typeof send>[2]) => send('chat', text, extra),
       sendToUser: (id: bigint, text: string, extra?: Parameters<typeof send>[2]) => send('user', text, extra),
       editCardWithKeyboard: async () => undefined, editMessage: async () => undefined };
-    const messages = new MaxMessageService(max as never, { prisma, storage: files as never });
+    const messages = createMessages(max as never, { prisma, storage: files as never });
     const services = buildServices(prisma, { messages, media: new MediaService(files as never, max as never) });
     const actor = await actorFor(prisma, TEST_USERS.admin, 'Администратор', [UserRole.ADMIN]);
     const incident = await services.incidents.create({ requester: { maxUserId: TEST_USERS.requesterA, name: 'Иван Иванов', phone: '+79001112233' }, text: 'Фонарь', media: [{ kind: 'IMAGE', token: 'resident' }] });
@@ -67,13 +78,18 @@ describeIntegration('MAX photo references in persistent delivery', () => {
 
   it('restarts and retries a photo from its token with no local file operations', async () => {
     const files = storage();
-    const first = new MaxMessageService({ sendToUser: async () => { throw new Error('temporary outage'); } } as never, { prisma, storage: files as never });
+    const first = createMessages({ sendToUser: async () => { throw new Error('temporary outage'); } } as never, { prisma, storage: files as never });
     expect((await first.send({ userId: 1n }, { text: 'Фото', attachments: [{ type: 'IMAGE', maxToken: 'existing' }], delivery: { dedupeKey: 'photo' } })).state).toBe('queued');
+    // Simulate a restart: the old process must not compete with its successor.
+    first.stop();
+    await first.waitForIdle();
     const queued = await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: 'photo' } });
+    expect(queued.attempts).toBe(1);
     expect(queued.attachments).toEqual([{ type: 'IMAGE', storageKey: photoReference('existing'), owned: false }]);
     await prisma.outboundMessage.update({ where: { id: queued.id }, data: { nextAttemptAt: new Date(0) } });
     const sendToUser = vi.fn().mockResolvedValue({ body: { mid: 'sent' } });
-    await new MaxMessageService({ sendToUser } as never, { prisma, storage: files as never }).flush();
+    await createMessages({ sendToUser } as never, { prisma, storage: files as never }).flush();
+    expect(sendToUser).toHaveBeenCalledTimes(1);
     expect(sendToUser.mock.calls[0]![2].attachments).toEqual([{ type: 'image', payload: { token: 'existing' } }]);
     expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { id: queued.id } })).status).toBe('SENT');
     for (const fn of Object.values(files)) expect(fn).not.toHaveBeenCalled();
@@ -86,7 +102,7 @@ describeIntegration('MAX photo references in persistent delivery', () => {
       if (extra.attachments?.some(a => a.type === 'image')) throw new MaxError(400, { code: 'attachment.invalid', message: 'Invalid photo token' });
       sent.push({ text, extra }); return { body: { mid: 'fallback-card' } };
     }, sendToUser: async () => ({ body: { mid: 'thanks' } }), editCardWithKeyboard: async () => undefined, editMessage: async () => undefined };
-    const messages = new MaxMessageService(max as never, { prisma, storage: files as never });
+    const messages = createMessages(max as never, { prisma, storage: files as never });
     const media = new MediaService(files as never, max as never);
     const services = buildServices(prisma, { messages, media });
     const incident = await services.incidents.create({ requester: { maxUserId: 7001n, name: 'Иван Иванов', phone: '+79001112233' }, text: 'Фонарь', media: [{ kind: 'IMAGE', token: 'revoked' }] });
@@ -108,7 +124,7 @@ describeIntegration('MAX photo references in persistent delivery', () => {
     const files = storage();
     const sendToUser = vi.fn().mockRejectedValueOnce(new MaxError(400, { code: 'attachment.invalid', message: 'Invalid image token' }))
       .mockResolvedValue({ body: { mid: 'notice' } });
-    const messages = new MaxMessageService({ sendToUser } as never, { prisma, storage: files as never });
+    const messages = createMessages({ sendToUser } as never, { prisma, storage: files as never });
     const result = await messages.send({ userId: 1n }, { text: 'Ответ', attachments: [{ type: 'IMAGE', maxToken: 'expired' }],
       keyboard: [[{ type: 'callback', text: '5', payload: 'rating' }]],
       delivery: { dedupeKey: 'answer:expired', tracking: { type: 'ANSWER_TO_REQUESTER', incidentId: 'incident', answerId: 'answer' } },
