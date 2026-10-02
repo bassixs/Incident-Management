@@ -527,7 +527,7 @@ export function incidentPromptText(): string {
 }
 
 /** §54 */
-export function myIncidentsText(incidents: Incident[]): string {
+export function myIncidentsText(incidents: Array<Incident & { answers?: Array<{ version: number; deliveredAt: Date | null }> }>): string {
   if (incidents.length === 0) {
     return 'У вас пока нет сообщений.\n\nЧтобы создать новое, нажмите «Создать сообщение».';
   }
@@ -537,7 +537,9 @@ export function myIncidentsText(incidents: Incident[]): string {
     ...incidents.flatMap((incident) => [
       incident.publicCode,
       // Overdue is an internal SLA signal for staff, not a requester-facing status.
-      ['RESOLVED', 'REJECTED'].includes(incident.status) ? 'Закрыто' : 'В работе',
+      incident.status === 'REJECTED' ? 'Отклонено' : incident.status === 'RESOLVED'
+        ? [...(incident.answers ?? [])].sort((a, b) => b.version - a.version)[0]?.deliveredAt ? 'Закрыто' : 'Ответ отправляется'
+        : 'В работе',
       '',
     ]),
   ]

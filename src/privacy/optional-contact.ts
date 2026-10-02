@@ -7,7 +7,7 @@ export const PHONE_INPUT_ERROR = 'Не удалось распознать но�
 export const CONTACT_REJECTION = 'Системные карточки контакта больше не используются. На итоговой карточке нажмите «📞 Поделиться контактом» и введите номер вручную. Сообщение не отправлено.';
 
 /** Bound at inbox admission, rechecked before changing a draft. No raw input retained. */
-export type DraftPhoneInput = { sessionId: string; draftToken: string; previewToken: string; phone?: string };
+export type DraftPhoneInput = { sessionId: string; draftToken: string; previewToken: string; screenToken?: string; phone?: string };
 
 /** Format validation only; does not establish ownership of the number. */
 export function parseManualPhone(raw: string): string | null {

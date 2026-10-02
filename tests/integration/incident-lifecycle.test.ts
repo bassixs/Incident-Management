@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vite
 
 import { HistoryAction } from '../../src/incidents/incident-history.service';
 import { handleIncidentCallback } from '../../src/bot/callbacks/incident.callbacks';
-import { handleUserCallback } from '../../src/bot/callbacks/user.callbacks';
+import { clickResidentAction as handleUserCallback } from '../helpers/resident-actions';
 import { handleRequesterMessage } from '../../src/bot/handlers/requester.handler';
 import type { Message } from '../../src/max/max-types';
 import { ConflictError, RateLimitError } from '../../src/utils/errors';
@@ -92,7 +92,9 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     await handleRequesterMessage(harness.services, actor, actor.maxUserId, requesterContactMessage(TEST_USERS.requesterB));
     const session = await harness.services.sessions.find(actor.maxUserId, actor.maxUserId);
     expect(session?.type).toBe('WAITING_INCIDENT_SELECTION');
-    expect(session?.data).toEqual({});
+    expect(session?.data).toMatchObject({draftStage:'category'});
+    expect(session?.data).not.toHaveProperty('requesterPhone');
+    expect(session?.data).not.toHaveProperty('requesterName');
     expect(await prisma.incident.count()).toBe(0);
     expect(await prisma.legalAcceptance.count()).toBe(0);
   });

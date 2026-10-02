@@ -1,3 +1,6 @@
+import { withResidentDraftLock, STALE_DRAFT, saveDraftStep, sendDraftScreen, type ResidentInputBinding } from '../draft-screen';
+import { isResidentDraft } from '../../sessions/operator-session.service';
+import { offerResidentDraft } from '../callbacks/user.callbacks';
 import { assertNoPersonalData, PRIVACY_REJECTION } from '../../privacy/personal-data';
 import { CONTACT_REJECTION, PHONE_INPUT_ERROR, type DraftPhoneInput, parseManualPhone } from '../../privacy/optional-contact';
 import { sendPhoneInputPrompt } from '../requester-phone';
@@ -33,13 +36,18 @@ import type { ResolvedActor } from './helpers';
 
 const NO_SESSION_HINT = 'Чтобы создать новое сообщение, нажмите «Создать сообщение».';
 
+export async function handleRequesterMessage(services: AppServices, actor: ResolvedActor, chatId: bigint, message: Message, phoneInput?: DraftPhoneInput, binding?: ResidentInputBinding): Promise<void> {
+  return withResidentDraftLock(services, actor.maxUserId, chatId, () => dispatchRequesterMessage(services, actor, chatId, message, phoneInput, binding));
+}
+
 /** §7-§12, §56 — everything a requester does in their private dialog. */
-export async function handleRequesterMessage(
+async function dispatchRequesterMessage(
   services: AppServices,
   actor: ResolvedActor,
   chatId: bigint,
   message: Message,
   phoneInput?: DraftPhoneInput,
+  binding?: ResidentInputBinding,
 ): Promise<void> {
   const target = { userId: actor.maxUserId } as const;
   if (message.body.attachments?.some(a => a.type === 'contact')) {
@@ -55,21 +63,27 @@ export async function handleRequesterMessage(
     return;
   }
 
-  const session = await services.sessions.find(actor.maxUserId, chatId);
+  let session = await services.sessions.find(actor.maxUserId, chatId);
   if (!session) {
-    await services.messages.send(target, { text: NO_SESSION_HINT, keyboard: mainMenuKeyboard() });
+    await services.messages.send(target, { text: binding || phoneInput ? STALE_DRAFT : NO_SESSION_HINT, keyboard: mainMenuKeyboard() });
     return;
   }
 
   const data = services.sessions.readData(session);
+  if (binding && (session.id !== binding.sessionId || data.draftToken !== binding.draftToken || data.screenToken !== binding.screenToken)) {
+    await services.messages.send(target, { text: STALE_DRAFT }); return;
+  }
+  if (data.screenActions?.includes('user:draft-resume')) {
+    await services.messages.send(target, { text: 'Сначала выберите «Продолжить черновик» или «Начать заново».' }); return;
+  }
   if (phoneInput) {
     if (session.type !== SessionType.WAITING_INCIDENT_EDIT_VALUE || data.draftEditField !== 'phone' ||
         session.id !== phoneInput.sessionId || data.draftToken !== phoneInput.draftToken ||
-        data.previewToken !== phoneInput.previewToken) {
+        data.previewToken !== phoneInput.previewToken || (data.screenToken && data.screenToken !== phoneInput.screenToken)) {
       await services.messages.send(target, { text: 'Ввод номера устарел. Используйте текущую карточку сообщения.' }); return;
     }
     const phone = phoneInput.phone && parseManualPhone(phoneInput.phone);
-    if (!phone) { await sendPhoneInputPrompt(services, actor.maxUserId, data, PHONE_INPUT_ERROR); return; }
+    if (!phone) { await sendPhoneInputPrompt(services, actor.maxUserId, data, PHONE_INPUT_ERROR, chatId); return; }
     await showIncidentDraftPreview(services, actor.maxUserId, chatId, { ...data, requesterPhone: phone }, session);
     return;
   }
@@ -81,7 +95,7 @@ export async function handleRequesterMessage(
 
   if (session.type === SessionType.WAITING_INCIDENT_EDIT_VALUE && data.draftEditField === 'phone') {
     // Unbound/old inbox events cannot supply a number for the current draft.
-    await sendPhoneInputPrompt(services, actor.maxUserId, data); return;
+    await services.messages.send(target, { text: STALE_DRAFT }); return;
   }
   if (session.type === SessionType.WAITING_INCIDENT_CONFIRMATION && data.previewDeliveryPending) {
     await showIncidentDraftPreview(services, actor.maxUserId, chatId, data, session);
@@ -101,7 +115,7 @@ export async function handleRequesterMessage(
   }
 
   if ([SessionType.WAITING_REQUESTER_NAME, SessionType.WAITING_REQUESTER_PHONE].includes(session.type as any)) {
-    await services.sessions.clear(actor.maxUserId, chatId); await sendMainMenu(services, actor); return;
+    await services.sessions.clear(actor.maxUserId, chatId); await dispatchMainMenu(services, actor); return;
   }
 
   if (session.type === SessionType.WAITING_INCIDENT_EDIT_VALUE) {
@@ -116,7 +130,7 @@ export async function handleRequesterMessage(
           await showIncidentDraftPreview(services, actor.maxUserId, chatId, {
             ...draft,
             draftText: validated.text,
-          });
+          }, session);
           return;
         }
         case 'photo': {
@@ -126,7 +140,7 @@ export async function handleRequesterMessage(
           await showIncidentDraftPreview(services, actor.maxUserId, chatId, {
             ...draft,
             draftMedia: serialiseDraftMedia(media),
-          });
+          }, session);
           return;
         }
         default:
@@ -165,17 +179,15 @@ export async function handleRequesterMessage(
     }
     const nextData = { ...data, problemLocality: locality };
     if (data.draftEditField === 'location') {
-      await showIncidentDraftPreview(services, actor.maxUserId, chatId, nextData);
+      await showIncidentDraftPreview(services, actor.maxUserId, chatId, nextData, session);
     } else {
-      await services.sessions.start({
+      await saveDraftStep(services, {
         maxUserId: actor.maxUserId,
         chatId,
         type: SessionType.WAITING_INCIDENT_TEXT,
         data: nextData,
       });
-      await services.messages.send(target, {
-        text: [`Населённый пункт: ${locality}`, '', incidentPromptText()].join('\n'),
-      });
+      await sendDraftScreen(services, actor.maxUserId, chatId, { text: [`Населённый пункт: ${locality}`, '', incidentPromptText()].join('\n') });
     }
     return;
   }
@@ -193,7 +205,7 @@ export async function handleRequesterMessage(
       problemLocality: data.problemLocality ?? null,
       draftText: validated.text,
       draftMedia: serialiseDraftMedia(media),
-    });
+    }, session);
     return;
   } catch (error) {
     if (error instanceof ValidationError) {
@@ -208,19 +220,19 @@ export async function handleRequesterMessage(
   }
 }
 
-/** `/start` and `bot_started`. */
 export async function sendMainMenu(services: AppServices, actor: ResolvedActor, includeWork = true, chatId = actor.maxUserId): Promise<void> {
+  return withResidentDraftLock(services, actor.maxUserId, chatId, () => dispatchMainMenu(services, actor, includeWork, chatId));
+}
+
+/** `/start` and `bot_started`. */
+async function dispatchMainMenu(services: AppServices, actor: ResolvedActor, includeWork = true, chatId = actor.maxUserId): Promise<void> {
   if (await services.bans.isBanned(actor.maxUserId)) {
     await services.messages.send({ userId: actor.maxUserId }, { text: REJECTION_MESSAGES.banned });
     return;
   }
   const current = await services.sessions.find(actor.maxUserId, chatId);
-  if (current?.type === SessionType.WAITING_INCIDENT_EDIT_VALUE && services.sessions.readData(current).draftEditField === 'phone') {
-    await sendPhoneInputPrompt(services, actor.maxUserId, services.sessions.readData(current)); return;
-  }
-  if (current?.type === SessionType.WAITING_INCIDENT_CONFIRMATION && services.sessions.readData(current).previewDeliveryPending) {
-    await showIncidentDraftPreview(services, actor.maxUserId, chatId, services.sessions.readData(current), current);
-    return;
+  if (current && isResidentDraft(current.type)) {
+    await offerResidentDraft({ services, actor, chatId, messageId: undefined, callbackId: 'resume-menu' }); return;
   }
   await services.messages.send(
     { userId: actor.maxUserId },

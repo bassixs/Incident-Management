@@ -183,7 +183,19 @@ export class UpdateDispatcher {
 
     const row = await this.prisma.inboundUpdate.findUniqueOrThrow({ where: { id } });
     try {
-      await this.max.dispatch(row.payload as unknown as Update);
+      // Inbox rows admitted before draft-screen binding was introduced have no
+      // reliable destination for private text. Do not reinterpret them against
+      // a new resident draft or a newly selected employee workspace after restart.
+      const saved = (row.payload ?? {}) as Record<string, any>;
+      const unboundPrivateText = saved.update_type === 'message_created' &&
+        saved.message?.recipient?.chat_type === 'dialog' &&
+        !saved.residentDraftInput && !saved.privateWorkInputId && !saved.draftPhoneInput &&
+        !saved.verifiedDraftContact && !saved.contactRejected &&
+        !/^\/[a-z_]+(?:\s|$)/i.test(saved.message?.body?.text ?? '');
+      const payload = unboundPrivateText
+        ? { ...saved, residentDraftInput: { sessionId: '', draftToken: '', screenToken: '' } }
+        : saved;
+      await this.max.dispatch(payload as unknown as Update);
       await this.prisma.inboundUpdate.update({
         where: { id },
         data: {

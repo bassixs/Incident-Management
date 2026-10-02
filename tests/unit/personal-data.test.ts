@@ -45,6 +45,25 @@ describe('resident privacy screening', () => {
   it.each(['У дома 12 по улице Ленина не работает фонарь.', 'Яма на дороге. Прошу исправить.', 'INC-000123', 'ул. Циолковского, дом 7', 'Ремонт нужен 29.09.2026'])('keeps problem description: %s', text => {
     expect(containsPersonalData(text)).toBe(false);
   });
+  it.each([
+    'У дома по улице Пушкина А. С. не работает освещение.',
+    'На ул. А. С. Пушкина у дома 4 яма.',
+    'У школы № 12 имени Иванова И. И. сломан забор.',
+    'В парке имени Гагарина Ю. А. не горит фонарь.',
+    'На улице Иванова Ивана Ивановича у дома 2 яма.',
+    'У библиотеки имени Александра Сергеевича Пушкина разбита дорожка.',
+  ])('accepts a bounded address/object name: %s', text => {
+    expect(containsPersonalData(text)).toBe(false);
+  });
+  it.each(['Иванов Иван Иванович', 'Иванов И. И.', 'паспорт 45 12 123456',
+    'СНИЛС 123-456-789 01', '40817810000000000001', 'test@example.ru'])('still checks data after an address: %s', forbidden => {
+    expect(containsPersonalData(`Улица Пушкина А. С., дом 2. ${forbidden}`)).toBe(true);
+    expect(containsPersonalData(`${forbidden}. У школы имени Пушкина А. С. яма.`)).toBe(true);
+  });
+  it.each(['Улица перекрыта. Иванов И. И.', 'Школа закрыта, Иванов Иван Иванович',
+    'По поручению имени Иванов Иван Иванович'])('does not exempt the message by a keyword: %s', text => {
+    expect(containsPersonalData(text)).toBe(true);
+  });
   it('drops rejected text, contacts, forwarding metadata and resident names before persistence', async () => {
     const update = { update_type: 'message_created', message: { sender: { user_id: 1, name: 'Секретное Имя', username: 'secret', is_bot: false },
       recipient: { chat_type: 'dialog', chat_id: 2 }, body: { mid: 'm1', text: '+79001234567', attachments: [{ type: 'contact', payload: { vcf_info: 'secret' } }] }, link: { message: { body: { text: 'secret' } } } } };

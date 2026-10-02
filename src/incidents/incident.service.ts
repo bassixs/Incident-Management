@@ -287,7 +287,7 @@ export class IncidentService {
     return this.repository.findByPublicCode(publicCode);
   }
 
-  async listForRequester(maxUserId: bigint, take = getConfig().MY_INCIDENTS_LIMIT): Promise<Incident[]> {
+  async listForRequester(maxUserId: bigint, take = getConfig().MY_INCIDENTS_LIMIT): Promise<import('./incident.repository').RequesterIncident[]> {
     return this.repository.listForRequester(maxUserId, take);
   }
 

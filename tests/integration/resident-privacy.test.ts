@@ -1,7 +1,7 @@
 import { beforeAll, afterAll, beforeEach, expect, it } from 'vitest';
 import { UserRole, type PrismaClient } from '@prisma/client';
 import { actorFor, createHarness, createTestPrisma, describeIntegration, pushSchemaOnce, resetDatabase, seedCategories, type TestHarness } from '../helpers/integration';
-import { handleUserCallback } from '../../src/bot/callbacks/user.callbacks';
+import { clickResidentAction as handleUserCallback } from '../helpers/resident-actions';
 import { handleIncidentCallback } from '../../src/bot/callbacks/incident.callbacks';
 import { TEST_CHATS } from '../helpers/setup-env';
 import { UpdateDispatcher } from '../../src/server/update-dispatcher';
@@ -18,7 +18,8 @@ describeIntegration('minimal resident data and optional staff rejection', () => 
     const context = { services: h.services, actor, chatId: 555n, callbackId: 'new', messageId: undefined };
     await handleUserCallback(context, { kind: 'user', action: 'new' });
     const session = await prisma.operatorSession.findFirstOrThrow();
-    expect(session.type).toBe('WAITING_INCIDENT_SELECTION'); expect(session.data).toEqual({});
+    expect(session.type).toBe('WAITING_INCIDENT_SELECTION'); expect(session.data).toMatchObject({ draftStage: 'category' });
+    expect(session.data).not.toHaveProperty('requesterPhone'); expect(session.data).not.toHaveProperty('requesterName');
     await handleUserCallback(context, { kind: 'user', action: 'accept-consent' });
     expect(await prisma.legalAcceptance.count()).toBe(0);
   });
