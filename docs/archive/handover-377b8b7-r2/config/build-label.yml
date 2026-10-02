@@ -1,0 +1,5 @@
+services:
+  app:
+    build:
+      labels:
+        org.opencontainers.image.revision: "377b8b7837037e8aaad4e98530d02588f086edb2"

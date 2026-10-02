@@ -1,0 +1,116 @@
+[
+  {
+    "source": "output/update-main-377b8b7-r2/Na-svyazi-region40/config/common.cjs",
+    "saved": "docs/archive/handover-377b8b7-r2/config/common.cjs",
+    "sha256": "d756d5ec2a9c4b10c7c4b8850d549e0d3a24b46eb8015d682c887a1de04a9ae8",
+    "mode": "exact"
+  },
+  {
+    "source": "output/update-main-377b8b7-r2/Na-svyazi-region40/config/cleanup-test-data.cjs",
+    "saved": "docs/archive/handover-377b8b7-r2/config/cleanup-test-data.cjs",
+    "sha256": "dac2664aadf78e324e4adfe256288785e63ce2c0b605739d28f0fab522e0ccc9",
+    "mode": "exact"
+  },
+  {
+    "source": "output/update-main-377b8b7-r2/Na-svyazi-region40/config/snapshot.cjs",
+    "saved": "docs/archive/handover-377b8b7-r2/config/snapshot.cjs",
+    "sha256": "baa43e50a0cf856ccc903db1589e6f683c205bdde15b4b204c444797e60b3467",
+    "mode": "exact"
+  },
+  {
+    "source": "output/update-main-377b8b7-r2/Na-svyazi-region40/config/compare.cjs",
+    "saved": "docs/archive/handover-377b8b7-r2/config/compare.cjs",
+    "sha256": "7de0e93ad98018609a9c817bde546ac2bf651c7f72b0390dcedc0229c70d8b56",
+    "mode": "exact"
+  },
+  {
+    "source": "output/update-main-377b8b7-r2/Na-svyazi-region40/config/wait-ready.sh",
+    "saved": "docs/archive/handover-377b8b7-r2/config/wait-ready.sh",
+    "sha256": "c7afd0faae6e754024deaa0487e02d3b99ec3fd27ba9f16661999ab1f7b49e13",
+    "mode": "exact"
+  },
+  {
+    "source": "output/update-main-377b8b7-r2/Na-svyazi-region40/config/build-label.yml",
+    "saved": "docs/archive/handover-377b8b7-r2/config/build-label.yml",
+    "sha256": "8342daf7532539f0bb7a82ef1743c33378e829f6569593d4f331039a7c4da9d1",
+    "mode": "CRLF normalized to LF by Git; YAML values unchanged"
+  },
+  {
+    "source": "tmp/update-main-r2/cleanup.test.cjs",
+    "saved": "docs/archive/handover-377b8b7-r2/checks/cleanup.test.cjs",
+    "sha256": "1714987e3e37a8e9638e2131fedbf0c100cf916bc94ba99bb63c816477a1cc01",
+    "mode": "exact"
+  },
+  {
+    "source": "tmp/update-main-r2/ready-probe.test.cjs",
+    "saved": "docs/archive/handover-377b8b7-r2/checks/ready-probe.test.cjs",
+    "sha256": "670f9333abf210357c596c7de5f8eaffacf0df2c88a9199dbc52e7cac5ca6fab",
+    "mode": "exact"
+  },
+  {
+    "source": "tmp/update-main-r2/array-integration.cjs",
+    "saved": "docs/archive/handover-377b8b7-r2/checks/array-integration.cjs",
+    "sha256": "e72d99f5672d98316aaa7ea63e62bafc4559e02b8f7a4b1ee17cf2ded53796aa",
+    "mode": "exact"
+  },
+  {
+    "source": "tmp/update-main-r2/test-cleanup.cjs",
+    "saved": "docs/archive/handover-377b8b7-r2/checks/test-cleanup.cjs",
+    "sha256": "b48e84a92d0d2984785416564279c0708400e5c0387e591a6a43a618354e42d8",
+    "mode": "exact"
+  },
+  {
+    "source": "tmp/update-main-r2/wait-test.sh",
+    "saved": "docs/archive/handover-377b8b7-r2/checks/wait-test.sh",
+    "sha256": "85b6b2b984a24cb8758bfd4a2833f9dcd30fe9f0adf8583c34934e9717638eab",
+    "mode": "exact"
+  },
+  {
+    "source": "tmp/update-main-r2/package.py",
+    "saved": "docs/archive/handover-377b8b7-r2/package.py",
+    "sha256": "e5ba9559ed72830c0650e03a4085f8b8d9c0b900318e46ddd9700a13db41e95f",
+    "mode": "exact"
+  },
+  {
+    "source": "output/update-main-377b8b7-r2/Na-svyazi-region40/START-HERE.md",
+    "saved": "docs/archive/handover-377b8b7-r2/START-HERE.md",
+    "sha256": "e62671445b21a3c8bd830613ea4c831b5af0882346d03194901520f923defeb3",
+    "mode": "historical banner; recipient-specific instruction removed"
+  },
+  {
+    "source": "output/update-main-377b8b7-r2/Na-svyazi-region40/CLEANUP.md",
+    "saved": "docs/archive/handover-377b8b7-r2/CLEANUP.md",
+    "sha256": "3027f5fa4cd431bf6ef5f5038a07d2731535ad9a36f00cc58ff6f1144af05b9d",
+    "mode": "historical banner; recipient-specific instruction removed"
+  },
+  {
+    "source": "output/update-main-377b8b7-r2/Na-svyazi-region40/PATCH-TOOLS.md",
+    "saved": "docs/archive/handover-377b8b7-r2/PATCH-TOOLS.md",
+    "sha256": "d6352353db5168d70ecf3425da29190416ce6e77f6cd48de472a53d0e24551e9",
+    "mode": "historical banner; recipient-specific instruction removed"
+  },
+  {
+    "source": "output/update-main-377b8b7-r2/Na-svyazi-region40/RELEASE-NOTES.md",
+    "saved": "docs/archive/handover-377b8b7-r2/RELEASE-NOTES.md",
+    "sha256": "bc3619528b5f54e5f261585e79ca289cdd28e8d18ab9f8ef15c650949bec78e5",
+    "mode": "historical banner; recipient-specific instruction removed"
+  },
+  {
+    "source": "tmp/build-full-20260930.py",
+    "saved": "docs/archive/handover-7dded19-builders/build-full-20260930.py",
+    "sha256": "0ab18afa5f5fa32ce7229ded77580ee7f2112e886d3b5a18d3808fd7ab2bd27f",
+    "mode": "exact"
+  },
+  {
+    "source": "tmp/build-update-20260930.py",
+    "saved": "docs/archive/handover-7dded19-builders/build-update-20260930.py",
+    "sha256": "abc64b290d8a8a973c25ab12d2eec87f3cff6ef04b53179305bdce98b9fa86fd",
+    "mode": "embedded instruction: private person reference generalized; Python logic unchanged"
+  },
+  {
+    "source": "PROJECT_NOTES.md",
+    "saved": "docs/archive/project-notes-20260907.md",
+    "sha256": "ea0e96c0c5722f095785fed5f2abbd56c5324bccb2cc706980c14b9174d2520f",
+    "mode": "historical banner; private account ownership generalized"
+  }
+]
