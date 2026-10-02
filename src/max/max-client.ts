@@ -42,6 +42,44 @@ export type WebhookSubscription = {
 };
 
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const SHARE_LINK_PREFIX = '\n\nСсылка из предпросмотра: ';
+
+function isPublicLink(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !/\s/.test(value);
+  } catch { return false; }
+}
+
+function reviewContentWithoutReservation(text: string): string | undefined {
+  // Only the generated review-card prefix is presentation-only. Keep the entire
+  // remaining card, including incident identity, answer, history and version.
+  // Never strip lease-like lines in resident/answer text or arbitrary headers.
+  return /^📝 ОТВЕТ НА СОГЛАСОВАНИЕ\n(?:🟢 Свободно — можно взять в работу|👤 Закреплено за: [^\n]+\n⏳ До \d{2}\.\d{2}\.\d{4} \d{2}:\d{2} \(МСК\))\n\n(№ INC-[\d-]+\n\n[\s\S]*\n\nВерсия ответа:\n[1-9]\d*)$/u.exec(text)?.[1];
+}
+
+function preserveShareFallbackText(current: string | undefined | null, intended: string): string {
+  if (!current) return intended;
+  let body = current;
+  const links: string[] = [];
+  // Read only a trailing URL-only suffix; an embedded marker is content.
+  for (;;) {
+    const index = body.lastIndexOf(SHARE_LINK_PREFIX);
+    if (index < 0) break;
+    const link = body.slice(index + SHARE_LINK_PREFIX.length);
+    if (!isPublicLink(link)) break;
+    links.unshift(link);
+    body = body.slice(0, index);
+  }
+  if (!links.length) return intended;
+  const content = reviewContentWithoutReservation(body);
+  if (body !== intended && (content === undefined || content !== reviewContentWithoutReservation(intended))) return intended;
+  const preserved = intended + [...new Set(links)].filter(link => !intended.includes(link))
+    .map(link => `${SHARE_LINK_PREFIX}${link}`).join('');
+  // A larger service header must not silently evict a previously retained URL.
+  if (Array.from(preserved).length > 4000) throw new ValidationError('Не удалось сохранить ссылки карточки: превышен лимит текста MAX.');
+  return preserved;
+}
 
 function isRetryable(error: unknown): boolean {
   if (error instanceof ValidationError) return false;
@@ -136,12 +174,13 @@ export class MaxClient {
     text: string,
     attachments?: AttachmentRequest[] | undefined,
   ): Promise<void> {
-    await this.call('editMessage', () =>
+    const result = await this.call('editMessage', () =>
       this.api.editMessage(messageId, {
         text,
         ...(attachments === undefined ? {} : { attachments }),
       }),
     );
+    if (!result.success) throw new ValidationError('MAX не подтвердил обновление карточки.');
   }
 
   async deleteMessage(messageId: string): Promise<void> {
@@ -151,6 +190,9 @@ export class MaxClient {
   /** Replace only a card's controls while retaining its existing MAX media tokens. */
   async editCardWithKeyboard(messageId: string, text: string, buttons: import('./max-types').Button[][]): Promise<void> {
     const current = await this.call('getMessage', () => this.api.getMessage(messageId));
+    // Retain fallback links on replay and reservation changes of the same review
+    // content/version, even when MAX no longer returns a share attachment.
+    text = preserveShareFallbackText(current.body.text, text);
     if (hasSameCardContent(current, text, buttons)) return;
     const attachments: AttachmentRequest[] = [];
     for (const item of current.body.attachments ?? []) {
@@ -168,7 +210,24 @@ export class MaxClient {
       }
     }
     if (buttons.length) attachments.push({ type: 'inline_keyboard', payload: { buttons } });
-    await this.editMessage(messageId, text, attachments);
+    try {
+      await this.editMessage(messageId, text, attachments);
+    } catch (error) {
+      const shares = attachments.filter(item => item.type === 'share');
+      // This exact permanent rejection has been observed for MAX's own returned
+      // preview tokens. Never treat another 400 or a network error as permission
+      // to remove attachments.
+      if (!shares.length || !(error instanceof MaxError) || error.status !== 400 ||
+        error.message !== '400: No valid url or token provided for share attachment') throw error;
+      const urls = shares.map(item => item.payload?.url);
+      if (urls.some(url => typeof url !== 'string' || !isPublicLink(url))) throw error;
+      const missing = [...new Set(urls as string[])].filter(url => !text.includes(url));
+      const fallbackText = text + missing.map(url => `${SHARE_LINK_PREFIX}${url}`).join('');
+      // Fail closed rather than truncate either the answer or the retained URL.
+      if (Array.from(fallbackText).length > 4000) throw error;
+      await this.editMessage(messageId, fallbackText, attachments.filter(item => item.type !== 'share'));
+      log.info({ messageId, removedPreviews: shares.length }, 'invalid link preview removed during card update');
+    }
   }
 
   async answerCallback(callbackId: string, notification?: string): Promise<void> {
