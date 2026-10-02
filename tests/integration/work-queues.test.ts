@@ -3,6 +3,7 @@ import { MaxError } from '@maxhub/max-bot-api';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { buildServices, type AppServices } from '../../src/app/container';
 import { MaxMessageService } from '../../src/max/max-message.service';
+import { MaxClient } from '../../src/max/max-client';
 import { workPanelKey } from '../../src/work-queues/state';
 import { queueStaffRefresh } from '../../src/delivery/workflow-outbox';
 import { discardObsoleteSession } from '../../src/bot/handlers/session-guard';
@@ -53,6 +54,69 @@ describeIntegration('working chat queues and obsolete actions', () => {
   }
   async function reviewing(age = 0) { const i = await create(age); await services.answers.submit(i.id, actor, 'Освещение восстановлено.', []); return i; }
   const lastEdit = (mid: string) => max.editCardWithKeyboard.mock.calls.filter((c: any[]) => c[0] === mid).at(-1);
+
+  it('recovers share rejection and partial staff refresh before delivering subsequent review jobs, including after restart', async () => {
+    const i = await reviewing();
+    await services.workQueues.open(actor, TEST_CHATS.review, i.id);
+    await services.messages.flush();
+    const publications = await prisma.outboundMessage.findMany({ where: { incidentId: i.id,
+      OR: [{ trackingType: 'REVIEW_CARD' }, { dedupeKey: { startsWith: 'work-copy:review:' } }] }, orderBy: { sequence: 'asc' } });
+    expect(publications).toHaveLength(2);
+    const mids = publications.map(row => row.firstMessageId!);
+    for (const mid of mids) {
+      const card = sent.find(s => s.mid === mid)!;
+      card.extra.attachments = [
+        { type: 'image', payload: { token: 'preserved-photo' } },
+        { type: 'share', payload: { url: 'https://example.org/review', token: 'rejected-preview' } },
+      ];
+    }
+    const trace: string[] = []; let failSecond = true;
+    const apiEdit = vi.fn(async (mid: string, extra: any) => {
+      if (extra.attachments.some((a: any) => a.type === 'share')) {
+        throw new MaxError(400, { code: 'attachment.invalid', message: 'No valid url or token provided for share attachment' });
+      }
+      if (mid === mids[1] && failSecond) throw new MaxError(400, { code: 'other', message: 'Unrelated failure' });
+      const row = sent.find(s => s.mid === mid)!; row.text = extra.text; row.extra = { attachments: extra.attachments };
+      if (mids.includes(mid)) trace.push(`edit:${mid}`);
+      return { success: true };
+    });
+    const client = new MaxClient({ api: { getMessage: max.api.getMessage, editMessage: apiEdit } } as never);
+    max.editCardWithKeyboard.mockImplementation((mid: string, text: string, buttons: any) => client.editCardWithKeyboard(mid, text, buttons));
+    const send = max.sendToChat.getMockImplementation();
+    max.sendToChat.mockImplementation(async (chat: bigint, text: string, extra: any) => { trace.push(text); return send(chat, text, extra); });
+    await queueStaffRefresh(prisma, i.id, 'share-regression');
+    const head = await prisma.outboundMessage.findFirstOrThrow({ where: { incidentId: i.id, status: 'PENDING' }, orderBy: { sequence: 'asc' } });
+    const tail = await prisma.outboundMessage.create({ data: { targetType: 'chat', targetId: TEST_CHATS.review,
+      payload: { text: 'next-review-job' }, attachments: [], trackingApplied: true } });
+    const before = { incident: await prisma.incident.findUniqueOrThrow({ where: { id: i.id } }),
+      answers: await prisma.incidentAnswer.findMany({ where: { incidentId: i.id } }) };
+    await services.messages.flush();
+    expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { id: head.id } })).status).toBe('PENDING');
+    expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { id: tail.id } })).attempts).toBe(0);
+    expect(trace).toEqual([`edit:${mids[0]}`]);
+    expect(sent.find(s => s.mid === mids[0])!.text).toContain('https://example.org/review');
+    failSecond = false;
+    const restarted = new MaxMessageService(max, { prisma, storage: { remove: async () => undefined } as never });
+    await restarted.flush(); // Backoff still holds the address after restart.
+    expect(trace).toEqual([`edit:${mids[0]}`]);
+    await prisma.outboundMessage.update({ where: { id: head.id }, data: { nextAttemptAt: new Date(0) } });
+    await restarted.flush();
+    expect(trace).toEqual([`edit:${mids[0]}`, `edit:${mids[1]}`, 'next-review-job']);
+    expect(await prisma.outboundMessage.count({ where: { id: { in: [head.id, tail.id] }, status: 'SENT' } })).toBe(2);
+    await restarted.flush();
+    expect(trace.filter(x => x === 'next-review-job')).toHaveLength(1);
+    for (const mid of mids) {
+      const card = sent.find(s => s.mid === mid)!;
+      expect(card.text).toContain('Освещение восстановлено.');
+      expect(card.text).toContain('https://example.org/review');
+      expect(card.extra.attachments).toContainEqual({ type: 'image', payload: { token: 'preserved-photo' } });
+      expect(card.extra.attachments.some((a: any) => a.type === 'share')).toBe(false);
+      expect(card.extra.attachments.find((a: any) => a.type === 'inline_keyboard').payload.buttons.flat()
+        .some((b: any) => b.payload.includes('approve'))).toBe(true);
+    }
+    expect(await prisma.incident.findUniqueOrThrow({ where: { id: i.id } })).toEqual(before.incident);
+    expect(await prisma.incidentAnswer.findMany({ where: { incidentId: i.id } })).toEqual(before.answers);
+  });
 
   it('gives concurrent profile workers distinct oldest incidents and never another organization', async () => {
     const oldest = await create(60); const next = await create(30); const foreign = await create(120, GROUP_CODES.it);

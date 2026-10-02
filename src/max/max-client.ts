@@ -42,6 +42,23 @@ export type WebhookSubscription = {
 };
 
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const SHARE_LINK_PREFIX = '\n\nСсылка из предпросмотра: ';
+
+function isPublicLink(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !/\s/.test(value);
+  } catch { return false; }
+}
+
+function preserveShareFallbackText(current: string | undefined | null, intended: string): string {
+  if (!current?.startsWith(intended + SHARE_LINK_PREFIX)) return intended;
+  const suffix = current.slice(intended.length);
+  const links = suffix.split(SHARE_LINK_PREFIX).slice(1);
+  // Only retain our URL-only suffix on an exact replay. A new semantic body
+  // (including privacy rejection/redaction) must not resurrect old content.
+  return links.length && links.every(isPublicLink) ? current : intended;
+}
 
 function isRetryable(error: unknown): boolean {
   if (error instanceof ValidationError) return false;
@@ -136,12 +153,13 @@ export class MaxClient {
     text: string,
     attachments?: AttachmentRequest[] | undefined,
   ): Promise<void> {
-    await this.call('editMessage', () =>
+    const result = await this.call('editMessage', () =>
       this.api.editMessage(messageId, {
         text,
         ...(attachments === undefined ? {} : { attachments }),
       }),
     );
+    if (!result.success) throw new ValidationError('MAX не подтвердил обновление карточки.');
   }
 
   async deleteMessage(messageId: string): Promise<void> {
@@ -151,6 +169,9 @@ export class MaxClient {
   /** Replace only a card's controls while retaining its existing MAX media tokens. */
   async editCardWithKeyboard(messageId: string, text: string, buttons: import('./max-types').Button[][]): Promise<void> {
     const current = await this.call('getMessage', () => this.api.getMessage(messageId));
+    // A retry of the same logical edit must retain a URL added by the fallback,
+    // even though MAX no longer returns a share attachment after that edit.
+    text = preserveShareFallbackText(current.body.text, text);
     if (hasSameCardContent(current, text, buttons)) return;
     const attachments: AttachmentRequest[] = [];
     for (const item of current.body.attachments ?? []) {
@@ -168,7 +189,24 @@ export class MaxClient {
       }
     }
     if (buttons.length) attachments.push({ type: 'inline_keyboard', payload: { buttons } });
-    await this.editMessage(messageId, text, attachments);
+    try {
+      await this.editMessage(messageId, text, attachments);
+    } catch (error) {
+      const shares = attachments.filter(item => item.type === 'share');
+      // This exact permanent rejection has been observed for MAX's own returned
+      // preview tokens. Never treat another 400 or a network error as permission
+      // to remove attachments.
+      if (!shares.length || !(error instanceof MaxError) || error.status !== 400 ||
+        error.message !== '400: No valid url or token provided for share attachment') throw error;
+      const urls = shares.map(item => item.payload?.url);
+      if (urls.some(url => typeof url !== 'string' || !isPublicLink(url))) throw error;
+      const missing = [...new Set(urls as string[])].filter(url => !text.includes(url));
+      const fallbackText = text + missing.map(url => `${SHARE_LINK_PREFIX}${url}`).join('');
+      // Fail closed rather than truncate either the answer or the retained URL.
+      if (Array.from(fallbackText).length > 4000) throw error;
+      await this.editMessage(messageId, fallbackText, attachments.filter(item => item.type !== 'share'));
+      log.info({ messageId, removedPreviews: shares.length }, 'invalid link preview removed during card update');
+    }
   }
 
   async answerCallback(callbackId: string, notification?: string): Promise<void> {
