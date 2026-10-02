@@ -1,0 +1,11 @@
+const fs=require('node:fs');
+const [beforeFile,afterFile,mode]=process.argv.slice(2);
+const a=JSON.parse(fs.readFileSync(beforeFile)),b=JSON.parse(fs.readFileSync(afterFile));
+const failures=[];
+const selected=mode==='--offline'?Object.keys(a.database):['user','responsibleGroup','category','incidentCounter'];
+for(const model of selected)if(JSON.stringify(a.database[model])!==JSON.stringify(b.database[model]))failures.push('Changed database fingerprint: '+model);
+for(const p of a.panels)if(!b.panels.some(q=>q.key===p.key&&q.databaseId===p.databaseId))failures.push('Panel ID changed: '+p.key);
+if(a.panels.length!==b.panels.length)failures.push('Panel count changed');
+if(mode!=='--offline'&&(b.maxError||!b.webhook?.expectedPresent||b.webhook?.unexpected||b.panels.some(p=>!p.ok)||b.missingPanelChats.length))failures.push('MAX/webhook/panel verification incomplete');
+console.log(JSON.stringify({ok:!failures.length,beforePanels:a.panels.length,afterPanels:b.panels.length,failures},null,2));
+if(failures.length)process.exitCode=1;
