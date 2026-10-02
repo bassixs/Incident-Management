@@ -51,13 +51,34 @@ function isPublicLink(value: string): boolean {
   } catch { return false; }
 }
 
+function reviewContentWithoutReservation(text: string): string | undefined {
+  // Only the generated review-card prefix is presentation-only. Keep the entire
+  // remaining card, including incident identity, answer, history and version.
+  // Never strip lease-like lines in resident/answer text or arbitrary headers.
+  return /^📝 ОТВЕТ НА СОГЛАСОВАНИЕ\n(?:🟢 Свободно — можно взять в работу|👤 Закреплено за: [^\n]+\n⏳ До \d{2}\.\d{2}\.\d{4} \d{2}:\d{2} \(МСК\))\n\n(№ INC-[\d-]+\n\n[\s\S]*\n\nВерсия ответа:\n[1-9]\d*)$/u.exec(text)?.[1];
+}
+
 function preserveShareFallbackText(current: string | undefined | null, intended: string): string {
-  if (!current?.startsWith(intended + SHARE_LINK_PREFIX)) return intended;
-  const suffix = current.slice(intended.length);
-  const links = suffix.split(SHARE_LINK_PREFIX).slice(1);
-  // Only retain our URL-only suffix on an exact replay. A new semantic body
-  // (including privacy rejection/redaction) must not resurrect old content.
-  return links.length && links.every(isPublicLink) ? current : intended;
+  if (!current) return intended;
+  let body = current;
+  const links: string[] = [];
+  // Read only a trailing URL-only suffix; an embedded marker is content.
+  for (;;) {
+    const index = body.lastIndexOf(SHARE_LINK_PREFIX);
+    if (index < 0) break;
+    const link = body.slice(index + SHARE_LINK_PREFIX.length);
+    if (!isPublicLink(link)) break;
+    links.unshift(link);
+    body = body.slice(0, index);
+  }
+  if (!links.length) return intended;
+  const content = reviewContentWithoutReservation(body);
+  if (body !== intended && (content === undefined || content !== reviewContentWithoutReservation(intended))) return intended;
+  const preserved = intended + [...new Set(links)].filter(link => !intended.includes(link))
+    .map(link => `${SHARE_LINK_PREFIX}${link}`).join('');
+  // A larger service header must not silently evict a previously retained URL.
+  if (Array.from(preserved).length > 4000) throw new ValidationError('Не удалось сохранить ссылки карточки: превышен лимит текста MAX.');
+  return preserved;
 }
 
 function isRetryable(error: unknown): boolean {
@@ -169,8 +190,8 @@ export class MaxClient {
   /** Replace only a card's controls while retaining its existing MAX media tokens. */
   async editCardWithKeyboard(messageId: string, text: string, buttons: import('./max-types').Button[][]): Promise<void> {
     const current = await this.call('getMessage', () => this.api.getMessage(messageId));
-    // A retry of the same logical edit must retain a URL added by the fallback,
-    // even though MAX no longer returns a share attachment after that edit.
+    // Retain fallback links on replay and reservation changes of the same review
+    // content/version, even when MAX no longer returns a share attachment.
     text = preserveShareFallbackText(current.body.text, text);
     if (hasSameCardContent(current, text, buttons)) return;
     const attachments: AttachmentRequest[] = [];

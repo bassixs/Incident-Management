@@ -1,6 +1,8 @@
 import { Bot, MaxError } from '@maxhub/max-bot-api';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MaxClient } from '../../src/max/max-client';
+import { reviewCard } from '../../src/bot/views/cards';
+import type { LeaseView } from '../../src/work-queues/leases';
 
 const url = 'https://example.org/help';
 const share = { type: 'share', payload: { url, token: 'unusable-preview' } };
@@ -23,7 +25,86 @@ function fixture(attachments: unknown[], text = 'Прежний ответ') {
 }
 afterEach(() => vi.restoreAllMocks());
 
+function reviewText(lease: LeaseView = null, text = 'Освещение восстановлено.', version = 1, code = 'INC-000001') {
+  const incident = { publicCode: code, text: 'Не работает фонарь.', answers: [],
+    createdAt: new Date('2026-10-01T10:00:00Z'), deadlineAt: new Date('2026-10-05T10:00:00Z'),
+    problemMunicipalityName: 'Тестовая территория', attachments: [] };
+  return reviewCard(incident as unknown as Parameters<typeof reviewCard>[0],
+    { text, version, attachments: [] } as unknown as Parameters<typeof reviewCard>[1], null, lease);
+}
+
+const lease = { name: 'Тестовый сотрудник', until: new Date('2026-10-02T10:15:00Z') };
+
 describe('specific MAX 400 share fallback', () => {
+  it('keeps an appended URL through reservation changes and replay without a returned share attachment', async () => {
+    const f = fixture([photo, share]);
+    await f.client.editCardWithKeyboard('card', reviewText(), buttons);
+    expect(f.card().body.text).toBe(`${reviewText()}\n\nСсылка из предпросмотра: ${url}`);
+    expect(f.card().body.attachments.some(a => (a as { type: string }).type === 'share')).toBe(false);
+    for (const reservation of [lease, { ...lease, name: 'Другой сотрудник' }, null]) {
+      // New client proves that preservation does not depend on an in-memory cache.
+      const client = new MaxClient(f.client.bot);
+      await client.editCardWithKeyboard('card', reviewText(reservation), buttons);
+      expect(f.card().body.text).toBe(`${reviewText(reservation)}\n\nСсылка из предпросмотра: ${url}`);
+      expect(f.card().body.attachments).toEqual([photo, keyboard]);
+      const calls = f.edit.mock.calls.length;
+      await client.editCardWithKeyboard('card', reviewText(reservation), buttons);
+      expect(f.edit).toHaveBeenCalledTimes(calls);
+    }
+  });
+
+  it.each([
+    { reason: 'new answer text', next: () => reviewText(lease, 'Новый ответ.') },
+    { reason: 'new version with identical text', next: () => reviewText(lease, undefined, 2) },
+    { reason: 'different incident', next: () => reviewText(lease, undefined, 1, 'INC-000002') },
+    { reason: 'deliberate redaction', next: () => 'Содержимое удалено' },
+    { reason: 'lease-like line inside the answer', next: () => reviewText(lease, 'Ответ\n🟢 Свободно — можно взять в работу') },
+  ])('does not carry an old URL into $reason', async ({ next }) => {
+    const f = fixture([photo, share]);
+    await f.client.editCardWithKeyboard('card', reviewText(), buttons);
+    await f.client.editCardWithKeyboard('card', next(), []);
+    expect(f.card().body.text).toBe(next());
+    expect(f.card().body.text).not.toContain(url);
+    await f.client.editCardWithKeyboard('card', next(), []);
+    expect(f.edit).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not discard the URL when a longer reservation header would exceed the limit', async () => {
+    const f = fixture([photo, share]);
+    await f.client.editCardWithKeyboard('card', reviewText(), buttons);
+    const original = structuredClone(f.card());
+    const intended = reviewText({ ...lease, name: lease.name + 'Я'.repeat(3990 - Array.from(reviewText(lease)).length) });
+    expect(Array.from(intended)).toHaveLength(3990);
+    await expect(f.client.editCardWithKeyboard('card', intended, buttons)).rejects.toThrow();
+    expect(f.card()).toEqual(original);
+    expect(f.edit).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves all trailing URLs after a failed service update and its retry', async () => {
+    const second = 'https://example.org/second';
+    const f = fixture([photo, share, { type: 'share', payload: { url: second, token: 'second-preview' } }]);
+    await f.client.editCardWithKeyboard('card', reviewText(), buttons);
+    const original = structuredClone(f.card());
+    f.edit.mockRejectedValueOnce(new MaxError(403, { code: 'forbidden', message: 'Temporary access failure' }));
+    await expect(f.client.editCardWithKeyboard('card', reviewText(lease), buttons)).rejects.toThrow();
+    expect(f.card()).toEqual(original);
+    await new MaxClient(f.client.bot).editCardWithKeyboard('card', reviewText(lease), buttons);
+    expect(f.card().body.text).toBe(`${reviewText(lease)}\n\nСсылка из предпросмотра: ${url}\n\nСсылка из предпросмотра: ${second}`);
+    expect(f.card().body.attachments).toEqual([photo, keyboard]);
+    await f.client.editCardWithKeyboard('card', reviewText(lease), buttons);
+    expect(f.edit).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not normalise reservation-looking lines inside an answer', async () => {
+    const f = fixture([photo, share]);
+    const oldAnswer = 'Ответ\n🟢 Свободно — можно взять в работу\nКонец';
+    await f.client.editCardWithKeyboard('card', reviewText(null, oldAnswer), buttons);
+    const changedAnswer = 'Ответ\n👤 Закреплено за: Тест\n⏳ До 02.10.2026 13:15 (МСК)\nКонец';
+    await f.client.editCardWithKeyboard('card', reviewText(lease, changedAnswer), buttons);
+    expect(f.card().body.text).toBe(reviewText(lease, changedAnswer));
+    expect(f.card().body.text).not.toContain(url);
+  });
+
   it.each([{ attachments: [photo, file, share] }, { attachments: [share] }])('keeps the answer, URL, other attachments and current controls: %j', async ({ attachments }) => {
     const f = fixture(attachments);
     const text = `Исправленный ответ ${url}`;
