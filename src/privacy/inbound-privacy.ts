@@ -1,8 +1,7 @@
 import type { PrismaClient } from '@prisma/client';
 import type { Update } from '../max/max-types';
 import { containsPersonalData } from './personal-data';
-import { getConfig } from '../config';
-import { verifyOwnContact } from './optional-contact';
+import { parseManualPhone } from './optional-contact';
 import type { SessionData } from '../sessions/operator-session.service';
 
 /** Drop resident profile/forward metadata before the durable inbox sees an event. */
@@ -11,6 +10,7 @@ export async function minimiseInbound(update: Update, prisma: PrismaClient): Pro
   delete value.privacyRejected;
   delete value.contactRejected;
   delete value.verifiedDraftContact;
+  delete value.draftPhoneInput;
   const message = value.message;
   const dialog = message?.recipient?.chat_type === 'dialog';
   const userId = value.callback?.user?.user_id ?? message?.sender?.user_id ?? value.user?.user_id;
@@ -19,33 +19,44 @@ export async function minimiseInbound(update: Update, prisma: PrismaClient): Pro
     const item = await prisma.privateWorkItem.findFirst({ where: { maxUserId: BigInt(userId), selected: true }, select: { id: true } });
     staffDraft = !!item;
   }
+  const session = dialog && !value.callback && Number.isSafeInteger(userId)
+    ? await prisma.operatorSession.findUnique({ where: { maxUserId_chatId: {
+      maxUserId: BigInt(userId), chatId: BigInt(message.recipient.chat_id ?? userId),
+    } } }) : null;
+  const data = session?.data as SessionData | null;
+  // Selection is the dialog mode: entering personal work keeps the resident
+  // draft for later, but it must not intercept newly admitted employee input.
+  // Previously admitted draftPhoneInput events retain their binding in inbox
+  // and are still handled before the employee route (message.handler.ts).
   const residentMessage = dialog && !value.callback && !staffDraft;
+  const phoneStep = residentMessage && session?.type === 'WAITING_INCIDENT_EDIT_VALUE' &&
+    data?.draftEditField === 'phone' && session.expiresAt > new Date();
   const contacts = message?.body?.attachments?.filter((a: any) => a.type === 'contact') ?? [];
   if (contacts.length) {
-    let accepted = false;
-    if (residentMessage && contacts.length === 1 && message.body.attachments.length === 1 && !message.link) {
-      const phone = verifyOwnContact(contacts[0].payload, userId, getConfig().BOT_TOKEN);
-      if (phone) {
-        const session = await prisma.operatorSession.findUnique({ where: { maxUserId_chatId: {
-          maxUserId: BigInt(userId), chatId: BigInt(message.recipient.chat_id ?? userId),
-        } } });
-        const data = session?.data as SessionData | null;
-        const sentAt = message.timestamp ?? value.timestamp;
-        if (session?.type === 'WAITING_INCIDENT_CONFIRMATION' && session.expiresAt > new Date() &&
-            data?.draftToken && data.previewToken && !data.requesterPhone &&
-            typeof sentAt === 'number' && sentAt >= Number(data.previewStartedAt)) {
-          value.verifiedDraftContact = { phone, draftToken: data.draftToken, previewToken: data.previewToken };
-          accepted = true;
-        }
-      }
-    }
-    // Even staff/unexpected contacts never enter the durable inbox as raw VCF.
+    // Legacy native contacts never enter a text/employee route or survive in inbox.
     message.body.text = null;
     message.body.attachments = [];
     delete message.link;
-    // Contact captions/names are not incident text, including rejected contacts.
-    // Keep a separate marker so invalid stage/signature is not reported as PII.
-    if (!accepted) value.contactRejected = true;
+    value.contactRejected = true;
+  } else if (phoneStep && message?.body && !/^\/(?:start|cancel)(?:\s|$)/i.test(message.body.text ?? '')) {
+    const sentAt = message.timestamp ?? value.timestamp;
+    const timely = typeof sentAt === 'number' &&
+      typeof data.phoneInputStartedAt === 'number' && sentAt >= data.phoneInputStartedAt;
+    const phone = timely && !message.link && !message.body.attachments?.length
+      ? parseManualPhone(message.body.text ?? '') : null;
+    // Bind even invalid input; it must never fall through into another draft or a staff reply.
+    value.draftPhoneInput = { sessionId: session.id, draftToken: data.draftToken, previewToken: data.previewToken,
+      ...(phone ? { phone } : {}) };
+    message.body.text = null;
+    message.body.attachments = [];
+    delete message.link;
+  } else if (residentMessage && message?.body && parseManualPhone(message.body.text ?? '')) {
+    // A delayed number outside the explicit input step must not become a new
+    // problem description. Do not retain the number or infer a new binding.
+    value.draftPhoneInput = { sessionId: '', draftToken: '', previewToken: '' };
+    message.body.text = null;
+    message.body.attachments = [];
+    delete message.link;
   }
   if (residentMessage && message?.body) {
     const rejected = containsPersonalData(message.body.text ?? '') || !!message.link ||

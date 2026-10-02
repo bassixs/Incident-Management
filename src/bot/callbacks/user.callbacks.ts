@@ -1,3 +1,4 @@
+import { sendPhoneInputPrompt } from '../requester-phone';
 import { randomUUID } from 'node:crypto';
 import { SessionType } from '@prisma/client';
 
@@ -202,6 +203,28 @@ export async function handleUserCallback(
       return 'Сообщение зарегистрировано';
     }
 
+    case 'draft-phone-enter':
+    case 'draft-phone-back': {
+      const chatId = context.chatId ?? actor.maxUserId;
+      const current = await services.sessions.find(actor.maxUserId, chatId);
+      if (!current) throw new ValidationError('Кнопка устарела. Используйте текущую карточку сообщения.');
+      const data = services.sessions.readData(current);
+      assertPreviewToken(data, payload.argument);
+      if (payload.action === 'draft-phone-back') {
+        if (current.type !== SessionType.WAITING_INCIDENT_EDIT_VALUE || data.draftEditField !== 'phone') throw new ValidationError('Кнопка устарела.');
+        await showIncidentDraftPreview(services, actor.maxUserId, chatId, data, current);
+        return;
+      }
+      if (![SessionType.WAITING_INCIDENT_CONFIRMATION, SessionType.WAITING_INCIDENT_EDIT_SELECTION].includes(current.type as never) || data.previewDeliveryPending) throw new ValidationError('Используйте текущую карточку сообщения.');
+      const draft = { ...requireCompleteIncidentDraft(data), draftEditField: 'phone' as const, previewToken: randomUUID(), phoneInputStartedAt: Date.now() };
+      delete draft.pendingPhone;
+      delete draft.previewMessageId;
+      if (!await services.sessions.replaceCurrent(current, SessionType.WAITING_INCIDENT_EDIT_VALUE, draft)) throw new ValidationError('Черновик изменился.');
+      await retireIncidentDraftPreview(services, data.previewMessageId);
+      await sendPhoneInputPrompt(services, actor.maxUserId, draft);
+      return;
+    }
+
     case 'draft-phone-use':
       throw new ValidationError('Кнопка устарела. Используйте текущую карточку сообщения.');
     case 'draft-phone-remove':
@@ -209,7 +232,7 @@ export async function handleUserCallback(
       const chatId = context.chatId ?? actor.maxUserId;
       const current = await services.sessions.find(actor.maxUserId, chatId);
       const requiredType = payload.action === 'draft-phone-remove' ? SessionType.WAITING_INCIDENT_EDIT_SELECTION : SessionType.WAITING_INCIDENT_CONFIRMATION;
-      if (!current || current.type !== requiredType) throw new ValidationError('Кнопка устарела. Используйте текущую карточку сообщения.');
+      if (!current || (current.type !== requiredType && !(payload.action === 'draft-cancel' && current.type === SessionType.WAITING_INCIDENT_EDIT_VALUE && services.sessions.readData(current).draftEditField === 'phone'))) throw new ValidationError('Кнопка устарела. Используйте текущую карточку сообщения.');
       const data = { ...services.sessions.readData(current) };
       assertPreviewToken(data, payload.argument);
       if (payload.action === 'draft-cancel') {

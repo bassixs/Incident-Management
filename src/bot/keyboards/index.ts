@@ -181,7 +181,7 @@ export function requesterLocalityKeyboard(
 /** Final requester checkpoint before an Incident row is created. */
 export function incidentDraftConfirmationKeyboard(token?: string, hasPhone = false): Button[][] {
   return [
-    ...(!hasPhone ? [[button.requestContact('📞 Поделиться контактом')]] : []),
+    ...(!hasPhone ? [[button.callback('📞 Поделиться контактом', userCallback('draft-phone-enter', token))]] : []),
     [button.callback('✅ Всё верно', userCallback('draft-confirm', token), { intent: 'positive' })],
     [button.callback('✏️ Исправить', userCallback('draft-edit', token))],
     [button.callback('Отмена', userCallback('draft-cancel', token))],
@@ -195,6 +195,7 @@ export function incidentDraftEditKeyboard(hasPhoto: boolean, hasPhone = false, t
     [button.callback('Территория и населённый пункт', userCallback('draft-field', 'location'))],
     [button.callback('Текст сообщения', userCallback('draft-field', 'text'))],
     [button.callback(hasPhoto ? 'Фотографии' : 'Добавить фотографию', userCallback('draft-field', 'photo'))],
+    [button.callback(hasPhone ? 'Изменить номер' : '📞 Поделиться контактом', userCallback('draft-phone-enter', token))],
     ...(hasPhone ? [[button.callback('Убрать номер', userCallback('draft-phone-remove', token))]] : []),
     [button.callback('⬅️ Назад к проверке', userCallback('draft-edit', 'back'))],
   ];
@@ -226,9 +227,7 @@ export function answerRatingKeyboard(incidentId: string): Button[][] {
 /** Buttons under the distribution-chat card (§16). */
 export function distributionKeyboard(incidentId: string, hasPhone = false): Button[][] {
   return [
-    ...residentContactButton(incidentId, hasPhone),
     [button.callback('Работать лично', incidentCallback('personal', incidentId))],
-    [button.callback('Текст и фото проверены: запрещённых данных нет', incidentCallback('privacy-pass', incidentId))],
     [button.callback('Распределить', incidentCallback('assign', incidentId), { intent: 'positive' })],
     [button.callback('Изменить тему', incidentCallback('topic', incidentId))],
     [button.callback('Освободить сообщение', `queue:release:${incidentId}`)],
@@ -336,7 +335,7 @@ export function sectorKeyboard(incidentId: string, options: { hasTemplate: boole
   const status = options.status ?? 'ASSIGNED';
   if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(status)) return [];
   if (status === 'REVISION_REQUIRED') return revisionKeyboard(incidentId, options.hasPhone);
-  const rows: Button[][] = residentContactButton(incidentId, !!options.hasPhone);
+  const rows: Button[][] = [];
   if (status === 'ASSIGNED') rows.push([button.callback('Взять в работу', incidentCallback('take', incidentId), { intent: 'positive' })]);
   rows.push([button.callback('Подготовить ответ', incidentCallback('answer', incidentId))]);
   if (options.hasTemplate) {
@@ -362,14 +361,10 @@ export function reviewKeyboard(incidentId: string, answerId: string): Button[][]
 
 /** Button under the "returned for revision" card in the sector chat (§32). */
 export function revisionKeyboard(incidentId: string, hasPhone = false): Button[][] {
-  return [...residentContactButton(incidentId, hasPhone), [button.callback('Исправить ответ', incidentCallback('fix', incidentId), { intent: 'positive' })],
+  return [[button.callback('Исправить ответ', incidentCallback('fix', incidentId), { intent: 'positive' })],
     [button.callback('Вернуть на перераспределение', incidentCallback('redistribute', incidentId))],
     [button.callback('Освободить сообщение', `work:release:${incidentId}`)],
     [button.callback('Работать лично', incidentCallback('personal', incidentId))]];
-}
-
-function residentContactButton(id: string, hasPhone: boolean): Button[][] {
-  return hasPhone ? [[button.callback('📞 Контакт жителя', incidentCallback('contact', id))]] : [];
 }
 
 /** Period picker shown by a bare `/report` (§40). */

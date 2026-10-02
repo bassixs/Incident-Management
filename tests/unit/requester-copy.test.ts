@@ -23,17 +23,17 @@ describe('requester-facing copy', () => {
     expect(greetingText()).toBe(readFileSync('tests/fixtures/resident-greeting.txt', 'utf8').replace(/\r\n/g, '\n').trimEnd());
     expect(rulesText()).toBe(readFileSync('tests/fixtures/resident-rules.txt', 'utf8').replace(/\r\n/g, '\n').trimEnd());
   });
-  it('allows a text phone and distinguishes its visibility from a separate contact', () => {
+  it('describes manual optional phone and visibility in full work cards', () => {
     expect(OPTIONAL_PHONE_OFFER).toBe('Для более оперативной обработки можно поделиться телефоном. Это необязательно.');
     expect(rulesText()).not.toContain(PRIVACY_NOTICE);
     expect(rulesText()).toContain('Телефон для связи разрешён.');
-    expect(PRIVACY_NOTICE).toContain('Номер в тексте виден вместе с текстом сообщения.');
-    expect(PRIVACY_NOTICE).toContain('Отдельно переданный контакт доступен распределителю и текущему исполнителю');
+    expect(PRIVACY_NOTICE).toContain('Номер виден участникам рабочих чатов в карточке сообщения');
+    expect(PRIVACY_NOTICE).toContain('Проверяется формат, а не принадлежность номера.');
+    expect(PRIVACY_NOTICE).toContain('Отдельное подтверждение проверки перед распределением не требуется.');
     expect(PRIVACY_REJECTION).toBe('Сообщение не принято: обнаружены возможные запрещённые персональные данные. Уберите ФИО, паспортные данные, СНИЛС, банковские реквизиты, адреса электронной почты и другие запрещённые личные сведения. Телефон для связи разрешён. Исправьте текст и отправьте заново.');
     expect(REJECTION_REASONS.find(r => r.id === '9')?.reason).toContain('Телефон для связи разрешён.');
-    expect(CONTACT_REJECTION).toContain('Контакт не добавлен.');
+    expect(CONTACT_REJECTION).toBe('Системные карточки контакта больше не используются. На итоговой карточке нажмите «📞 Поделиться контактом» и введите номер вручную. Сообщение не отправлено.');
     expect(CONTACT_REJECTION).not.toContain('персональные данные');
-    expect(CONTACT_REJECTION).toContain('Сообщение этим действием не отправлено.');
   });
   it('does not disclose the internal response deadline', () => {
     const requesterCopy = [greetingText(), rulesText(), registrationConfirmation(incident)].join('\n');

@@ -16,6 +16,8 @@ export type SessionData = {
   draftToken?: string;
   previewToken?: string;
   previewStartedAt?: number;
+  /** Start of this manual phone-entry step; rejects older text events. */
+  phoneInputStartedAt?: number;
   previewMessageId?: string;
   /** Persisted preview delivery failed/in flight; never submit until shown. */
   previewDeliveryPending?: boolean;
@@ -62,7 +64,8 @@ export class OperatorSessionService {
     });
     if (!session) return null;
     if (session.expiresAt.getTime() <= Date.now()) {
-      await this.clear(maxUserId, chatId, tx);
+      // A concurrent fresh draft/extension must not be deleted with the expired session.
+      await (tx ?? this.prisma).operatorSession.deleteMany({ where: { id: session.id, expiresAt: session.expiresAt } });
       return null;
     }
     return session;

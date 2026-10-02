@@ -11,7 +11,7 @@ import { moduleLogger } from '../utils/logger';
 
 const log = moduleLogger('dispatcher');
 const INBOX_INTERVAL_MS = 250;
-const CONTACT_FAILURE = 'Не удалось обработать контакт; номер очищен. Повторите передачу контакта.';
+const CONTACT_FAILURE = 'Не удалось обработать номер; данные события очищены. Проверьте текущую карточку и при необходимости введите номер снова.';
 
 export type Reservation = { id?: string; key: string; fresh: boolean };
 
@@ -86,7 +86,8 @@ export class UpdateDispatcher {
     await this.prisma.inboundUpdate.updateMany({
       where: {
         status: { in: [InboxStatus.PROCESSING, InboxStatus.FAILED] },
-        payload: { path: ['verifiedDraftContact'], not: Prisma.AnyNull },
+        OR: [{ payload: { path: ['verifiedDraftContact'], not: Prisma.AnyNull } },
+          { payload: { path: ['draftPhoneInput'], not: Prisma.AnyNull } }],
       },
       data: {
         status: InboxStatus.FAILED,
@@ -194,7 +195,8 @@ export class UpdateDispatcher {
         },
       });
     } catch (error) {
-      const contact = !!(row.payload as { verifiedDraftContact?: unknown }).verifiedDraftContact;
+      const payload = row.payload as { verifiedDraftContact?: unknown; draftPhoneInput?: unknown };
+      const contact = !!(payload.verifiedDraftContact || payload.draftPhoneInput);
       const detail = contact ? CONTACT_FAILURE : error instanceof Error ? error.message : String(error);
       await this.prisma.inboundUpdate.update({
         where: { id },

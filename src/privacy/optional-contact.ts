@@ -1,26 +1,26 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
 import { normaliseRequesterPhone } from '../incidents/incident.service';
 
 export const OPTIONAL_PHONE_OFFER = 'Для более оперативной обработки можно поделиться телефоном. Это необязательно.';
-export const OPTIONAL_PHONE_ADDED = 'Специалист сможет связаться с вами для уточнения деталей';
-export const CONTACT_REJECTION = 'Контакт не добавлен. На итоговой карточке текущего сообщения нажмите «📞 Поделиться контактом» и отправьте свой контакт. Можно продолжить без телефона. Сообщение этим действием не отправлено.';
+export const OPTIONAL_PHONE_ADDED = 'Номер виден участникам рабочих чатов в карточке сообщения. Специалист сможет связаться с вами для уточнения деталей.';
+export const PHONE_INPUT_PROMPT = 'Введите номер телефона для связи, например +7 900 123-45-67. Можно продолжить без номера';
+export const PHONE_INPUT_ERROR = 'Не удалось распознать номер. Введите российский номер с +7 или 8, например +7 900 123-45-67, или вернитесь к карточке без добавления номера.';
+export const CONTACT_REJECTION = 'Системные карточки контакта больше не используются. На итоговой карточке нажмите «📞 Поделиться контактом» и введите номер вручную. Сообщение не отправлено.';
 
-/** Trusted, minimal inbox extension. Never contains the original contact or signature. */
-export type VerifiedDraftContact = { phone: string; draftToken: string; previewToken: string };
+/** Bound at inbox admission, rechecked before changing a draft. No raw input retained. */
+export type DraftPhoneInput = { sessionId: string; draftToken: string; previewToken: string; phone?: string };
 
-/** MAX documents HMAC-SHA256(bot token, VCF). SDK 0.2.5 omits hash/max_info in its types. */
-export function verifyOwnContact(payload: unknown, senderId: number, botToken: string): string | null {
-  if (!payload || typeof payload !== 'object') return null;
-  const p = payload as { vcf_info?: unknown; hash?: unknown; max_info?: { user_id?: unknown }; tam_info?: { user_id?: unknown } };
-  const id = p.max_info?.user_id ?? p.tam_info?.user_id;
-  if (!Number.isSafeInteger(senderId) || id !== senderId || typeof p.vcf_info !== 'string' || p.vcf_info.length > 8192 || typeof p.hash !== 'string') return null;
-  // JSON normally already decodes CRLF; handle the documented double-escaped form too.
-  const vcf = p.vcf_info.replace(/\\r\\n/g, '\r\n');
-  const expected = createHmac('sha256', botToken).update(vcf, 'utf8').digest();
-  const supplied = /^[a-f\d]{64}$/i.test(p.hash) ? Buffer.from(p.hash, 'hex')
-    : /^[A-Za-z\d+/_-]{43}=?$/.test(p.hash) ? Buffer.from(p.hash, 'base64') : null;
-  if (!supplied || supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return null;
-  const phones = [...vcf.matchAll(/^TEL(?:;[^:\r\n]*)?:([^\r\n]+)$/gmi)];
-  if (phones.length !== 1) return null;
-  try { return normaliseRequesterPhone(phones[0]![1]!.replace(/^tel:/i, '')); } catch { return null; }
+/** Format validation only; does not establish ownership of the number. */
+export function parseManualPhone(raw: string): string | null {
+  const value = raw.trim();
+  if (value.length > 64 || !/^(?:\+7|8)[\d ()\t-]+$/.test(value)) return null;
+  const digits = value.replace(/\D/g, '');
+  if (!/^[78]\d{10}$/.test(digits)) return null;
+  // Do not accept malformed/nested parentheses as an otherwise valid phone.
+  let depth = 0;
+  for (const c of value) {
+    if (c === '(' && ++depth !== 1) return null;
+    if (c === ')' && --depth !== 0) return null;
+  }
+  if (depth !== 0) return null;
+  return normaliseRequesterPhone('+7' + digits.slice(1));
 }

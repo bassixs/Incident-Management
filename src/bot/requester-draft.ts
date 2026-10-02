@@ -15,7 +15,7 @@ import { incidentDraftPreview } from './views/cards';
 
 const log = moduleLogger('requester-draft');
 
-/** Best effort: a native contact button has no draft token, so retire old cards.
+/** Best effort: retire obsolete draft previews and their buttons.
  * Only pass previewMessageId from the validated owner/chat-scoped draft session,
  * or the ID returned by sending that preview in this operation. Never fall back
  * to callback message IDs, search chat history, or touch working-chat cards.
@@ -76,7 +76,7 @@ export async function showIncidentDraftPreview(
 ): Promise<void> {
   const { requesterName: _name, pendingPhone: _legacyPhone, ...minimal } = data;
   const draft = requireCompleteIncidentDraft(minimal);
-  const { draftEditField: _draftEditField, draftPhotoRetry: _draftPhotoRetry, ...cleanDraft } = draft;
+  const { draftEditField: _draftEditField, draftPhotoRetry: _draftPhotoRetry, phoneInputStartedAt: _phoneStarted, ...cleanDraft } = draft;
   cleanDraft.draftToken ??= randomUUID();
   cleanDraft.previewToken = randomUUID();
   cleanDraft.previewStartedAt = Date.now();

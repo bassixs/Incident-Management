@@ -165,9 +165,6 @@ export class DistributionService {
     await this.prisma.$transaction(async (tx) => {
       await acquireAdvisoryLock(tx, ...CLAIM_LOCK);
       assertClaimOwner(await tx.incident.findUniqueOrThrow({ where: { id: incidentId } }), actor.maxUserId);
-      if (!(await tx.incidentHistory.findFirst({ where: { incidentId, action: 'PRIVACY_CHECK_PASSED' }, select: { id: true } }))) {
-        throw new ConflictError('Сначала проверьте текст и все фотографии и подтвердите отсутствие запрещённых персональных данных (телефон для связи разрешён).');
-      }
       const claimed = await this.repository.transition(tx, incidentId, IncidentStatus.DISTRIBUTION, {
         status: IncidentStatus.ASSIGNED,
         assignedGroupId: group.id,
@@ -214,19 +211,6 @@ export class DistributionService {
     await this.sector.publishCard(incidentId);
     await this.messages.flush();
     return (await this.repository.findById(incidentId))!;
-  }
-
-  /** Keep the routing indicator unchanged when the answer reaches the requester. */
-  async confirmPrivacyCheck(incidentId: string, actor: Actor): Promise<void> {
-    await this.prisma.$transaction(async tx => {
-      await acquireAdvisoryLock(tx, ...CLAIM_LOCK);
-      const incident = await tx.incident.findUniqueOrThrow({ where: { id: incidentId } });
-      if (incident.status !== IncidentStatus.DISTRIBUTION) throw new ConflictError('Сообщение уже обработано.');
-      assertClaimOwner(incident, actor.maxUserId);
-      if (!await tx.incidentHistory.findFirst({ where: { incidentId, action: 'PRIVACY_CHECK_PASSED' } })) {
-        await tx.incidentHistory.create({ data: { incidentId, action: 'PRIVACY_CHECK_PASSED', actorMaxUserId: actor.maxUserId, actorRole: actor.role } });
-      }
-    }, TRANSACTION_OPTIONS);
   }
 
   async markWorked(incident: IncidentWithRelations): Promise<void> {

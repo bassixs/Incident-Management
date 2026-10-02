@@ -230,7 +230,7 @@ export async function showPersonalWork(services: AppServices, actor: ResolvedAct
       : sectorKeyboard(s.incident.id, { hasPhone: !!s.incident.requesterPhone, status: s.incident.status, hasTemplate: !!s.incident.assignedGroup?.answerTemplate }), s.item);
   }
   if (details) text += `\n\n${s.kind === 'review' ? reviewCard(s.incident, s.incident.answers.at(-1)!, s.incident.assignedGroup, owned) : incidentLookupCard(s.incident, owned, s.kind === 'distribution', s.kind !== 'sector')}`;
-  else text += `\n\nСообщение:\n${s.incident.text}`;
+  else text += `\n\nСообщение:\n${s.incident.text}${s.incident.requesterPhone ? `\nТелефон для связи: ${s.incident.requesterPhone}` : ''}`;
   rows.push([button('Показать сообщение', 'details', id), button('Обновить состояние', 'show', id)]);
   rows.push(active ? [button('Освободить', 'release', id), button('Отменить действие', 'cancel', id)] : [button('Взять и продолжить', 'resume', id), button('Отменить старое действие', 'cancel', id)]);
   await services.messages.send({ userId: actor.maxUserId }, { text, keyboard: [...rows, ...navigation()],
@@ -266,6 +266,8 @@ export async function personalHome(services: AppServices, actor: ResolvedActor, 
 
 export async function enterPersonalWork(services: AppServices, actor: ResolvedActor, id: string) {
   const s = await scope(services, actor, id);
+  // selected is the input mode; leave the separate resident session untouched
+  // so personal:resident can resume it while its normal TTL remains valid.
   await select(services, s.item);
   if (s.active) await take(services, s).catch(async error => services.messages.send({ userId: actor.maxUserId }, { text: error instanceof Error ? error.message : 'Не удалось взять сообщение.', keyboard: navigation() }));
   await showPersonalWork(services, actor, id, true);
@@ -295,8 +297,8 @@ export async function personalAction(services: AppServices, actor: ResolvedActor
   if (action === 'open') { await enterPersonalWork(services, actor, id); return; }
   if (!s.item.selected) throw new ConflictError('Сейчас выбрано другое сообщение. Откройте нужное через «Моя работа».');
   if (action === 'show' || action === 'details') { await showPersonalWork(services, actor, id, action === 'details'); return; }
-  if (action === 'run' && argument === `incident:contact:${s.item.incidentId}`) {
-    await run(services, s, argument, messageId); return;
+  if (action === 'run' && (argument === `incident:contact:${s.item.incidentId}` || argument?.startsWith(`incident:privacy-pass:${s.item.incidentId}`))) {
+    await services.messages.send({ userId: actor.maxUserId }, { text: 'Действие устарело. Используйте текущую карточку сообщения.' }); return;
   }
   if (action === 'resume') { await take(services, s); await showPersonalWork(services, actor, id); return; }
   if (action === 'cancel') {

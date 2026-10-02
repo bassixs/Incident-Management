@@ -1,26 +1,27 @@
 import { COMMANDS } from '../../src/bot/commands';
 import { MaxError } from '@maxhub/max-bot-api';
-import { createHmac } from 'node:crypto';
 import ExcelJS from 'exceljs';
 import { beforeAll, afterAll, beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { InboxStatus, UserRole, type PrismaClient } from '@prisma/client';
 import { actorFor, createHarness, createTestPrisma, describeIntegration, pushSchemaOnce, resetDatabase, seedCategories, type TestHarness } from '../helpers/integration';
+import { handleCallbackUpdate } from '../../src/bot/callbacks';
 import { handleUserCallback } from '../../src/bot/callbacks/user.callbacks';
+import { rejectionDraft } from '../../src/bot/callbacks/rejection-flow';
+import { REJECTION_REASONS } from '../../src/distribution/rejection-reasons';
+import { handleIncidentCallback } from '../../src/bot/callbacks/incident.callbacks';
 import { handleRequesterMessage } from '../../src/bot/handlers/requester.handler';
 import { handleMessageUpdate } from '../../src/bot/handlers/message.handler';
-import { CONTACT_REJECTION } from '../../src/privacy/optional-contact';
+import { CONTACT_REJECTION, PHONE_INPUT_ERROR, PHONE_INPUT_PROMPT } from '../../src/privacy/optional-contact';
 import { showIncidentDraftPreview } from '../../src/bot/requester-draft';
 import { minimiseInbound } from '../../src/privacy/inbound-privacy';
-import { revealResidentContact } from '../../src/privacy/staff-contact';
 import { UpdateDispatcher } from '../../src/server/update-dispatcher';
-import { getConfig } from '../../src/config';
 import { TEST_CHATS } from '../helpers/setup-env';
-import { distributionCard, sectorCard } from '../../src/bot/views/cards';
-import { personalAction } from '../../src/work-queues/private-workspace';
+import { distributionCard, sectorCard, reviewCard, incidentLookupCard, finalAnswerToRequester } from '../../src/bot/views/cards';
+import { personalAction, showPersonalWork, invitePersonalWork } from '../../src/work-queues/private-workspace';
 import type { SessionData } from '../../src/sessions/operator-session.service';
 import type { UserAction } from '../../src/max/callback-payload';
 
-describeIntegration('optional per-message contact', () => {
+describeIntegration('manual per-message phone', () => {
   let prisma: PrismaClient; let h: TestHarness;
   let actor: Awaited<ReturnType<typeof actorFor>>;
   const phone = '+7 999 123-45-67';
@@ -30,114 +31,224 @@ describeIntegration('optional per-message contact', () => {
   afterEach(() => vi.restoreAllMocks());
   beforeEach(async () => { await resetDatabase(prisma); await seedCategories(prisma); h = await createHarness(prisma); actor = await actorFor(prisma, 555n, 'Житель', []); });
   const data = async () => (await prisma.operatorSession.findUniqueOrThrow({ where: { maxUserId_chatId: { maxUserId: 555n, chatId: 555n } } })).data as SessionData;
-  const preview = async (values = draft) => showIncidentDraftPreview(h.services, 555n, 555n, values);
+  const preview = async (values: SessionData = draft) => showIncidentDraftPreview(h.services, 555n, 555n, values);
   const click = async (action: UserAction, argument?: string) => handleUserCallback({ services: h.services, actor, chatId: 555n, callbackId: `cb-${Math.random()}`, messageId: undefined }, { kind: 'user', action, argument: argument ?? (await data()).previewToken });
+  const enter = () => click('draft-phone-enter');
+  const rawPhone = (text = '8 (999) 123-45-67') => ({ update_type: 'message_created', timestamp: Date.now(), message: { timestamp: Date.now(), sender: { user_id: 555, name: 'Private Name', username: 'private-username' }, recipient: { chat_type: 'dialog', chat_id: 555 }, body: { mid: `phone-${Math.random()}`, text, attachments: [] as any[] } } });
   const rawContact = (overrides: Record<string, unknown> = {}) => {
-    const vcf = 'BEGIN:VCARD\r\nVERSION:3.0\r\nTEL;TYPE=cell:79991234567\r\nFN:Private Name\r\nEND:VCARD\r\n';
-    return { update_type: 'message_created', timestamp: Date.now(), message: { timestamp: Date.now(), sender: { user_id: 555, name: 'Private Name', username: 'private-username' }, recipient: { chat_type: 'dialog', chat_id: 555 }, body: { mid: 'own-contact', text: null, attachments: [{ type: 'contact', payload: { vcf_info: vcf, hash: createHmac('sha256', getConfig().BOT_TOKEN).update(vcf).digest('hex'), max_info: { user_id: 555 }, ...overrides } }] } } };
+    const update = rawPhone('Иванов Иван Иванович +79991234567');
+    update.message.body.attachments = [{ type:'contact', payload:{ vcf_info:'FN:Private Name\nTEL:79991234567', hash:'legacy', max_info:{user_id:555}, ...overrides } }];
+    return update;
   };
-  const receive = async () => {
-    const value = await minimiseInbound(rawContact() as never, prisma) as any;
+  const router = () => new UpdateDispatcher(prisma, { dispatch: async (value: any) => handleMessageUpdate(h.services, { update:value } as never) } as never);
+  const receive = async (text?: string) => {
+    if ((await data()).draftEditField !== 'phone') await enter();
+    const value = await minimiseInbound(rawPhone(text) as never, prisma) as any;
     expect(value.privacyRejected).toBeUndefined();
-    await handleRequesterMessage(h.services, actor, 555n, value.message, value.verifiedDraftContact);
-    return value;
+    await handleMessageUpdate(h.services, { update:value } as never); return value;
   };
   const withPhone = async () => { await preview(); await receive(); };
   const removePhone = async () => { await click('draft-edit'); await click('draft-phone-remove'); };
   const register = async () => { await click('draft-confirm'); return prisma.incident.findFirstOrThrow(); };
 
-  it('keeps the no-phone path and does not consume quota for previews', async () => {
-    await preview(); expect(await prisma.incident.count()).toBe(0);
-    expect(h.messages.toUser(555n).at(-1)?.message.text).toContain('Для более оперативной обработки можно поделиться телефоном. Это необязательно.');
-    const incident = await register(); expect(incident.requesterPhone).toBeNull();
-    expect(await prisma.legalAcceptance.count()).toBe(0);
+  it('allows registration without a phone and preserves topic-only start', async()=>{
+    await click('new','unused');expect(h.messages.toUser(555n).at(-1)?.message.text).toBe('Выберите тему сообщения');
+    await preview();const incident=await register();expect(incident.requesterPhone).toBeNull();expect(await prisma.legalAcceptance.count()).toBe(0);
   });
-  it('starts with only the topic prompt and topic buttons', async () => {
-    await click('new', 'unused');
-    expect(h.messages.toUser(555n).at(-1)?.message.text).toBe('Выберите тему сообщения');
-    expect(h.messages.toUser(555n).at(-1)?.message.keyboard?.flat().length).toBeGreaterThan(0);
-    expect(await data()).toEqual({});
+  it('adds, changes, removes and re-adds phone without registering or losing photos/text', async()=>{
+    await preview({...draft,draftMedia:[{kind:'IMAGE',token:'photo'}]});await enter();
+    expect(h.messages.toUser(555n).at(-1)?.message.text).toBe(PHONE_INPUT_PROMPT);
+    await receive();expect((await data()).requesterPhone).toBe(phone);
+    expect((await data()).draftMedia).toEqual([{kind:'IMAGE',token:'photo'}]);expect((await data()).draftText).toBe(draft.draftText);
+    expect(h.messages.toUser(555n).at(-1)?.message.keyboard?.flat().map(b=>b.text)).toEqual(['✅ Всё верно','✏️ Исправить','Отмена']);
+    await click('draft-edit');await enter();await receive('+7 900 111-22-33');expect((await data()).requesterPhone).toBe('+7 900 111-22-33');
+    await removePhone();expect((await data()).requesterPhone).toBeUndefined();await receive();
+    expect(await prisma.incident.count()).toBe(0);const incident=await register();expect(incident.requesterPhone).toBe(phone);
+    expect((await prisma.user.findUniqueOrThrow({where:{maxUserId:555n}})).requesterPhone).toBeNull();
+    await click('new','unused');expect(await data()).toEqual({});
   });
-  it('removes via correction and offers contact again, then adds it again without confirmation', async () => {
-    await withPhone();
-    await expect(click('draft-phone-remove')).rejects.toThrow('устарела');
-    await click('draft-edit');
-    const removal = h.messages.toUser(555n).at(-1)?.message.keyboard?.flat().find(b => b.text === 'Убрать номер');
-    expect(removal).toMatchObject({ type: 'callback', payload: `user:draft-phone-remove:${(await data()).previewToken}` });
-    const oldEditToken = (await data()).previewToken;
-    await click('draft-phone-remove');
-    expect((await data()).requesterPhone).toBeUndefined();
-    expect(h.messages.toUser(555n).at(-1)?.message.keyboard?.flat()).toContainEqual({ type: 'request_contact', text: '📞 Поделиться контактом' });
-    await receive();
-    expect((await data()).requesterPhone).toBe(phone);
-    expect((await minimiseInbound(rawContact() as never, prisma) as any).contactRejected).toBe(true);
-    await expect(click('draft-phone-use')).rejects.toThrow('устарела');
-    await click('draft-edit');
-    await expect(click('draft-phone-remove', oldEditToken)).rejects.toThrow('устарела');
-    expect((await data()).requesterPhone).toBe(phone);
+  it.each(['not a number','+1 234 5678901','890012345678','паспорт 45 12 123456'])('rejects invalid phone without turning it into problem text: %s',async text=>{
+    await preview();await enter();await router().handle(rawPhone(text) as never);
+    expect((await data()).draftText).toBe(draft.draftText);expect((await data()).requesterPhone).toBeUndefined();
+    expect(h.messages.toUser(555n).at(-1)?.message.text).toBe(PHONE_INPUT_ERROR);
+    expect((await prisma.inboundUpdate.findFirstOrThrow()).payload).toEqual({});expect(await prisma.incident.count()).toBe(0);
+    await receive();expect((await data()).requesterPhone).toBe(phone);
+  });
+  it.each([false,true])('returns from input without modifying the existing phone (%s)',async existing=>{
+    if(existing)await withPhone();else await preview();
+    if(existing)await click('draft-edit');await enter();await click('draft-phone-back');
+    expect((await data()).requesterPhone).toBe(existing?phone:undefined);expect(await prisma.incident.count()).toBe(0);
+  });
+  it.each(['cancel','replace','expire','submit'] as const)('does not apply captured input after %s',async action=>{
+    await preview();const oldButton=(await data()).previewToken;await enter();
+    const value=await minimiseInbound(rawPhone() as never,prisma) as any;
+    if(action==='expire')await prisma.operatorSession.updateMany({data:{expiresAt:new Date(0)}});
+    else if(action==='submit'){await click('draft-phone-back');await register();}
+    else {await click('draft-cancel');if(action==='replace'){await preview();await enter();}}
+    await handleMessageUpdate(h.services,{update:value} as never);
+    const sessions=await prisma.operatorSession.findMany();expect(sessions.every(s=>!(s.data as SessionData).requesterPhone)).toBe(true);
+    expect((await prisma.incident.findMany()).every(i=>i.requesterPhone===null)).toBe(true);
+    await expect(click('draft-phone-enter',oldButton)).rejects.toThrow();
+  });
+  it('does not clear a different clarification session when old phone input arrives', async () => {
+    await preview(); await enter(); const value = await minimiseInbound(rawPhone() as never, prisma);
+    await h.services.sessions.start({ maxUserId: 555n, chatId: 555n, type: 'WAITING_CLARIFICATION_REPLY', data: { clarificationId: 'new-session' } });
+    const before = await h.services.sessions.find(555n, 555n);
+    await handleMessageUpdate(h.services, { update: value } as never);
+    expect(await h.services.sessions.find(555n, 555n)).toEqual(before);
     expect(await prisma.incident.count()).toBe(0);
   });
-  it('does not attach a delayed verified contact after submission or to a later draft', async () => {
-    await preview();
-    const old = await minimiseInbound(rawContact() as never, prisma) as any;
-    const incident = await register();
-    expect(incident.requesterPhone).toBeNull();
-    await handleRequesterMessage(h.services, actor, 555n, old.message, old.verifiedDraftContact);
-    expect(await prisma.operatorSession.count()).toBe(0);
-    expect((await minimiseInbound(rawContact() as never, prisma) as any).contactRejected).toBe(true);
-    await preview();
-    await handleRequesterMessage(h.services, actor, 555n, old.message, old.verifiedDraftContact);
-    expect((await data()).requesterPhone).toBeUndefined();
-    expect((await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).requesterPhone).toBeNull();
+  it('does not bind a delayed text timestamp or old callback to a new phone step',async()=>{
+    await preview();await enter();const old=rawPhone();old.message.timestamp=Number((await data()).phoneInputStartedAt)-1;
+    const token=(await data()).previewToken;await click('draft-cancel');await preview();await enter();
+    await expect(click('draft-phone-back',token)).rejects.toThrow('устарела');
+    await router().handle(old as never);expect((await data()).requesterPhone).toBeUndefined();
   });
-  it.each(['cancel', 'submit', 'replace', 'expire'] as const)('rechecks the database before saving a contact racing with %s', async (action) => {
-    await preview();
-    const value = await minimiseInbound(rawContact() as never, prisma) as any;
-    const replace = h.services.sessions.replaceCurrent.bind(h.services.sessions);
-    const spy = vi.spyOn(h.services.sessions, 'replaceCurrent').mockImplementationOnce(async (...args) => {
-      if (action === 'submit') await register();
-      else if (action === 'expire') await prisma.operatorSession.updateMany({ data: { expiresAt: new Date(0) } });
-      else { await click('draft-cancel'); if (action === 'replace') await preview(); }
-      return replace(...args);
+  it('compares current session again before saving input racing with a new draft',async()=>{
+    await preview();await enter();const value=await minimiseInbound(rawPhone() as never,prisma) as any;
+    const replace=h.services.sessions.replaceCurrent.bind(h.services.sessions);
+    vi.spyOn(h.services.sessions,'replaceCurrent').mockImplementationOnce(async(...args)=>{
+      await click('draft-cancel');await preview();return replace(...args);
     });
-    await expect(handleRequesterMessage(h.services, actor, 555n, value.message, value.verifiedDraftContact)).rejects.toThrow('Черновик изменился');
-    expect(spy).toHaveBeenCalledTimes(action === 'replace' ? 2 : 1);
-    expect(spy.mock.calls[0]![0].data).toMatchObject({ previewToken: value.verifiedDraftContact.previewToken });
-    const sessions = await prisma.operatorSession.findMany();
-    expect(sessions.every(s => !(s.data as SessionData).requesterPhone)).toBe(true);
-    expect((await prisma.incident.findMany()).every(i => i.requesterPhone === null)).toBe(true);
+    await expect(handleMessageUpdate(h.services,{update:value} as never)).rejects.toThrow('Черновик изменился');
+    expect((await data()).requesterPhone).toBeUndefined();expect(await prisma.incident.count()).toBe(0);
   });
-  it.each(['cancel', 'replace'] as const)('does not recreate the old session when MAX finishes sending after %s', async (action) => {
-    await preview();
-    let lateMessageId: string | undefined;
-    const send = h.services.messages.send.bind(h.services.messages);
-    vi.spyOn(h.services.messages, 'send').mockImplementationOnce(async (...args) => {
-      const result = await send(...args);
-      lateMessageId = result.firstMessageId;
-      await h.services.sessions.clear(555n, 555n);
-      if (action === 'replace') await preview();
-      return result;
-    });
-    await receive();
-    expect(await prisma.operatorSession.count()).toBe(action === 'replace' ? 1 : 0);
-    if (action === 'replace') {
-      const replacement = await data();
-      expect(replacement.requesterPhone).toBeUndefined();
-      expect(h.messages.deleted).not.toContain(replacement.previewMessageId);
-      expect(h.messages.edits.some(edit => edit.messageId === replacement.previewMessageId)).toBe(false);
+  it('deduplicates text input and confirmation, with exactly one registration',async()=>{
+    await preview();await enter();const update=rawPhone(),dispatcher=router();
+    expect((await Promise.all([dispatcher.handle(update as never),dispatcher.handle(update as never)])).sort()).toEqual(['duplicate','processed']);
+    expect((await data()).requesterPhone).toBe(phone);expect(await prisma.incident.count()).toBe(0);
+    const token=(await data()).previewToken;await Promise.allSettled([click('draft-confirm',token),click('draft-confirm',token)]);
+    expect(await prisma.incident.count()).toBe(1);expect((await prisma.incident.findFirstOrThrow()).requesterPhone).toBe(phone);
+  });
+  it('does not route captured resident input to a selected employee response',async()=>{
+    await preview();await enter();const value=await minimiseInbound(rawPhone() as never,prisma) as any;
+    const incident=await h.services.incidents.create({requester:{maxUserId:666n},text:'Не горит фонарь'});
+    await prisma.privateWorkItem.create({data:{maxUserId:555n,incidentId:incident.id,originChatId:TEST_CHATS.sector,selected:true,data:{}}});
+    await handleMessageUpdate(h.services,{update:value} as never);
+    expect((await data()).requesterPhone).toBe(phone);expect(await prisma.incidentAnswer.count()).toBe(0);
+  });
+  it.each([false, true])('mode switch: preserves new employee text with expired resident phone step=%s', async expired => {
+    actor = await actorFor(prisma, 555n, 'Сотрудник', [UserRole.ADMIN]);
+    h.services.max = { answerCallback: vi.fn(async () => undefined), api: {
+      getMyInfo: vi.fn(async () => ({ username: 'test_bot' })),
+      getChatMembers: vi.fn(async () => ({ members: [{ user_id: 555, is_bot: false }] })),
+    } } as never;
+    const callback = async (payload: string) => {
+      const update = { ...rawPhone(), update_type: 'message_callback', callback: {
+        callback_id: `switch-${Math.random()}`, user: { user_id: 555, name: 'Сотрудник' }, payload,
+      } };
+      await handleCallbackUpdate(h.services, { update: await minimiseInbound(update as never, prisma) } as never);
+    };
+    const dispatcher = router();
+    await preview({ ...draft, draftMedia: [{ kind: 'IMAGE', token: 'resident-photo' }] });
+    await callback(`user:draft-phone-enter:${(await data()).previewToken}`);
+    if (expired) await prisma.operatorSession.updateMany({ where: { maxUserId: 555n, chatId: 555n }, data: { expiresAt: new Date(0) } });
+    const residentBefore = await prisma.operatorSession.findUniqueOrThrow({ where: { maxUserId_chatId: { maxUserId: 555n, chatId: 555n } } });
+    const incident = await h.services.incidents.create({ requester: { maxUserId: 666n }, text: 'Не горит фонарь' });
+    const group = await prisma.responsibleGroup.findFirstOrThrow({ where: { code: 'FACILITY' } });
+    await h.services.distribution.assign(incident.id, group.id, actor);
+    await invitePersonalWork(h.services, actor, TEST_CHATS.sector, incident.id);
+    const item = await prisma.privateWorkItem.findFirstOrThrow({ where: { maxUserId: 555n, incidentId: incident.id } });
+    await callback(`personal:open:${item.id}`);
+    await callback(`personal:run:${item.id}:incident:answer:${incident.id}`);
+    expect((await prisma.privateWorkItem.findUniqueOrThrow({ where: { id: item.id } })).selected).toBe(true);
+    const text = 'Ответ подготовил Иванов Иван Иванович. Подробности https://example.org';
+    const event = rawPhone(text); event.message.body.attachments = [{ type: 'image', payload: { token: 'staff-photo' } }];
+    const reserved = await dispatcher.reserve(event as never);
+    const inbox = await prisma.inboundUpdate.findUniqueOrThrow({ where: { id: reserved.id! } });
+    expect(inbox.payload).not.toHaveProperty('draftPhoneInput');
+    expect(inbox.payload).not.toHaveProperty('privacyRejected');
+    expect(inbox.payload).toMatchObject({ message: { body: { text, attachments: event.message.body.attachments } } });
+    await dispatcher.kick(); await dispatcher.waitForIdle();
+    expect((await prisma.inboundUpdate.findUniqueOrThrow({ where: { id: reserved.id! } })).status).toBe('PROCESSED');
+    const work = await prisma.privateWorkItem.findUniqueOrThrow({ where: { id: item.id } });
+    expect(work.data).toMatchObject({ draft: { text, attachments: event.message.body.attachments } });
+    expect(await prisma.incidentAnswer.count()).toBe(0);
+    expect(await prisma.operatorSession.findUniqueOrThrow({ where: { id: residentBefore.id } })).toEqual(residentBefore);
+    await callback('personal:resident');
+    expect((await prisma.privateWorkItem.findUniqueOrThrow({ where: { id: item.id } })).selected).toBe(false);
+    expect((await prisma.privateWorkItem.findUniqueOrThrow({ where: { id: item.id } })).data).toEqual(work.data);
+    if (expired) {
+      // Normal TTL cleanup on returning; switching to work must not revive the expired draft.
+      expect(await prisma.operatorSession.findUnique({ where: { id: residentBefore.id } })).toBeNull();
+      expect(h.messages.toUser(555n).at(-1)!.message.text).not.toBe(PHONE_INPUT_PROMPT);
+    } else {
+      expect(await data()).toEqual(residentBefore.data);
+      expect(h.messages.toUser(555n).at(-1)!.message.text).toBe(PHONE_INPUT_PROMPT);
+      await callback(`user:draft-phone-back:${(await data()).previewToken}`);
+      expect((await data()).draftText).toBe(draft.draftText);
+      expect((await data()).draftMedia).toEqual([{ kind: 'IMAGE', token: 'resident-photo' }]);
+      expect((await data()).requesterPhone).toBeUndefined();
     }
-    expect(h.messages.deleted).toContain(lateMessageId);
+    expect(await prisma.incident.count()).toBe(1);
+  });
+  it.each([false, true])('mode switch: an admitted phone stays resident input when consumed after entering work, expired=%s', async expired => {
+    actor = await actorFor(prisma, 555n, 'Сотрудник', [UserRole.ADMIN]);
+    h.services.max = { answerCallback: vi.fn(async () => undefined), api: {
+      getMyInfo: vi.fn(async () => ({ username: 'test_bot' })),
+      getChatMembers: vi.fn(async () => ({ members: [{ user_id: 555, is_bot: false }] })),
+    } } as never;
+    const callback = async (payload: string) => handleCallbackUpdate(h.services, { update: {
+      ...rawPhone(), update_type: 'message_callback', callback: { callback_id: `queued-switch-${Math.random()}`, user: { user_id: 555, name: 'Сотрудник' }, payload },
+    } } as never);
+    await preview(); await callback(`user:draft-phone-enter:${(await data()).previewToken}`);
+    const dispatcher = router(); const phoneEvent = rawPhone(); const reserved = await dispatcher.reserve(phoneEvent as never);
+    expect((await prisma.inboundUpdate.findUniqueOrThrow({ where: { id: reserved.id! } })).payload).toHaveProperty('draftPhoneInput.phone', phone);
+    if (expired) await prisma.operatorSession.updateMany({ where: { maxUserId: 555n, chatId: 555n }, data: { expiresAt: new Date(0) } });
+    const incident = await h.services.incidents.create({ requester: { maxUserId: 666n }, text: 'Не горит фонарь' });
+    const group = await prisma.responsibleGroup.findFirstOrThrow({ where: { code: 'FACILITY' } });
+    await h.services.distribution.assign(incident.id, group.id, actor);
+    await invitePersonalWork(h.services, actor, TEST_CHATS.sector, incident.id);
+    const item = await prisma.privateWorkItem.findFirstOrThrow({ where: { maxUserId: 555n, incidentId: incident.id } });
+    await callback(`personal:open:${item.id}`); await callback(`personal:run:${item.id}:incident:answer:${incident.id}`);
+    const workBefore = await prisma.privateWorkItem.findUniqueOrThrow({ where: { id: item.id } });
+    await dispatcher.kick(); await dispatcher.waitForIdle();
+    expect(await prisma.privateWorkItem.findUniqueOrThrow({ where: { id: item.id } })).toEqual(workBefore);
+    expect(await prisma.incidentAnswer.count()).toBe(0); expect(await prisma.incident.count()).toBe(1);
+    expect(await dispatcher.handle(phoneEvent as never)).toBe('duplicate');
+    expect((await prisma.inboundUpdate.findUniqueOrThrow({ where: { id: reserved.id! } })).status).toBe('PROCESSED');
+    if (!expired) expect((await data()).requesterPhone).toBe(phone);
+    else expect(await prisma.operatorSession.findUnique({ where: { maxUserId_chatId: { maxUserId: 555n, chatId: 555n } } })).toBeNull();
+    const staffEvent = rawPhone('Освещение восстановлено, ответ сотрудника.');
+    expect(await dispatcher.handle(staffEvent as never)).toBe('processed');
+    expect((await prisma.privateWorkItem.findUniqueOrThrow({ where: { id: item.id } })).data).toMatchObject({ draft: { text: staffEvent.message.body.text } });
+    await callback('personal:resident');
+    if (!expired) {
+      await callback(`user:draft-edit:${(await data()).previewToken}`);
+      await callback('user:draft-edit:back');
+      expect(h.messages.toUser(555n).at(-1)!.message.text).toContain(`Телефон для связи: ${phone}`);
+      expect((await data()).draftText).toBe(draft.draftText);
+    }
+  });
+  it('rejects a queued verified native contact from the old version without mutating draft',async()=>{
+    await preview();const before=await data();const value=rawPhone();
+    Object.assign(value,{verifiedDraftContact:{phone,draftToken:before.draftToken,previewToken:before.previewToken}});
+    await handleMessageUpdate(h.services,{update:value} as never);expect(await data()).toEqual(before);
+    expect(h.messages.toUser(555n).at(-1)?.message.text).toBe(CONTACT_REJECTION);
+  });
+  it('does not turn a delayed standalone number into a new problem description',async()=>{
+    await preview();await enter();const old=rawPhone();await click('draft-cancel');
+    await h.services.sessions.start({maxUserId:555n,chatId:555n,type:'WAITING_INCIDENT_TEXT',data:{problemMunicipalityCode:'KALUGA_CITY',problemMunicipalityName:'Город Калуга'}});
+    const before=await data();await router().handle(old as never);expect(await data()).toEqual(before);
     expect(await prisma.incident.count()).toBe(0);
   });
-  it('rejects contacts timestamped before the preview but cannot identify an old native button pressed now', async () => {
-    await preview(); const old = rawContact();
-    old.message.timestamp = Number((await data()).previewStartedAt) - 1;
-    expect((await minimiseInbound(old as never, prisma) as any).contactRejected).toBe(true);
-    await click('draft-cancel'); await preview();
-    // MAX provides no draft/button ID. A fresh signed event from an old button
-    // is indistinguishable from pressing the current native button.
-    await receive(); expect((await data()).requesterPhone).toBe(phone);
-    expect(await prisma.incident.count()).toBe(0);
+  it('recovers a failed phone prompt with /start without losing fields',async()=>{
+    await preview();vi.spyOn(h.services.messages,'send').mockRejectedValueOnce(new MaxError(503,{code:'unavailable',message:'temporary'}));
+    await expect(enter()).rejects.toThrow();vi.restoreAllMocks();
+    await router().handle(rawPhone('/start') as never);
+    expect(h.messages.toUser(555n).at(-1)?.message.text).toBe(PHONE_INPUT_PROMPT);
+    expect((await data()).draftText).toBe(draft.draftText);await receive();expect((await data()).requesterPhone).toBe(phone);
+  });
+  it('does not delete a concurrently renewed draft when removing an expired session',async()=>{
+    await preview();await prisma.operatorSession.updateMany({data:{expiresAt:new Date(0)}});
+    const find=prisma.operatorSession.findUnique.bind(prisma.operatorSession);
+    vi.spyOn(prisma.operatorSession,'findUnique').mockImplementationOnce((async(args:any)=>{
+      const expired=await find(args);
+      await prisma.operatorSession.updateMany({data:{expiresAt:new Date(Date.now()+60_000),data:{...draft,draftToken:'new-draft'}}});
+      return expired;
+    }) as typeof prisma.operatorSession.findUnique);
+    expect(await h.services.sessions.find(555n,555n)).toBeNull();expect(await prisma.operatorSession.count()).toBe(1);
+    expect((await data()).draftToken).toBe('new-draft');
   });
   it('falls back to removing controls when MAX refuses to delete an obsolete preview', async () => {
     await preview(); const oldId = (await data()).previewMessageId!;
@@ -207,33 +318,6 @@ describeIntegration('optional per-message contact', () => {
     expect(await prisma.incident.count()).toBe(0);
     expect(h.messages.toUser(555n).at(-1)?.message.text).not.toContain(phone);
   });
-  it('minimizes before the inbox, immediately attaches own contact and waits for ordinary submission', async () => {
-    await preview(); const value = await receive();
-    expect(JSON.stringify(value)).not.toMatch(/Private Name|private-username|vcf_info|hash|79991234567/);
-    expect((await data()).requesterPhone).toBe(phone); expect((await data()).pendingPhone).toBeUndefined();
-    expect(await prisma.incident.count()).toBe(0);
-    expect(h.messages.toUser(555n).at(-1)?.message.text).toContain(`Телефон для связи: ${phone}`);
-    expect(h.messages.toUser(555n).at(-1)?.message.keyboard?.flat().map(b => b.text)).toEqual(['✅ Всё верно', '✏️ Исправить', 'Отмена']);
-    const incident = await register(); expect(incident.requesterPhone).toBe(phone);
-    const user = await prisma.user.findUniqueOrThrow({ where: { maxUserId: 555n } });
-    expect(user.requesterPhone).toBeNull(); expect(user.requesterName).toBeNull();
-    await h.services.users.upsertFromMax({ user_id: 555, name: 'ignored', username: null });
-    expect((await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).requesterPhone).toBe(phone);
-    await click('new', 'unused'); expect(await data()).toEqual({});
-  });
-  it('removes a phone, cancels the draft and ignores delayed contact from the old preview', async () => {
-    await withPhone(); await removePhone(); expect((await data()).requesterPhone).toBeUndefined();
-    const old = await minimiseInbound(rawContact() as never, prisma) as any;
-    const oldToken = (await data()).previewToken;
-    await click('draft-cancel'); expect(await prisma.operatorSession.count()).toBe(0);
-    expect((await minimiseInbound(rawContact() as never, prisma) as any).contactRejected).toBe(true);
-    await preview();
-    await handleRequesterMessage(h.services, actor, 555n, old.message, old.verifiedDraftContact);
-    expect((await data()).requesterPhone).toBeUndefined();
-    await expect(click('draft-cancel', oldToken)).rejects.toThrow('устарела');
-    await expect(click('draft-confirm', oldToken)).rejects.toThrow('устарела');
-    expect(await prisma.incident.count()).toBe(0);
-  });
   it('preserves an attached phone through text, category, location and photo previews', async () => {
     await withPhone();
     await click('draft-edit'); await click('draft-field', 'text');
@@ -264,7 +348,7 @@ describeIntegration('optional per-message contact', () => {
   const failContactPreview = async (operation: 'add' | 'remove', withPhotos = false) => {
     await preview();
     if (withPhotos) await prisma.operatorSession.updateMany({ data: { data: { ...(await data()), draftMedia: [{ kind: 'IMAGE', token: 'preserved-photo' }] } } });
-    if (operation === 'remove') { await receive(); await click('draft-edit'); }
+    if (operation === 'remove') { await receive(); await click('draft-edit'); } else await enter();
     const failure = new MaxError(503, { code: 'service.unavailable', message: 'Retry later' });
     const send = vi.spyOn(h.services.messages, 'send').mockRejectedValueOnce(failure);
     if (operation === 'add') await receive(); else await click('draft-phone-remove');
@@ -293,7 +377,7 @@ describeIntegration('optional per-message contact', () => {
     const card = h.messages.toUser(555n).at(-1)!.message;
     expect(card.keyboard?.flat()).toContainEqual({ type: 'callback', text: '✅ Всё верно', payload: `user:draft-confirm:${recovered.previewToken}`, intent: 'positive' });
     expect(card.text.includes(phone)).toBe(operation === 'add');
-    expect(card.keyboard?.flat().some(b => b.type === 'request_contact')).toBe(operation === 'remove');
+    expect(card.keyboard?.flat().some(b => b.type === 'callback' && b.payload.startsWith('user:draft-phone-enter:'))).toBe(operation === 'remove');
     expect(await prisma.incident.count()).toBe(0);
     const incident = await register(); expect(incident.requesterPhone).toBe(operation === 'add' ? phone : null);
     await expect(click('draft-confirm', recovered.previewToken)).rejects.toThrow();
@@ -361,40 +445,6 @@ describeIntegration('optional per-message contact', () => {
     expect((saved.data as SessionData).requesterPhone).toBe(phone);
     expect(await prisma.operatorSession.count()).toBe(1); expect(await prisma.incident.count()).toBe(0);
   });
-  it('deduplicates incoming contact and double registration without leaking raw contact', async () => {
-    await preview(); const update = rawContact();
-    // MAX contact captions and FN are not the resident's incident description.
-    update.message.body.text = 'Иванов Иван Иванович +79991234567' as never;
-    const route = vi.fn(async (value: any) => handleMessageUpdate(h.services, { update: value } as never));
-    const dispatch = new UpdateDispatcher(prisma, { dispatch: route } as never, 2);
-    const result = await Promise.all([dispatch.handle(update as never), dispatch.handle(update as never)]);
-    expect(result.sort()).toEqual(['duplicate', 'processed']);
-    expect((await prisma.inboundUpdate.findFirstOrThrow()).payload).toEqual({});
-    expect((await data()).requesterPhone).toBe(phone);
-    expect((await data()).draftText).toBe(draft.draftText);
-    expect(route).toHaveBeenCalledTimes(1);
-    expect(await prisma.incident.count()).toBe(0);
-    const cards = h.messages.toUser(555n).map(m => m.message);
-    expect(cards.some(m => /Сообщение не принято|Контакт не добавлен/.test(m.text))).toBe(false);
-    expect(cards.at(-1)?.text).toContain(phone);
-    expect(cards.at(-1)?.keyboard?.flat().some(b => b.type === 'request_contact')).toBe(false);
-    const token = (await data()).previewToken;
-    await Promise.allSettled([click('draft-confirm', token), click('draft-confirm', token)]);
-    expect(await prisma.incident.count()).toBe(1); expect((await prisma.incident.findFirstOrThrow()).requesterPhone).toBe(phone);
-  });
-  it('fails closed for foreign or unsigned contact, wrong step, text PII and expired preview', async () => {
-    await preview();
-    for (const override of [{ hash: undefined }, { max_info: { user_id: 999 } }]) {
-      const value = await minimiseInbound(rawContact(override) as never, prisma) as any;
-      expect(value.contactRejected).toBe(true); expect(JSON.stringify(value)).not.toContain(phone);
-    }
-    const text = rawContact(); text.message.body = { ...text.message.body, text: 'Паспорт 45 12 123456, телефон +79991234567', attachments: [] } as never;
-    expect((await minimiseInbound(text as never, prisma) as any).privacyRejected).toBe(true);
-    await click('draft-edit'); expect((await minimiseInbound(rawContact() as never, prisma) as any).contactRejected).toBe(true);
-    await preview(); await prisma.operatorSession.updateMany({ data: { expiresAt: new Date(0) } });
-    expect((await minimiseInbound(rawContact() as never, prisma) as any).contactRejected).toBe(true);
-    expect(await h.services.sessions.find(555n, 555n)).toBeNull(); expect(await prisma.operatorSession.count()).toBe(0);
-  });
   it.each(['unsigned', 'foreign', 'cancel', 'sent', 'edit', 'repeat'] as const)(
     'routes %s contact to a contact-specific refusal without processing its caption as text', async reason => {
       await preview();
@@ -451,22 +501,22 @@ describeIntegration('optional per-message contact', () => {
     },
   );
   it('clears minimal contact payload even when processing fails', async () => {
-    await preview();
+    await preview(); await enter();
     const dispatcher = new UpdateDispatcher(prisma, { dispatch: async () => { throw new Error('sensitive failure'); } } as never);
-    await dispatcher.handle(rawContact() as never);
+    await dispatcher.handle(rawPhone() as never);
     const row = await prisma.inboundUpdate.findFirstOrThrow();
     expect(row.payload).toEqual({}); expect(row.lastError).not.toContain('sensitive failure');
   });
   it.each([InboxStatus.PROCESSING, InboxStatus.FAILED])('scrubs contact in %s on dispatcher startup without changing pending contacts or ordinary diagnostics', async (status) => {
-    await preview();
+    await preview(); await enter();
     const dispatch = vi.fn();
     const dispatcher = new UpdateDispatcher(prisma, { dispatch } as never);
-    const reservation = await dispatcher.reserve(rawContact() as never);
+    const reservation = await dispatcher.reserve(rawPhone() as never);
     const contact = await prisma.inboundUpdate.update({
       where: { id: reservation.id! },
       data: { status, lockedAt: new Date(), lastError: `Interrupted contact ${phone}` },
     });
-    expect(contact.payload).toHaveProperty('verifiedDraftContact.phone', phone);
+    expect(contact.payload).toHaveProperty('draftPhoneInput.phone', phone);
     const pending = await prisma.inboundUpdate.create({ data: {
       externalUpdateKey: 'pending-contact', updateType: contact.updateType,
       payload: contact.payload as object, status: InboxStatus.PENDING,
@@ -488,7 +538,7 @@ describeIntegration('optional per-message contact', () => {
     expect(recovered.status).toBe(InboxStatus.FAILED);
     expect(recovered.payload).toEqual({});
     expect(recovered.lockedAt).toBeNull();
-    expect(recovered.lastError).toBe('Не удалось обработать контакт; номер очищен. Повторите передачу контакта.');
+    expect(recovered.lastError).toBe('Не удалось обработать номер; данные события очищены. Проверьте текущую карточку и при необходимости введите номер снова.');
     expect(recovered.lastError).not.toMatch(/\d/);
     expect(await prisma.inboundUpdate.findUniqueOrThrow({ where: { id: pending.id } })).toEqual(pending);
     expect(await prisma.inboundUpdate.findUniqueOrThrow({ where: { id: ordinaryFailed.id } })).toEqual(ordinaryFailed);
@@ -507,47 +557,6 @@ describeIntegration('optional per-message contact', () => {
     workbook.eachSheet(sheet => sheet.eachRow(row => { text += JSON.stringify(row.values); }));
     expect(text).toContain(incident.publicCode); expect(text).not.toContain(phone); expect(text).not.toContain('79991234567');
   });
-  it('grants dispatcher/current executor only, revokes former organization and keeps phone out of common cards', async () => {
-    await withPhone(); const incident = await register();
-    const staff = await actorFor(prisma, 556n, 'Сотрудник', [UserRole.DISPATCHER]);
-    const member = vi.spyOn(h.services.max.api, 'getChatMembers').mockResolvedValue({ members: [{ user_id: 556, is_bot: false }] } as never);
-    await revealResidentContact(h.services, staff, TEST_CHATS.distribution, incident.id);
-    expect(h.messages.toUser(556n).at(-1)?.message.text).toContain(phone);
-    expect(h.messages.toUser(556n).at(-1)?.message.immediatePreview).toBe(true);
-    const group = await prisma.responsibleGroup.findFirstOrThrow({ where: { code: 'FACILITY' } });
-    await h.services.distributionQueue.claim(staff, TEST_CHATS.distribution, incident.id);
-    await expect(h.services.distribution.assign(incident.id, group.id, staff)).rejects.toThrow('персональных');
-    await h.services.distribution.confirmPrivacyCheck(incident.id, staff);
-    await h.services.distribution.assign(incident.id, group.id, staff);
-    await expect(revealResidentContact(h.services, staff, TEST_CHATS.distribution, incident.id)).rejects.toThrow();
-    await revealResidentContact(h.services, staff, TEST_CHATS.sector, incident.id);
-    await expect(revealResidentContact(h.services, staff, TEST_CHATS.otherSector, incident.id)).rejects.toThrow();
-    const row = (await h.services.repository.findById(incident.id))!;
-    expect(distributionCard(row)).not.toContain(phone); expect(sectorCard(row, group)).not.toContain(phone);
-    expect(h.messages.toChat(TEST_CHATS.distribution).concat(h.messages.toChat(TEST_CHATS.sector)).map(m => m.message.text).join(' ')).not.toContain(phone);
-    const next = await prisma.responsibleGroup.findFirstOrThrow({ where: { code: 'IT' } });
-    await prisma.incident.update({ where: { id: incident.id }, data: { assignedGroupId: next.id } });
-    await expect(revealResidentContact(h.services, staff, TEST_CHATS.sector, incident.id)).rejects.toThrow();
-    await revealResidentContact(h.services, staff, TEST_CHATS.otherSector, incident.id);
-    member.mockResolvedValue({ members: [] } as never);
-    await expect(revealResidentContact(h.services, staff, TEST_CHATS.otherSector, incident.id)).rejects.toThrow();
-    member.mockRejectedValue(new Error('network unavailable'));
-    await expect(revealResidentContact(h.services, staff, TEST_CHATS.otherSector, incident.id)).rejects.toThrow();
-  });
-  it('rechecks membership for personal workspace contact and forbids review even for administrators', async () => {
-    await withPhone(); const incident = await register();
-    const staff = await actorFor(prisma, 556n, 'Сотрудник', [UserRole.ADMIN, UserRole.DISPATCHER]);
-    const member = vi.spyOn(h.services.max.api, 'getChatMembers').mockResolvedValue({ members: [{ user_id: 556, is_bot: false }] } as never);
-    const item = await prisma.privateWorkItem.create({ data: { maxUserId: 556n, incidentId: incident.id, originChatId: TEST_CHATS.distribution, data: {}, selected: true } });
-    await personalAction(h.services, staff, item.id, 'run', `incident:contact:${incident.id}`);
-    expect(h.messages.toUser(556n).some(m => m.message.text.includes(phone))).toBe(true);
-    member.mockResolvedValue({ members: [] } as never);
-    await expect(personalAction(h.services, staff, item.id, 'run', `incident:contact:${incident.id}`)).rejects.toThrow();
-    member.mockResolvedValue({ members: [{ user_id: 556, is_bot: false }] } as never);
-    await prisma.incident.update({ where: { id: incident.id }, data: { status: 'WAITING_REVIEW' } });
-    await expect(revealResidentContact(h.services, staff, TEST_CHATS.review, incident.id)).rejects.toThrow();
-    await expect(revealResidentContact(h.services, staff, TEST_CHATS.distribution, incident.id)).rejects.toThrow();
-  });
   it('erases phone on rejection and leaves no phone in history or durable outgoing jobs', async () => {
     await withPhone(); const incident = await register();
     const staff = await actorFor(prisma, 556n, 'Диспетчер', [UserRole.DISPATCHER]);
@@ -557,22 +566,86 @@ describeIntegration('optional per-message contact', () => {
     const json = JSON.stringify([await prisma.incidentHistory.findMany(), await prisma.outboundMessage.findMany()], (_k, v) => typeof v === 'bigint' ? String(v) : v);
     expect(json).not.toContain(phone); expect(json).not.toContain('vcf_info');
   });
-  it.each([false, true])('completes distribution, response and review with phone=%s without including it in review', async (hasPhone) => {
-    if (hasPhone) await withPhone(); else await preview();
-    const incident = await register();
-    const dispatcher = await actorFor(prisma, 556n, 'Диспетчер', [UserRole.DISPATCHER]);
-    const responder = await actorFor(prisma, 557n, 'Исполнитель', [UserRole.RESPONDER]);
-    const approver = await actorFor(prisma, 558n, 'Куратор', [UserRole.APPROVER]);
-    const group = await prisma.responsibleGroup.findFirstOrThrow({ where: { code: 'FACILITY' } });
-    await h.services.distributionQueue.claim(dispatcher, TEST_CHATS.distribution, incident.id);
-    await h.services.distribution.confirmPrivacyCheck(incident.id, dispatcher);
-    await h.services.distribution.assign(incident.id, group.id, dispatcher);
-    await h.services.sector.takeInWork(incident.id, responder);
-    const { answer } = await h.services.answers.submit(incident.id, responder, 'Ремонт выполнен.');
-    expect(h.messages.toChat(TEST_CHATS.review).map(m => m.message.text).join(' ')).not.toContain(phone);
-    await h.services.workQueues.claimReview(approver, TEST_CHATS.review, incident.id);
-    await h.services.review.approve(incident.id, approver, answer.id);
-    expect((await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).status).toBe('RESOLVED');
-    expect(h.messages.toUser(555n).some(m => m.message.text.includes('Ремонт выполнен.'))).toBe(true);
+  it('rejects through the privacy reason and confirmation buttons and clears phone, text and photos', async () => {
+    await preview({ ...draft, draftMedia: [{ kind: 'IMAGE', token: 'private-photo' }] });
+    await receive(); const incident = await register();
+    const staff = await actorFor(prisma, 556n, 'Диспетчер', [UserRole.DISPATCHER]);
+    const context = { services: h.services, actor: staff, chatId: TEST_CHATS.distribution };
+    await handleIncidentCallback(context, { kind: 'incident', incidentId: incident.id, action: 'reject' });
+    const session = () => h.services.sessions.find(staff.maxUserId, TEST_CHATS.distribution);
+    const reason = REJECTION_REASONS.find(r => r.id === '9')!;
+    expect(h.messages.sent.at(-1)!.message.keyboard!.flat().map(b => b.text)).toContain(reason.label);
+    let token = rejectionDraft((await session())!).rejectionToken;
+    await handleIncidentCallback(context, { kind: 'incident', incidentId: incident.id, action: 'reject-reason', argument: `${token}.9` });
+    expect((await h.services.repository.findById(incident.id))!.status).toBe('DISTRIBUTION');
+    token = rejectionDraft((await session())!).rejectionToken;
+    await handleIncidentCallback(context, { kind: 'incident', incidentId: incident.id, action: 'reject-confirm', argument: token });
+    const current = (await h.services.repository.findById(incident.id))!;
+    expect(current.status).toBe('REJECTED'); expect(current.requesterPhone).toBeNull();
+    expect(current.text).not.toContain(draft.draftText);
+    expect(await prisma.incidentAttachment.count({ where: { incidentId: incident.id } })).toBe(0);
+    expect(h.messages.toUser(555n).at(-1)!.message.text).toContain(reason.reason);
+    await expect(handleIncidentCallback(context, { kind: 'incident', incidentId: incident.id, action: 'reject-confirm', argument: token })).rejects.toThrow('устарела');
+  });
+  it.each([false,true])('full lifecycle including revision, phone=%s in full cards only',async hasPhone=>{
+    if(hasPhone)await withPhone();else await preview();const incident=await register();
+    const dispatcher=await actorFor(prisma,556n,'Диспетчер',[UserRole.DISPATCHER]);
+    const responder=await actorFor(prisma,557n,'Исполнитель',[UserRole.RESPONDER]);
+    const approver=await actorFor(prisma,558n,'Куратор',[UserRole.APPROVER]);
+    const group=await prisma.responsibleGroup.findFirstOrThrow({where:{code:'FACILITY'}});
+    await h.services.distributionQueue.claim(dispatcher,TEST_CHATS.distribution,incident.id);
+    const distribution=(await h.services.repository.findById(incident.id))!;
+    expect(distributionCard(distribution).includes(phone)).toBe(hasPhone);
+    await h.services.distribution.assign(incident.id,group.id,dispatcher);
+    expect(await prisma.incidentHistory.count({where:{action:'PRIVACY_CHECK_PASSED'}})).toBe(0);
+    await h.services.sector.takeInWork(incident.id,responder);
+    const {answer}=await h.services.answers.submit(incident.id,responder,'Ремонт запланирован.');
+    let row=(await h.services.repository.findById(incident.id))!;
+    expect(sectorCard(row,group).includes(phone)).toBe(hasPhone);
+    expect(reviewCard(row,row.answers.at(-1)!,group).includes(phone)).toBe(hasPhone);
+    expect(incidentLookupCard(row).includes(phone)).toBe(hasPhone);
+    await h.services.workQueues.claimReview(approver,TEST_CHATS.review,incident.id);
+    await h.services.review.requestRevision(incident.id,'Уточните результат',approver,answer.id);
+    await h.services.sector.takeInWork(incident.id,responder);
+    const revised=await h.services.answers.submit(incident.id,responder,'Ремонт выполнен.');
+    await h.services.workQueues.claimReview(approver,TEST_CHATS.review,incident.id);
+    await h.services.review.approve(incident.id,approver,revised.answer.id);
+    row=(await h.services.repository.findById(incident.id))!;expect(row.status).toBe('RESOLVED');
+    expect(h.messages.toUser(555n).some(m=>m.message.text.includes('Ремонт выполнен.'))).toBe(true);
+    expect(finalAnswerToRequester(row,revised.answer,new Date())).not.toContain(phone);
+    expect(JSON.stringify(await prisma.incidentHistory.findMany(), (_key,value)=>typeof value==='bigint'?String(value):value)).not.toContain(phone);
+  });
+  it.each(['distribution','sector','review'] as const)('shows phone in authorized personal %s cards, blocks a former member',async kind=>{
+    await withPhone();const incident=await register();
+    const staff=await actorFor(prisma,556n,'Сотрудник',[UserRole.ADMIN,UserRole.DISPATCHER,UserRole.RESPONDER,UserRole.APPROVER]);
+    const member=vi.spyOn(h.services.max.api,'getChatMembers').mockResolvedValue({members:[{user_id:556,is_bot:false}]} as never);
+    const group=await prisma.responsibleGroup.findFirstOrThrow({where:{code:'FACILITY'}});
+    await h.services.distributionQueue.claim(staff,TEST_CHATS.distribution,incident.id);
+    if(kind!=='distribution'){
+      await h.services.distribution.assign(incident.id,group.id,staff);await h.services.sector.takeInWork(incident.id,staff);
+      if(kind==='review'){await h.services.answers.submit(incident.id,staff,'Ответ');await h.services.workQueues.claimReview(staff,TEST_CHATS.review,incident.id);}
+    }
+    const chat=kind==='distribution'?TEST_CHATS.distribution:kind==='review'?TEST_CHATS.review:TEST_CHATS.sector;
+    const item=await prisma.privateWorkItem.create({data:{maxUserId:556n,incidentId:incident.id,originChatId:chat,selected:true,data:{}}});
+    for(const details of [false,true]){
+      await showPersonalWork(h.services,staff,item.id,details);
+      const card=h.messages.toUser(556n).at(-1)!.message;
+      expect(card.text).toContain(`Телефон для связи: ${phone}`);
+      expect(card.keyboard?.flat().some(b=>b.type==='callback'&&/incident:(contact|privacy-pass):/.test(b.payload))).toBe(false);
+    }
+    const before=h.messages.toUser(556n).length;
+    await personalAction(h.services,staff,item.id,'run',`incident:contact:${incident.id}`);
+    expect(h.messages.toUser(556n).slice(before).every(m=>!m.message.text.includes(phone))).toBe(true);
+    expect(h.messages.toUser(556n).at(-1)!.message.text).toContain('устарело');
+    member.mockResolvedValue({members:[]} as never);
+    await expect(showPersonalWork(h.services,staff,item.id,true)).rejects.toThrow();
+  });
+  it('old privacy callback does not create a mark, lease, or message; history remains',async()=>{
+    await withPhone();const incident=await register();const staff=await actorFor(prisma,556n,'Диспетчер',[UserRole.DISPATCHER]);
+    await prisma.incidentHistory.create({data:{incidentId:incident.id,action:'PRIVACY_CHECK_PASSED'}});
+    const before=await prisma.incident.findUniqueOrThrow({where:{id:incident.id}}),history=await prisma.incidentHistory.findMany(),sent=h.messages.sent.length;
+    for(const action of ['privacy-pass','contact'] as const)expect(await handleIncidentCallback({services:h.services,actor:staff,chatId:TEST_CHATS.distribution},{kind:'incident',action,incidentId:incident.id,argument:'confirm'})).toContain('устарело');
+    expect(await prisma.incident.findUniqueOrThrow({where:{id:incident.id}})).toEqual(before);
+    expect(await prisma.incidentHistory.findMany()).toEqual(history);expect(h.messages.sent.length).toBe(sent);
   });
 });

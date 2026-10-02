@@ -70,7 +70,6 @@ describeIntegration('15-minute reservations: absolute storage and Moscow UI in e
     const chat = c.kind === 'distribution' ? TEST_CHATS.distribution : c.kind === 'sector' ? TEST_CHATS.sector : TEST_CHATS.review;
     if (c.kind !== 'distribution') {
       const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: GROUP_CODES.facility } });
-      await h.services.distribution.confirmPrivacyCheck(incident.id, actor);
       await h.services.distribution.assign(incident.id, group.id, actor);
       if (c.kind === 'review') await h.services.answers.submit(incident.id, actor, 'Фонарь восстановлен.', []);
     }
