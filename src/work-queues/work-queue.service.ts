@@ -34,7 +34,7 @@ export class WorkQueueService {
   async refresh(actor: ResolvedActor, chatId: bigint) {
     await this.authorize(actor, chatId);
     await queueWorkPanel(this.prisma, chatId);
-    await this.messages.flush();
+    this.messages.wake();
   }
   async claim(actor: ResolvedActor, chatId: bigint) {
     const scope = await this.authorize(actor, chatId);
@@ -52,7 +52,7 @@ export class WorkQueueService {
     }
     if (id) await this.open(actor, chatId, id);
     await this.refresh(actor, chatId);
-    return id ? 'Сообщение взято в работу. Карточка отправлена в чат.' : 'Свободных сообщений нет.';
+    return id ? 'Сообщение взято в работу. Карточка появится в чате.' : 'Свободных сообщений нет.';
   }
   async claimReview(actor: ResolvedActor, chatId: bigint, incidentId?: string): Promise<string | undefined> {
     const scope = await this.authorize(actor, chatId);
@@ -76,7 +76,7 @@ export class WorkQueueService {
       await queueStaffRefresh(tx, candidate.id, `review-claim:${randomUUID()}`);
       return candidate.id;
     }, TRANSACTION_OPTIONS);
-    await this.messages.flush();
+    this.messages.wake();
     return id;
   }
   async release(actor: ResolvedActor, chatId: bigint, id: string) {
@@ -113,7 +113,7 @@ export class WorkQueueService {
       }, id, review ? answer!.attachments : incident.attachments);
       if (review) await tx.outboundMessage.updateMany({ where: { dedupeKey: key }, data: { answerId: answer!.id } });
     }, TRANSACTION_OPTIONS);
-    await this.messages.flush();
+    this.messages.wake();
   }
   async list(actor: ResolvedActor, chatId: bigint, page = 0, mine = false, today = false) {
     if (!Number.isSafeInteger(page) || page < 0 || page > 100_000) throw new ValidationError('Некорректная страница.');

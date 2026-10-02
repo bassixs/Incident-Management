@@ -1,3 +1,4 @@
+import { deliveryTrace } from '../utils/latency';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 
@@ -32,7 +33,7 @@ export async function queueMessage(
       answerId: tracking && 'answerId' in tracking ? tracking.answerId : null,
       trackingType: tracking?.type ?? null,
       trackingApplied: !tracking,
-      payload: payload as unknown as Prisma.InputJsonValue,
+      payload: { ...payload, trace: deliveryTrace() } as unknown as Prisma.InputJsonValue,
       attachments: attachments.map(a => ({ type: a.type, storageKey: a.storageKey, originalName: a.originalName, owned: false })) as unknown as Prisma.InputJsonValue,
     }],
   });

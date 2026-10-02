@@ -138,7 +138,7 @@ export class DistributionService {
         metadata: { previousCategoryId: incident.userSelectedCategoryId, previousCategoryName: incident.userSelectedCategory?.name ?? 'Иное', categoryId, categoryName: category?.name ?? 'Иное' } }, tx);
       await queueDistributionRefresh(tx, incidentId, `topic:${randomUUID()}`, true);
     }, TRANSACTION_OPTIONS);
-    await this.messages.flush();
+    this.messages.wake();
     return (await this.repository.findById(incidentId))!;
   }
 
@@ -209,7 +209,7 @@ export class DistributionService {
     }
 
     await this.sector.publishCard(incidentId);
-    await this.messages.flush();
+    this.messages.wake();
     return (await this.repository.findById(incidentId))!;
   }
 
@@ -313,7 +313,7 @@ export class DistributionService {
         ].join('\n'),
       );
     }
-    await this.messages.flush();
+    this.messages.wake();
 
     log.info(
       incidentLogFields({

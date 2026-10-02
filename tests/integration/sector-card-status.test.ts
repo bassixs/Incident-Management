@@ -40,7 +40,7 @@ describeIntegration('sector card status through durable delivery', () => {
       { prisma, storage: {} as never });
     services = buildServices(prisma, { messages: worker, media: new FakeMediaService() as never });
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(async () => { worker.stop(); await worker.waitForIdle(); vi.restoreAllMocks(); });
   afterAll(async () => prisma.$disconnect());
   const actor = () => actorFor(prisma, TEST_USERS.admin, 'Сотрудник', [UserRole.ADMIN]);
   async function assigned(direct = false) {
@@ -63,6 +63,7 @@ describeIntegration('sector card status through durable delivery', () => {
     const original = (await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } })).sectorMessageId;
     expect(await card(incident.id)).toMatch(/^🔴 СВОБОДНОЕ/);
     await services.sector.takeInWork(incident.id, await actor());
+    await worker.flush();
     expect(await card(incident.id)).toMatch(/^🟡 В РАБОТЕ/);
     expect(edits.mock.calls.filter(([id]) => id === original).at(-1)?.[2]).toEqual([[expect.objectContaining({ text: 'Подготовить ответ' })], [expect.objectContaining({ text: 'Вернуть на перераспределение' })], [expect.objectContaining({ text: 'Освободить сообщение' })], [expect.objectContaining({ text: 'Работать лично' })]]);
     expect(await card(incident.id)).toContain('👤 Исполнитель:\nСотрудник');
@@ -75,6 +76,7 @@ describeIntegration('sector card status through durable delivery', () => {
     expect(await card(incident.id)).toMatch(/^🟠 НА ДОРАБОТКЕ/);
     expect(edits.mock.calls.filter(([id]) => id === original).at(-1)?.[2]).toEqual([[expect.objectContaining({ text: 'Исправить ответ' })], [expect.objectContaining({ text: 'Вернуть на перераспределение' })], [expect.objectContaining({ text: 'Освободить сообщение' })], [expect.objectContaining({ text: 'Работать лично' })]]);
     await services.sector.takeInWork(incident.id, await actor());
+    await worker.flush();
     expect(await card(incident.id)).toMatch(/^🟡 В РАБОТЕ/);
     await services.answers.submit(incident.id, await actor(), 'Исправленный ответ');
     await worker.flush();
@@ -108,6 +110,7 @@ describeIntegration('sector card status through durable delivery', () => {
       storageKey: photoReference('resident-photo-token'), originalName: 'photo.jpg' } });
     failEdit = true;
     await services.sector.takeInWork(incident.id, await actor());
+    await worker.flush();
     expect(await card(incident.id)).toMatch(/^🔴 СВОБОДНОЕ/);
     await services.answers.submit(incident.id, await actor(), 'Готовый ответ');
     failEdit = false;

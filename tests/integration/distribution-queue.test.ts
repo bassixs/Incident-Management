@@ -22,7 +22,7 @@ describeIntegration('persistent distribution queue', () => {
   let requesterSequence = 0;
   beforeAll(() => { pushSchemaOnce(); prisma = createTestPrisma(); });
   afterAll(() => prisma.$disconnect());
-  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+  afterEach(async () => { services.messages.stop(); await services.messages.waitForIdle(); vi.useRealTimers(); vi.restoreAllMocks(); });
   beforeEach(async () => {
     await resetDatabase(prisma);
     await seedCategories(prisma);
@@ -67,15 +67,34 @@ describeIntegration('persistent distribution queue', () => {
     cards.set(`original-${incident.id}`, { text: incident.text, attachments: [{ type: 'inline_keyboard' }] });
     return prisma.incident.update({ where: { id: incident.id }, data: { createdAt: new Date(Date.now() - age * 60_000), distributionMessageId: `original-${incident.id}` } });
   }
-  const claim = (who = actor) => services.distributionQueue.claim(who, TEST_CHATS.distribution, undefined, true);
+  const claim = async (who = actor) => {
+    const result = await services.distributionQueue.claim(who, TEST_CHATS.distribution, undefined, true);
+    // Business methods now finish at durable commit; delivery assertions await the worker.
+    await services.messages.flush(); return result;
+  };
   const copies = (id: string) => prisma.outboundMessage.findMany({ where: { incidentId: id, dedupeKey: { startsWith: `distribution-claim:${id}:` } } });
+
+  it('empty polls and reusing an existing claim do not wake the worker without new jobs', async () => {
+    const wake = vi.spyOn(services.messages, 'wake');
+    expect(await services.distributionQueue.claim(actor, TEST_CHATS.distribution)).toBeNull();
+    expect(wake).not.toHaveBeenCalled();
+    const incident = await create();
+    await services.messages.flush();
+    await services.distributionQueue.claim(actor, TEST_CHATS.distribution, incident.id);
+    await services.messages.flush();
+    wake.mockClear();
+    const count = await prisma.outboundMessage.count();
+    await services.distributionQueue.claim(actor, TEST_CHATS.distribution, incident.id);
+    expect(wake).not.toHaveBeenCalled();
+    expect(await prisma.outboundMessage.count()).toBe(count);
+  });
 
   it('keeps the original and queue copy green after assignment, review and delivery', async () => {
     const incident = await create();
     await claim();
     const copy = (await copies(incident.id))[0]!;
     const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: GROUP_CODES.facility } });
-    await services.distribution.assign(incident.id, group.id, actor);
+    await services.distribution.assign(incident.id, group.id, actor); await services.messages.flush();
     for (const mid of [incident.distributionMessageId, copy.firstMessageId]) {
       expect(max.editMessage).toHaveBeenCalledWith(mid, expect.stringContaining('🟢 РАСПРЕДЕЛЕНО'), []);
       expect(max.editMessage).toHaveBeenCalledWith(mid, expect.stringContaining(group.name), []);
@@ -99,7 +118,7 @@ describeIntegration('persistent distribution queue', () => {
     const incident = await create();
     await claim();
     const old = (await copies(incident.id))[0]!;
-    await services.distributionQueue.release(actor, TEST_CHATS.distribution, incident.id);
+    await services.distributionQueue.release(actor, TEST_CHATS.distribution, incident.id); await services.messages.flush();
     expect(max.editMessage).toHaveBeenCalledWith(old.firstMessageId, expect.stringContaining('закрепление по этой карточке завершено'), []);
     advance(1);
     await claim(colleague);
@@ -117,7 +136,7 @@ describeIntegration('persistent distribution queue', () => {
     const copy = (await copies(incident.id))[0]!;
     max.editMessage.mockImplementation(async (mid: string) => { if (mid === copy.firstMessageId) throw new Error('MAX unavailable'); });
     const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: GROUP_CODES.facility } });
-    await services.distribution.assign(incident.id, group.id, actor);
+    await services.distribution.assign(incident.id, group.id, actor); await services.messages.flush();
     expect(await prisma.outboundMessage.count({ where: { incidentId: incident.id, status: 'PENDING', dedupeKey: { startsWith: 'distribution-refresh:' } } })).toBeGreaterThan(0);
     max.editMessage.mockResolvedValue(undefined);
     advance(10);
@@ -139,7 +158,7 @@ describeIntegration('persistent distribution queue', () => {
     await claim();
     expect((await copies(incident.id))[0]!.firstMessageId).toBeNull();
     const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: GROUP_CODES.facility } });
-    await services.distribution.assign(incident.id, group.id, actor);
+    await services.distribution.assign(incident.id, group.id, actor); await services.messages.flush();
     advance(10); await services.messages.flush();
     const copy = (await copies(incident.id))[0]!;
     expect(copy.firstMessageId).not.toBeNull();
@@ -176,7 +195,7 @@ describeIntegration('persistent distribution queue', () => {
     });
     max.editMessage.mockClear();
     max.editCardWithKeyboard.mockClear();
-    await services.distribution.reject(incident.id, 'Дублирующее сообщение', colleague);
+    await services.distribution.reject(incident.id, 'Дублирующее сообщение', colleague); await services.messages.flush();
     const job = await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: `distribution-refresh:${incident.id}:rejected` } });
     expect(job.status).toBe(retry ? 'PENDING' : 'SENT');
     expect((job.payload as any).operation.messageIds).toEqual(expect.arrayContaining([old.firstMessageId, current.firstMessageId, keyboardId]));
@@ -257,7 +276,7 @@ describeIntegration('persistent distribution queue', () => {
     await expect(services.distribution.assign(incident.id, group.id, actor)).rejects.toThrow('Диспетчер 2');
     await expect(services.distribution.reject(incident.id, 'Отклонить', actor)).rejects.toThrow('Диспетчер 2');
     await expect(services.distributionQueue.release(actor, TEST_CHATS.distribution, incident.id)).rejects.toThrow('другим оператором');
-    await services.distribution.assign(incident.id, group.id, colleague);
+    await services.distribution.assign(incident.id, group.id, colleague); await services.messages.flush();
     const done = await prisma.incident.findUniqueOrThrow({ where: { id: incident.id } });
     expect(done.distributionClaimedBy).toBeNull();
     expect(done.deadlineAt).toEqual(incident.deadlineAt);

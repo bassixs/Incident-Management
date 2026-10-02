@@ -15,7 +15,7 @@ describeIntegration('topic correction during distribution', () => {
   let sequence = 0;
   beforeAll(() => { pushSchemaOnce(); prisma = createTestPrisma(); });
   afterAll(() => prisma.$disconnect());
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(async () => { services.messages.stop(); await services.messages.waitForIdle(); vi.restoreAllMocks(); });
   beforeEach(async () => {
     await resetDatabase(prisma); await seedCategories(prisma); sequence = 0;
     const send = async () => ({ body: { mid: `mid-${++sequence}` } });
@@ -33,6 +33,7 @@ describeIntegration('topic correction during distribution', () => {
     const i = await create(); await services.distributionQueue.claim(actor, TEST_CHATS.distribution, i.id, true);
     const category = await prisma.category.findUniqueOrThrow({ where: { code: CATEGORY_CODES.it } });
     await click(i.id, 'topic'); await click(i.id, 'topic-set', category.id);
+    await services.messages.flush();
     const fresh = (await services.repository.findById(i.id))!;
     expect(fresh.userSelectedCategoryId).toBe(category.id); expect(fresh.status).toBe('DISTRIBUTION'); expect(fresh.assignedGroupId).toBeNull(); expect(fresh.deadlineAt).toEqual(i.deadlineAt);
     const copy = await prisma.outboundMessage.findFirstOrThrow({ where: { dedupeKey: { startsWith: `distribution-claim:${i.id}:` } } });

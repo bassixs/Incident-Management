@@ -1,3 +1,4 @@
+import { observeMembership } from '../utils/latency';
 import { randomUUID } from 'node:crypto';
 import { Prisma, SessionType, type PrivateWorkItem } from '@prisma/client';
 import type { AppServices } from '../app/container';
@@ -58,7 +59,7 @@ async function botLink(services: AppServices, payload: string): Promise<string> 
 async function actorInChat(services: AppServices, actor: ResolvedActor, chatId: bigint): Promise<ResolvedActor> {
   const workingChat = await workingChatFor(services, chatId);
   if (!workingChat) throw new ForbiddenError('Рабочий чат больше не подключён.');
-  const result = await services.max.api.getChatMembers(Number(chatId), { user_ids: [Number(actor.maxUserId)] });
+  const result = await observeMembership(() => services.max.api.getChatMembers(Number(chatId), { user_ids: [Number(actor.maxUserId)] }));
   if (!result.members.some(member => BigInt(member.user_id) === actor.maxUserId && !member.is_bot)) {
     throw new ForbiddenError('Вы больше не участник рабочего чата. Доступ к сообщению закрыт.');
   }
