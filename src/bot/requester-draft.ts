@@ -1,3 +1,4 @@
+import { exceedsResidentPhotoLimit, RESIDENT_PHOTO_LIMIT, RESIDENT_PHOTO_LIMIT_MESSAGE } from '../incidents/resident-photo-limit';
 import { bindDraftKeyboard, sendDraftScreen, STALE_DRAFT } from './draft-screen';
 import { MaxError } from '@maxhub/max-bot-api';
 import type { AppServices } from '../app/container';
@@ -11,7 +12,7 @@ import { ValidationError } from '../utils/errors';
 import { assertMediaSize } from '../media/media-limits';
 import { isUnavailablePhoto } from '../media/max-photo-reference';
 import { moduleLogger } from '../utils/logger';
-import { incidentDraftConfirmationKeyboard, incidentDraftPhotoRetryKeyboard } from './keyboards';
+import { incidentDraftConfirmationKeyboard, incidentDraftPhotoRetryKeyboard, incidentDraftPhotoKeyboard } from './keyboards';
 import { incidentDraftPreview } from './views/cards';
 
 const log = moduleLogger('requester-draft');
@@ -77,29 +78,42 @@ export async function showIncidentDraftPreview(
 ): Promise<void> {
   const { requesterName: _name, pendingPhone: _legacyPhone, ...minimal } = data;
   const draft = requireCompleteIncidentDraft(minimal);
+  // Legacy drafts remain intact, but may not publish an oversized preview or
+  // register. Reuse the version-bound photo editor to replace/remove the set.
+  const tooManyPhotos = exceedsResidentPhotoLimit(draft.draftMedia);
+  const nextType = tooManyPhotos ? SessionType.WAITING_INCIDENT_EDIT_SELECTION : SessionType.WAITING_INCIDENT_CONFIRMATION;
   const { draftEditField: _draftEditField, draftPhotoRetry: _draftPhotoRetry, phoneInputStartedAt: _phoneStarted, ...cleanDraft } = draft;
   cleanDraft.draftToken ??= randomUUID();
   cleanDraft.previewToken = randomUUID();
   cleanDraft.previewStartedAt = Date.now();
   const previousMessageId = cleanDraft.previewMessageId;
   delete cleanDraft.previewMessageId;
-  cleanDraft.previewDeliveryPending = true;
+  if (tooManyPhotos) delete cleanDraft.previewDeliveryPending;
+  else cleanDraft.previewDeliveryPending = true;
   cleanDraft.draftTouchedAt = Date.now();
-  const keyboard = bindDraftKeyboard(cleanDraft, incidentDraftConfirmationKeyboard(cleanDraft.previewToken, !!draft.requesterPhone));
+  const keyboard = bindDraftKeyboard(cleanDraft, tooManyPhotos ? incidentDraftPhotoKeyboard(true)
+    : incidentDraftConfirmationKeyboard(cleanDraft.previewToken, !!draft.requesterPhone));
   expectedSession ??= await services.sessions.find(maxUserId, chatId) ?? undefined;
   if (expectedSession) {
     if (data.draftToken && services.sessions.readData(expectedSession).draftToken !== data.draftToken) throw new ValidationError(STALE_DRAFT);
-    if (!await services.sessions.replaceCurrent(expectedSession, SessionType.WAITING_INCIDENT_CONFIRMATION, cleanDraft)) {
+    if (!await services.sessions.replaceCurrent(expectedSession, nextType, cleanDraft)) {
       throw new ValidationError('Черновик изменился. Используйте текущую карточку сообщения.');
     }
-    expectedSession = { ...expectedSession, type: SessionType.WAITING_INCIDENT_CONFIRMATION, data: { ...cleanDraft } as never };
+    expectedSession = { ...expectedSession, type: nextType, data: { ...cleanDraft } as never };
   } else {
     if (data.draftToken) throw new ValidationError(STALE_DRAFT);
     expectedSession = await services.sessions.start({
-      maxUserId, chatId, type: SessionType.WAITING_INCIDENT_CONFIRMATION, data: cleanDraft,
+      maxUserId, chatId, type: nextType, data: cleanDraft,
     });
   }
   await retireIncidentDraftPreview(services, previousMessageId);
+  if (tooManyPhotos) {
+    await services.messages.send({ userId: maxUserId }, {
+      text: `${RESIDENT_PHOTO_LIMIT_MESSAGE}\n\nТекст, телефон, тема, место и прежние фотографии сохранены. Нажмите «Заменить фотографии» и отправьте только выбранные фотографии — до ${RESIDENT_PHOTO_LIMIT} фотографий — или удалите фотографии кнопкой ниже. Сообщение ещё не отправлено.`,
+      keyboard, immediatePreview: true,
+    });
+    return;
+  }
   let attachments: OutboundAttachment[];
   let validatingPhotos = true;
   try {
@@ -145,7 +159,7 @@ export async function showIncidentDraftPreview(
       ? error.message
       : 'Не удалось показать фотографии через MAX.';
     await sendDraftScreen(services, maxUserId, chatId, {
-      text: `${reason}\n\nТекст сообщения и остальные данные сохранены. Отправьте все нужные фотографии заново, при необходимости уменьшив их размер, или нажмите «Продолжить без фотографий».`,
+      text: `${reason}\n\nТекст сообщения и остальные данные сохранены. Отправьте до ${RESIDENT_PHOTO_LIMIT} фотографий заново, при необходимости уменьшив их размер, или нажмите «Продолжить без фотографий».`,
       keyboard: incidentDraftPhotoRetryKeyboard(),
     });
     return;

@@ -1,3 +1,4 @@
+import { assertResidentPhotoLimit, RESIDENT_PHOTO_LIMIT } from './resident-photo-limit';
 import { assertNoPersonalData } from '../privacy/personal-data';
 import { randomUUID } from 'node:crypto';
 import { queueDistribution, queueSubscriptionInvite } from '../delivery/workflow-outbox';
@@ -71,16 +72,16 @@ export function normaliseRequesterPhone(raw: string): string {
 
 export const REJECTION_MESSAGES = {
   banned: 'Отправка сообщений для вашей учётной записи временно недоступна.',
-  file: 'Можно прикреплять только фотографии. Файлы не принимаются. Отправьте изображение как фото из галереи, а не как файл.',
+  file: `Разрешены только фотографии. Прикрепите до ${RESIDENT_PHOTO_LIMIT} фотографий из галереи. Файлы не принимаются — отправляйте изображения как фото, а не как файл.`,
   video:
     'Видео к сообщениям прикреплять нельзя.\n\n' +
-    'Отправьте описание проблемы текстом и, при необходимости, приложите фотографию.',
+    `Отправьте описание проблемы текстом и, при необходимости, приложите до ${RESIDENT_PHOTO_LIMIT} фотографий.`,
   audio:
     'Аудиосообщения не принимаются как сообщение.\n\n' +
-    'Отправьте описание проблемы текстом и, при необходимости, приложите фотографию.',
+    `Отправьте описание проблемы текстом и, при необходимости, приложите до ${RESIDENT_PHOTO_LIMIT} фотографий.`,
   empty:
     'Сообщение должно содержать текст.\n\n' +
-    'Опишите проблему одним сообщением — при необходимости можно приложить фотографию.',
+    `Опишите проблему одним сообщением — при необходимости можно приложить до ${RESIDENT_PHOTO_LIMIT} фотографий.`,
 } as const;
 
 export function tooLongMessage(maxLength: number): string {
@@ -114,6 +115,7 @@ export class IncidentService {
    * happens before the transaction that reserves a slot.
    */
   validateSubmission(text: string, media: IncomingMedia[] = []): { text: string } {
+    assertResidentPhotoLimit(media);
     const config = getConfig();
     if (media.some((item) => item.kind === 'VIDEO')) {
       throw new ValidationError(REJECTION_MESSAGES.video, { reason: 'video' });

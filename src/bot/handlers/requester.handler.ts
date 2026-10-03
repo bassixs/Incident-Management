@@ -1,3 +1,4 @@
+import { assertResidentPhotoLimit, RESIDENT_PHOTO_LIMIT } from '../../incidents/resident-photo-limit';
 import { withResidentDraftLock, STALE_DRAFT, saveDraftStep, sendDraftScreen, type ResidentInputBinding } from '../draft-screen';
 import { isResidentDraft } from '../../sessions/operator-session.service';
 import { offerResidentDraft } from '../callbacks/user.callbacks';
@@ -134,8 +135,9 @@ async function dispatchRequesterMessage(
           return;
         }
         case 'photo': {
+          assertResidentPhotoLimit(media, 'replacement');
           if (media.length === 0 || media.some((item) => item.kind !== 'IMAGE')) {
-            throw new ValidationError('Отправьте одну или несколько фотографий без других файлов.');
+            throw new ValidationError(`Отправьте до ${RESIDENT_PHOTO_LIMIT} фотографий без других файлов.`);
           }
           await showIncidentDraftPreview(services, actor.maxUserId, chatId, {
             ...draft,
@@ -158,7 +160,7 @@ async function dispatchRequesterMessage(
     const locality = normaliseIncidentText(text).replace(/\n+/g, ' ');
     if (media.length > 0 || locality.length === 0) {
       await services.messages.send(target, {
-        text: 'Напишите только название населённого пункта. Фотографию можно будет приложить к описанию проблемы следующим сообщением.',
+        text: `Напишите только название населённого пункта. До ${RESIDENT_PHOTO_LIMIT} фотографий можно будет приложить к описанию проблемы следующим сообщением.`,
       });
       return;
     }
@@ -198,6 +200,7 @@ async function dispatchRequesterMessage(
   }
 
   try {
+    assertResidentPhotoLimit(media, 'initial');
     const validated = services.incidents.validateSubmission(text, media);
     await showIncidentDraftPreview(services, actor.maxUserId, chatId, {
       ...data,
