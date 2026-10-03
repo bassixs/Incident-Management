@@ -13,6 +13,8 @@ import { handleOperatorMessage } from './operator.handler';
 import { handleRequesterMessage, sendMainMenu } from './requester.handler';
 import { chatIdOf, isDialog, parseCommand, resolveActor, userFacingError } from './helpers';
 import { receivePersonalText, withPersonalWorkLock, enterPersonalWork, personalHome, exitPersonalWork } from '../../work-queues/private-workspace';
+import { workingChatFor } from '../../users/working-chat';
+import { botAddedGreeting } from '../views/bot-added';
 
 const log = moduleLogger('bot-messages');
 
@@ -31,6 +33,25 @@ export async function handleMessageUpdate(services: AppServices, ctx: Context): 
   const message = update.message;
   const sender = message?.sender;
   if (!message || !sender || sender.is_bot) return;
+  const dialog = isDialog(message);
+  // MAX may omit chat_id in a dialog; use the same stable scope as callbacks.
+  const chatId = chatIdOf(message) ?? (dialog ? BigInt(sender.user_id) : undefined);
+  if (chatId === undefined) return;
+  // Decide before resolving/upserting the actor, inspecting input or replying to
+  // errors. A subscription channel is not a work chat merely because we joined it.
+  if (!dialog && !(await workingChatFor(services, chatId))) {
+    const setup = parseCommand(message.body.text);
+    // Binding already works from the administrator's private dialog. Only the
+    // ID discovery helper is needed here; neither success nor failure is posted
+    // to the foreign chat. rolesOf/can reads existing roles without an upsert.
+    if (setup?.name === 'chatid' && setup.args.length === 0 && !message.body.attachments?.length &&
+      await services.users.can(BigInt(sender.user_id), 'admin.manage')) {
+      await services.messages.send({ userId: BigInt(sender.user_id) }, {
+        text: `ID чата для настройки: ${chatId.toString()}\nЧат пока не подключён. Для привязки выполните в личном диалоге /group_chat <КОД> ${chatId.toString()}.`,
+      });
+    }
+    return;
+  }
   const legacyContact = (update as unknown as { verifiedDraftContact?: unknown }).verifiedDraftContact;
   const privateWorkInputId = (update as unknown as { privateWorkInputId?: string }).privateWorkInputId;
   const residentInput = (update as unknown as { residentDraftInput?: ResidentInputBinding }).residentDraftInput;
@@ -44,15 +65,7 @@ export async function handleMessageUpdate(services: AppServices, ctx: Context): 
     return;
   }
 
-  const dialog = isDialog(message);
-  // In a dialog MAX may omit chat_id. The author's user id is then an
-  // equivalent, stable scope key — and it has to be derived the same way here
-  // and in the callback router, or a session would be created under one key
-  // and looked up under another.
-  const chatId = chatIdOf(message) ?? (dialog ? BigInt(sender.user_id) : undefined);
-  if (chatId === undefined) return;
-
-  const actor = await resolveActor(services, sender, message.recipient.chat_type === 'chat' ? chatId : undefined);
+  const actor = await resolveActor(services, sender, dialog ? undefined : chatId);
   // Bound manual input never becomes a command, employee reply or incident text.
   if (phoneInput || residentInput) {
     if (dialog) await handleRequesterMessage(services, actor, chatId, message, phoneInput, residentInput);
@@ -138,23 +151,16 @@ export async function handleBotStarted(services: AppServices, ctx: Context): Pro
 }
 
 /**
- * `bot_added` — announce the chat id so an administrator can paste it into
- * DISTRIBUTION_CHAT_ID / REVIEW_CHAT_ID / a category without guessing.
+ * `bot_added` never enrolls a chat. Only an already configured chat is greeted.
  */
 export async function handleBotAdded(services: AppServices, ctx: Context): Promise<void> {
   const update = ctx.update as BotAddedUpdateLike;
   if (update.chat_id === undefined) return;
+  if (!(await workingChatFor(services, BigInt(update.chat_id)))) return;
   await services.messages.send(
     { chatId: BigInt(update.chat_id) },
     {
-      text: [
-        'Бот подключён к этому чату.',
-        '',
-        `ID чата: ${update.chat_id}`,
-        '',
-        'Укажите его в DISTRIBUTION_CHAT_ID, REVIEW_CHAT_ID или в настройках ответственной группы',
-        '(/group_chat <КОД> <CHAT_ID>).',
-      ].join('\n'),
+      text: botAddedGreeting(BigInt(update.chat_id)),
     },
   );
 }

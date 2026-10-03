@@ -9,12 +9,12 @@ export async function handleMembershipUpdate(services: AppServices, ctx: Context
   const update = ctx.update as Extract<Update, { update_type: 'user_added' | 'user_removed' }>;
   if (update.is_channel || update.user.is_bot) return;
   const chatId = BigInt(update.chat_id);
+  const chat = await workingChatFor(services, chatId);
+  if (!chat) return;
   if (update.update_type === 'user_removed') {
     await services.sessions.clear(BigInt(update.user.user_id), chatId);
     return;
   }
-  const chat = await workingChatFor(services, chatId);
-  if (!chat) return;
   const user = await services.users.upsertFromMax(update.user);
   await services.messages.send({ chatId }, {
     text: `${user.displayName}, добро пожаловать!\nВаши права в этом чате: ${chat.labels.join(', ')}. Можно сразу приступать к работе.\n\nОтправьте /info — бот объяснит порядок работы и покажет доступные команды.`,
