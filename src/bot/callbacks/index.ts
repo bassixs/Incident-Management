@@ -22,6 +22,7 @@ import { resumeReviewEdit } from './review-edit-flow';
 import { cancelStaffSession, pendingConfirmation, showStaffConfirmation, withConfirmationLock } from './staff-confirmation';
 import { invitePersonalWork, personalAction, personalHome, exitPersonalWork, withPersonalWorkLock } from '../../work-queues/private-workspace';
 import { sendMainMenu } from '../handlers/requester.handler';
+import { workingChatFor } from '../../users/working-chat';
 
 const log = moduleLogger('bot-callbacks');
 
@@ -31,6 +32,12 @@ export async function handleCallbackUpdate(services: AppServices, ctx: Context):
   const callback = update.callback;
   if (!callback || callback.user.is_bot) return;
 
+  const dialog = update.message?.recipient?.chat_type === 'dialog';
+  const chatId = chatIdOf(update.message ?? undefined) ?? (dialog ? BigInt(callback.user.user_id) : undefined);
+  // Fail closed before parsing/acknowledging old buttons or mutating identity,
+  // sessions and action locks. Channels must never fall through as dialogs.
+  if (!dialog && (chatId === undefined || !(await workingChatFor(services, chatId)))) return;
+
   const payload = parseCallbackPayload(callback.payload);
   if (!payload) {
     await answerCallback(services, callback.callback_id, 'Кнопка устарела.');
@@ -39,11 +46,7 @@ export async function handleCallbackUpdate(services: AppServices, ctx: Context):
 
   // Mirrors the fallback in the message router so session keys line up.
   const messageId = update.message?.body?.mid;
-  const chatId =
-    chatIdOf(update.message ?? undefined) ??
-    (update.message?.recipient?.chat_type === 'dialog' ? BigInt(callback.user.user_id) : undefined);
-
-  const actor = await resolveActor(services, callback.user, update.message?.recipient?.chat_type === 'chat' ? chatId : undefined);
+  const actor = await resolveActor(services, callback.user, dialog ? undefined : chatId);
 
   const lease = actionLease(payload, actor.maxUserId, chatId, messageId);
   let acknowledged = false;
@@ -62,7 +65,7 @@ export async function handleCallbackUpdate(services: AppServices, ctx: Context):
       messageId,
       callback.callback_id,
       payload,
-      update.message?.recipient?.chat_type !== 'chat',
+      dialog,
     );
     const raced = await Promise.race([
       operation.then((notice) => ({ kind: 'done' as const, notice })),

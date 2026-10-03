@@ -213,9 +213,10 @@ describeIntegration('automatic access in configured work chats', () => {
     expect(await prisma.operatorSession.count()).toBe(2);
   });
 
-  it('gives a public explanation in private/unknown chats and combines configured chat purposes', async () => {
+  it('gives private help, stays silent in unknown chats and combines configured chat purposes', async () => {
     await command(86001n, '/info', true); expect(lastText()).toContain('/my'); expect(lastText()).not.toContain('/queue');
-    await command(-99999n, '/info'); expect(lastText()).toContain('пока не настроен'); expect(lastText()).not.toContain('/report');
+    const sentBefore = h.messages.sent.length;
+    await command(-99999n, '/info'); expect(h.messages.sent).toHaveLength(sentBefore);
     const combined = { ...h.services, config: { ...h.services.config, REVIEW_CHAT_ID: TEST_CHATS.distribution } };
     const actor = await resolveActor(combined, person(), TEST_CHATS.distribution);
     const text = await chatInfoText(combined, actor, TEST_CHATS.distribution, false);
@@ -283,8 +284,10 @@ describeIntegration('automatic access in configured work chats', () => {
 
   it('checks current chat and administrator access even for copied guide buttons', async () => {
     await command(-99999n, '/info');
-    expect(h.messages.sent.at(-1)!.message.keyboard).toBeUndefined();
+    expect(h.messages.sent).toHaveLength(0);
     await click(-99999n, 'help:guide');
+    expect(h.messages.sent).toHaveLength(0);
+    expect(h.services.max.answerCallback).not.toHaveBeenCalled();
     await click(TEST_CHATS.sector, 'help:admin');
     await click(86001n, 'help:admin', 86001, true);
     expect(h.messages.sent.filter(m => m.message.attachments?.length)).toHaveLength(0);
