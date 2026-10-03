@@ -5,7 +5,7 @@ import {
   incidentDraftEditKeyboard,
   incidentDraftPhotoKeyboard,
 } from '../../src/bot/keyboards';
-import { incidentDraftPreview, categoryPromptText, municipalityPromptText, incidentPromptText, localityPromptText, customLocalityPromptText } from '../../src/bot/views/cards';
+import { incidentDraftPreview, categoryPromptText, municipalityPromptText, incidentPromptText, localityPromptText, customLocalityPromptText, incidentDraftPhotoPrompt, greetingText, rulesText } from '../../src/bot/views/cards';
 import { OPTIONAL_PHONE_OFFER } from '../../src/privacy/optional-contact';
 import { parseCallbackPayload } from '../../src/max/callback-payload';
 
@@ -19,6 +19,11 @@ function callback(rows: ReturnType<typeof incidentDraftEditKeyboard>, label: str
 }
 
 describe('requester incident draft', () => {
+  it('states the same photo limit in creation, greeting, rules and both photo editor prompts', () => {
+    for (const text of [greetingText(), rulesText(), incidentPromptText(), incidentDraftPhotoPrompt(true), incidentDraftPhotoPrompt(false)]) {
+      expect(text).toContain('до 4 фотографий');
+    }
+  });
   it.each([
     { requesterPhone: '+7 900 123-45-67' },
     {},

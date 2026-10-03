@@ -1,3 +1,4 @@
+import { exceedsResidentPhotoLimit, RESIDENT_PHOTO_LIMIT } from '../../incidents/resident-photo-limit';
 import { exitPersonalWork } from '../../work-queues/private-workspace';
 import { consumeDraftButton, isDraftAction, saveDraftStep, sendDraftScreen, STALE_DRAFT, withResidentDraftLock } from '../draft-screen';
 import { isResidentDraft } from '../../sessions/operator-session.service';
@@ -172,6 +173,10 @@ async function dispatchUserCallback(
       );
       const draft = requireCompleteIncidentDraft(data);
       assertPreviewToken(data, payload.argument);
+      if (exceedsResidentPhotoLimit(draft.draftMedia)) {
+        await showIncidentDraftPreview(services, actor.maxUserId, chatId, draft);
+        return 'Замените или удалите фотографии';
+      }
       if (data.previewDeliveryPending) throw new ValidationError('Сначала восстановите карточку сообщения.');
       if (draft.pendingPhone) {
         // Do not silently attach an unconfirmed contact left by the old release.
@@ -406,7 +411,7 @@ async function dispatchUserCallback(
         data: { ...draft, draftEditField: 'photo' },
       });
       await sendResidentResponse(context, {
-        text: 'Отправьте одну или несколько новых фотографий. Они заменят ранее приложенные.',
+        text: `Отправьте только выбранные фотографии — до ${RESIDENT_PHOTO_LIMIT} фотографий. Они заменят ранее приложенные.`,
       });
       return undefined;
     }

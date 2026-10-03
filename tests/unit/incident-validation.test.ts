@@ -25,6 +25,13 @@ const video: IncomingMedia = { kind: 'VIDEO', url: 'https://example.test/a.mp4' 
 const audio: IncomingMedia = { kind: 'AUDIO', url: 'https://example.test/a.mp3' };
 
 describe('incident submission validation', () => {
+  it.each([0, 1, 4])('accepts %i resident photos', count => {
+    expect(() => service.validateSubmission('Яма у дома 12', Array(count).fill(image))).not.toThrow();
+  });
+  it.each([5, 9])('rejects %i resident photos before registration', count => {
+    expect(() => service.validateSubmission('Яма у дома 12', Array(count).fill(image)))
+      .toThrow('К одному сообщению можно приложить не более 4 фотографий. Выберите до 4 фото и отправьте заново');
+  });
   it('accepts links in text and photo captions', () => {
     expect(service.validateSubmission('Описание https://example.org', [image]).text).toBe('Описание https://example.org');
   });
