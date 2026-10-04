@@ -1,3 +1,4 @@
+import type { DraftScreenDelivery } from '../bot/draft-screen-delivery';
 import { type OperatorSession, type PrismaClient, SessionType } from '@prisma/client';
 
 import { getConfig } from '../config';
@@ -15,6 +16,13 @@ export type SessionData = {
   requesterPhone?: string;
   draftToken?: string;
   screenToken?: string;
+  screenPage?: number;
+  screenStage?: SessionType;
+  screenMessageId?: string;
+  screenRetireIds?: string[];
+  screenRetireAttempts?: number;
+  screenRetireAt?: number;
+  draftScreenDelivery?: DraftScreenDelivery;
   screenActions?: string[];
   inputStartedAt?: number;
   draftTouchedAt?: number;
@@ -47,11 +55,10 @@ export type SessionData = {
 };
 
 export const RESIDENT_DRAFT_TTL_MS = 24 * 60 * 60_000;
-export function isResidentDraft(type: SessionType): boolean {
-  return [SessionType.WAITING_INCIDENT_SELECTION, SessionType.WAITING_INCIDENT_TEXT,
+export const RESIDENT_DRAFT_TYPES: SessionType[] = [SessionType.WAITING_INCIDENT_SELECTION, SessionType.WAITING_INCIDENT_TEXT,
     SessionType.WAITING_CUSTOM_LOCALITY, SessionType.WAITING_INCIDENT_CONFIRMATION,
-    SessionType.WAITING_INCIDENT_EDIT_SELECTION, SessionType.WAITING_INCIDENT_EDIT_VALUE].includes(type as never);
-}
+    SessionType.WAITING_INCIDENT_EDIT_SELECTION, SessionType.WAITING_INCIDENT_EDIT_VALUE];
+export function isResidentDraft(type: SessionType): boolean { return RESIDENT_DRAFT_TYPES.includes(type); }
 
 /**
  * A pending "your next message means X" state.

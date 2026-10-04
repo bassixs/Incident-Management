@@ -13,7 +13,9 @@ export class FakeMessageService {
   readonly deleted: string[] = [];
 
   async send(target: SendTarget, message: CompositeMessage): Promise<MessageSendResult> {
-    this.sent.push({ target, message });
+    await message.beforeImmediateSend?.();
+    const { beforeImmediateSend: _guard, ...shown } = message;
+    this.sent.push({ target, message: shown });
     return { firstMessageId: `mid-${this.sent.length}`, state: 'sent', trackingApplied: false };
   }
 
@@ -33,6 +35,11 @@ export class FakeMessageService {
   }
 
   async editCardKeyboard(messageId: string, text: string, _keyboard: Button[][]): Promise<boolean> {
+    this.edits.push({ messageId, text, mode: 'keyboard' });
+    return true;
+  }
+
+  async retireDraftScreen(messageId: string, text: string): Promise<boolean> {
     this.edits.push({ messageId, text, mode: 'keyboard' });
     return true;
   }

@@ -1,3 +1,4 @@
+import { DraftScreenRecovery } from './bot/draft-screen-delivery';
 import { completeShutdown } from './server/shutdown';
 import { sweepPersonalWork } from './work-queues/private-workspace';
 import { retireClarifications } from './maintenance/retire-clarifications';
@@ -58,10 +59,12 @@ async function main(): Promise<void> {
   services.workQueues.start();
   services.workQueues.personalSweep = () => sweepPersonalWork(services);
   services.botStatus.start();
+  const draftScreens = new DraftScreenRecovery(services);
+  draftScreens.start();
 
   let shuttingDown = false;
   services.cleanup.start(work => withRuntimePaused(dispatcher, services.messages,
-    [services.sla, services.distributionQueue, services.workQueues, services.deliveryAlerts, services.botStatus], work, () => shuttingDown));
+    [services.sla, services.distributionQueue, services.workQueues, services.deliveryAlerts, services.botStatus, draftScreens], work, () => shuttingDown));
 
   let shutdownPromise: Promise<void> | undefined;
   const shutdown = (signal: string): Promise<void> => {
@@ -77,6 +80,7 @@ async function main(): Promise<void> {
       services.workQueues.stop();
       services.deliveryAlerts.stop();
       services.botStatus.stop();
+      draftScreens.stop();
       services.messages.stop();
       await completeShutdown({
         closeIngress: async () => server?.close(),
@@ -87,6 +91,7 @@ async function main(): Promise<void> {
           services.workQueues.waitForIdle(),
           services.cleanup.waitForIdle(),
           services.botStatus.waitForIdle(),
+          draftScreens.waitForIdle(),
         ]),
         waitForMessages: () => services.messages.waitForIdle(),
         disconnect: disconnectDatabase,

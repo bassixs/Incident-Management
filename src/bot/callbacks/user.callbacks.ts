@@ -149,8 +149,9 @@ async function dispatchUserCallback(
     case 'draft-reset': {
       const current = await services.sessions.find(actor.maxUserId, context.chatId ?? actor.maxUserId);
       if (!current || !await services.sessions.clearCurrent(current)) throw new ValidationError(STALE_DRAFT);
-      await retireIncidentDraftPreview(services, services.sessions.readData(current).previewMessageId);
-      await beginNewIncident(context);
+      const old = services.sessions.readData(current);
+      const retiredScreens = [...new Set([...(old.screenRetireIds ?? []), old.screenMessageId, old.previewMessageId].filter((id): id is string => !!id))];
+      await beginNewIncident(context, retiredScreens);
       return;
     }
     case 'draft-retry': {
@@ -257,9 +258,7 @@ async function dispatchUserCallback(
       if (![SessionType.WAITING_INCIDENT_CONFIRMATION, SessionType.WAITING_INCIDENT_EDIT_SELECTION].includes(current.type as never) || data.previewDeliveryPending) throw new ValidationError('Используйте текущую карточку сообщения.');
       const draft = { ...requireCompleteIncidentDraft(data), draftEditField: 'phone' as const, previewToken: randomUUID(), phoneInputStartedAt: Date.now() };
       delete draft.pendingPhone;
-      delete draft.previewMessageId;
       if (!await services.sessions.replaceCurrent(current, SessionType.WAITING_INCIDENT_EDIT_VALUE, draft)) throw new ValidationError('Черновик изменился.');
-      await retireIncidentDraftPreview(services, data.previewMessageId);
       await sendPhoneInputPrompt(services, actor.maxUserId, draft, undefined, chatId);
       return;
     }
@@ -305,8 +304,6 @@ async function dispatchUserCallback(
         await showIncidentDraftPreview(services, actor.maxUserId, chatId, draft);
         return undefined;
       }
-      await retireIncidentDraftPreview(services, data.previewMessageId);
-      delete draft.previewMessageId;
       draft.previewToken = randomUUID();
       await saveDraftStep(services, {
         maxUserId: actor.maxUserId,
@@ -596,7 +593,7 @@ async function dispatchUserCallback(
   }
 }
 
-async function beginNewIncident(context: UserCallbackContext): Promise<void> {
+async function beginNewIncident(context: UserCallbackContext, retiredScreens: string[] = []): Promise<void> {
   const { services, actor } = context;
   const target = { userId: actor.maxUserId } as const;
   const existing = await services.sessions.find(actor.maxUserId, context.chatId ?? actor.maxUserId);
@@ -615,7 +612,7 @@ async function beginNewIncident(context: UserCallbackContext): Promise<void> {
   const categories = await services.categories.listActive();
   await services.sessions.start({ maxUserId: actor.maxUserId, chatId: context.chatId ?? actor.maxUserId,
     type: SessionType.WAITING_INCIDENT_SELECTION,
-    data: { draftToken: randomUUID(), draftStage: 'category', draftTouchedAt: Date.now() } });
+    data: { draftToken: randomUUID(), draftStage: 'category', draftTouchedAt: Date.now(), screenRetireIds: retiredScreens } });
   await sendResidentResponse(context, { text: categoryPromptText(), keyboard: requesterCategoryKeyboard(categories, 0) });
 }
 

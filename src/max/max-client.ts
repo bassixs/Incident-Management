@@ -168,8 +168,8 @@ export class MaxClient {
     return this.call('sendMessageToChat', () => this.api.sendMessageToChat(toApiId(chatId), text, extra), `chat:${chatId}`);
   }
 
-  async sendToUser(userId: bigint | number, text: string, extra?: SendMessageExtra): Promise<Message> {
-    return this.call('sendMessageToUser', () => this.api.sendMessageToUser(toApiId(userId), text, extra), `user:${userId}`);
+  async sendToUser(userId: bigint | number, text: string, extra?: SendMessageExtra, beforeAttempt?: () => Promise<void>): Promise<Message> {
+    return this.call('sendMessageToUser', async () => { await beforeAttempt?.(); return this.api.sendMessageToUser(toApiId(userId), text, extra); }, `user:${userId}`);
   }
 
   /**
