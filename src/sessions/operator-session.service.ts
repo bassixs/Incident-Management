@@ -19,6 +19,8 @@ export type SessionData = {
   screenPage?: number;
   screenStage?: SessionType;
   screenMessageId?: string;
+  /** Actual choices on confirmed screens; only used for retirement wording. */
+  screenMessageChoices?: Record<string, 'category' | 'municipality'>;
   screenRetireIds?: string[];
   screenRetireAttempts?: number;
   screenRetireAt?: number;

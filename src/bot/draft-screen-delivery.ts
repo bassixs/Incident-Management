@@ -9,11 +9,15 @@ import { deliveryTrace } from '../utils/latency';
 import { moduleLogger } from '../utils/logger';
 import { isUnavailablePhoto } from '../media/max-photo-reference';
 import { bindDraftKeyboard, photoReplacement } from './draft-screen-content';
+import { parseCallbackPayload } from '../max/callback-payload';
 
 const log = moduleLogger('draft-screen');
 const RETRY_DELAYS = [5_000, 30_000, 120_000];
 const LEASE_MS = 300_000;
 export const OLD_SCREEN_NOTICE = 'Это действие устарело: открыта старая страница. Используйте последнее сообщение бота или нажмите «Создать сообщение» → «Продолжить черновик».';
+export const INACTIVE_SCREEN_NOTICE = 'Эта страница больше не активна. Продолжите оформление в новом сообщении ниже ↓';
+export const INACTIVE_TOPIC_NOTICE = 'Эта страница больше не активна. Выберите тему кнопками в новом сообщении ниже ↓';
+export const INACTIVE_TERRITORY_NOTICE = 'Эта страница больше не активна. Выберите территорию кнопками в новом сообщении ниже ↓';
 export const SCREEN_PENDING_NOTICE = 'Не удалось показать следующий экран. Черновик сохранён, сообщение не отправлено. Бот повторит показ. Также можно открыть меню → «Создать сообщение» → «Продолжить черновик».';
 type SavedScreen = Pick<CompositeMessage, 'text' | 'keyboard'> & {
   attachments?: Array<{ type: 'IMAGE'; maxToken: string }>;
@@ -73,10 +77,17 @@ async function matches(services: AppServices, expected: OperatorSession): Promis
 }
 
 /** Preserve media; only known IDs returned by our draft sends are accepted here. */
-async function retire(services: AppServices, id: string): Promise<boolean> {
-  try { if (await services.messages.retireDraftScreen(id, OLD_SCREEN_NOTICE)) return true; } catch { /* best effort */ }
+async function retire(services: AppServices, id: string, notice = INACTIVE_SCREEN_NOTICE): Promise<boolean> {
+  try { if (await services.messages.retireDraftScreen(id, notice)) return true; } catch { /* best effort */ }
   log.info({ messageId: id, result: 'retire-deferred' }, 'draft screen delivery');
   return false;
+}
+
+function retirementNotice(data: SessionData, id: string): string {
+  // Compare actual delivered pickers, not draftStage (also retained on menus/prompts).
+  const current = data.screenMessageId && data.screenMessageChoices?.[data.screenMessageId];
+  if (!current || data.screenMessageChoices?.[id] !== current) return INACTIVE_SCREEN_NOTICE;
+  return current === 'category' ? INACTIVE_TOPIC_NOTICE : INACTIVE_TERRITORY_NOTICE;
 }
 
 export async function retirePreviousScreens(services: AppServices, session: OperatorSession): Promise<void> {
@@ -87,10 +98,11 @@ export async function retirePreviousScreens(services: AppServices, session: Oper
   const ids = (data.screenRetireIds ?? []).filter(id => id !== data.screenMessageId).slice(0, 5);
   if (!ids.length || (data.screenRetireAttempts ?? 0) >= 4 || (data.screenRetireAt ?? 0) > Date.now()) return;
   const removed: string[] = [];
-  for (const id of ids) if (await retire(services, id)) removed.push(id);
+  for (const id of ids) if (await retire(services, id, retirementNotice(data, id))) removed.push(id);
   const attempts = (data.screenRetireAttempts ?? 0) + 1;
   await services.sessions.replaceCurrent(current, current.type,
-    { ...data, screenRetireIds: (data.screenRetireIds ?? []).filter(id => !removed.includes(id)), screenRetireAttempts: attempts,
+    { ...data, screenRetireIds: (data.screenRetireIds ?? []).filter(id => !removed.includes(id)),
+      screenMessageChoices: Object.fromEntries(Object.entries(data.screenMessageChoices ?? {}).filter(([id]) => !removed.includes(id))), screenRetireAttempts: attempts,
       screenRetireAt: Date.now() + (RETRY_DELAYS[attempts - 1] ?? LEASE_MS) });
   if (removed.length !== ids.length) log.info({ ...screenFacts(data), result: 'retire-deferred', remaining: ids.length - removed.length, attempt: attempts }, 'draft screen delivery');
 }
@@ -135,6 +147,10 @@ export async function deliverSavedScreen(services: AppServices, expected: Operat
     next.screenMessageId = messageId;
     next.screenRetireAttempts = 0; next.screenRetireAt = 0;
     next.screenRetireIds = [...new Set([...(next.screenRetireIds ?? []), data.screenMessageId, data.previewMessageId].filter((id): id is string => !!id && id !== messageId))];
+    // Persist only presentation metadata for known messages, after confirmed delivery.
+    next.screenMessageChoices = Object.fromEntries(Object.entries(next.screenMessageChoices ?? {}).filter(([id]) => next.screenRetireIds?.includes(id)));
+    const choice = next.screenActions?.map(parseCallbackPayload).find(action => action?.kind === 'user' && ['category', 'municipality'].includes(action.action));
+    if (choice?.kind === 'user' && (choice.action === 'category' || choice.action === 'municipality')) next.screenMessageChoices[messageId] = choice.action;
     if (job.preview) { next.previewMessageId = messageId; delete next.previewDeliveryPending; }
     else delete next.previewMessageId;
     if (!await services.sessions.replaceCurrent(live, live.type, next)) { await retire(services, messageId); return; }
