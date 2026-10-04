@@ -1,7 +1,8 @@
+import { bindDraftKeyboard, isDraftAction } from './draft-screen-content';
+export { bindDraftKeyboard, isDraftAction } from './draft-screen-content';
 import { randomUUID } from 'node:crypto';
 import type { SessionType } from '@prisma/client';
 import type { AppServices } from '../app/container';
-import type { Button } from '../max/max-types';
 import type { CompositeMessage } from '../max/max-message.service';
 import { parseCallbackPayload, type CallbackPayload } from '../max/callback-payload';
 import { isResidentDraft, type SessionData } from '../sessions/operator-session.service';
@@ -25,30 +26,6 @@ export function draftRefusal(reason: string, data: SessionData, clickedScreen?: 
   log.info({ ...deliveryTrace(), ...screenFacts(data), clickedScreen: screenRef(clickedScreen), reason }, 'draft action refused');
 }
 export type ResidentInputBinding = { sessionId: string; draftToken: string; screenToken: string };
-
-export function isDraftAction(action: string): boolean {
-  return action.startsWith('draft-') || ['category', 'page', 'location-page', 'municipality', 'locality'].includes(action);
-}
-
-/** Store routing hints on the server, not long category/location IDs in MAX.
- * Token + index is below 64 UTF-8 bytes regardless of the original payload.
- * The map belongs to one persisted draft AND one screen; raw legacy buttons fail closed.
- */
-export function bindDraftKeyboard(data: SessionData, keyboard: Button[][] = []): Button[][] {
-  data.screenToken = randomUUID();
-  delete data.draftScreenDelivery;
-  data.screenActions = [];
-  const counter = keyboard.flat().find(b => b.type === 'callback' && /^\d+ \/ \d+$/.test(b.text));
-  data.screenPage = counter ? Number(counter.text.split(' / ')[0]) : undefined;
-  data.inputStartedAt = Date.now();
-  return keyboard.map(row => row.map(button => {
-    if (button.type !== 'callback') return button;
-    const parsed = parseCallbackPayload(button.payload);
-    if (parsed?.kind !== 'user' || !isDraftAction(parsed.action)) return button;
-    const index = data.screenActions!.push(button.payload) - 1;
-    return { ...button, payload: `user:draft-action:${data.screenToken}~${index}` };
-  }));
-}
 
 export async function withResidentDraftLock<T>(services: AppServices, userId: bigint, chatId: bigint, operation: () => Promise<T>): Promise<T> {
   const key = `resident-draft:${userId}:${chatId}`;

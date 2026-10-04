@@ -1,6 +1,7 @@
 import { deliverSavedScreen, prepareScreenDelivery, DraftScreenPendingError } from './draft-screen-delivery';
 import { exceedsResidentPhotoLimit, RESIDENT_PHOTO_LIMIT, RESIDENT_PHOTO_LIMIT_MESSAGE } from '../incidents/resident-photo-limit';
-import { bindDraftKeyboard, sendDraftScreen, STALE_DRAFT } from './draft-screen';
+import { bindDraftKeyboard, STALE_DRAFT } from './draft-screen';
+import { photoReplacement } from './draft-screen-content';
 import type { AppServices } from '../app/container';
 import type { IncomingMedia } from '../media/media.service';
 import type { OutboundAttachment } from '../max/max-message.service';
@@ -10,8 +11,7 @@ import { randomUUID } from 'node:crypto';
 
 import { ValidationError } from '../utils/errors';
 import { assertMediaSize } from '../media/media-limits';
-import { isUnavailablePhoto } from '../media/max-photo-reference';
-import { incidentDraftConfirmationKeyboard, incidentDraftPhotoRetryKeyboard, incidentDraftPhotoKeyboard } from './keyboards';
+import { incidentDraftConfirmationKeyboard, incidentDraftPhotoKeyboard } from './keyboards';
 import { incidentDraftPreview } from './views/cards';
 
 /** Best effort: retire obsolete draft previews and their buttons.
@@ -122,20 +122,8 @@ export async function showIncidentDraftPreview(
   try { await deliverSavedScreen(services, expectedSession); }
   catch (error) {
     if (error instanceof DraftScreenPendingError) return; // Persisted retry, not a replacement-photo request.
-    if (!draft.draftMedia.length || !isUnavailablePhoto(error)) throw error;
-    // Only an explicit MAX photo/token error permits requesting replacement.
-    const live = await services.sessions.find(maxUserId, chatId);
-    if (!live || services.sessions.readData(live).screenToken !== cleanDraft.screenToken) return;
-    const retryData = { ...services.sessions.readData(live), draftMedia: [], draftEditField: 'photo' as const, draftPhotoRetry: true };
-    delete retryData.previewDeliveryPending; delete retryData.draftScreenDelivery;
-    if (!await services.sessions.replaceCurrent(live, SessionType.WAITING_INCIDENT_EDIT_VALUE, retryData)) return;
-    await sendDraftScreen(services, maxUserId, chatId, photoReplacement('Фотография больше недоступна в MAX.'));
+    throw error;
   }
-}
-
-function photoReplacement(reason: string): import('../max/max-message.service').CompositeMessage {
-  return { text: `${reason}\n\nТекст сообщения и остальные данные сохранены. Отправьте до ${RESIDENT_PHOTO_LIMIT} фотографий заново, при необходимости уменьшив их размер, или нажмите «Продолжить без фотографий».`,
-    keyboard: incidentDraftPhotoRetryKeyboard() };
 }
 
 async function loadPreviewPhotos(

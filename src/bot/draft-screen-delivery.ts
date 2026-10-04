@@ -7,6 +7,8 @@ import { isResidentDraft, RESIDENT_DRAFT_TYPES, type SessionData } from '../sess
 import { ValidationError } from '../utils/errors';
 import { deliveryTrace } from '../utils/latency';
 import { moduleLogger } from '../utils/logger';
+import { isUnavailablePhoto } from '../media/max-photo-reference';
+import { bindDraftKeyboard, photoReplacement } from './draft-screen-content';
 
 const log = moduleLogger('draft-screen');
 const RETRY_DELAYS = [5_000, 30_000, 120_000];
@@ -144,6 +146,22 @@ export async function deliverSavedScreen(services: AppServices, expected: Operat
     const live = await matches(services, snapshot);
     if (!live) { if (messageId) await retire(services, messageId); return; }
     const nowData = services.sessions.readData(live), attempt = job.attempts + 1;
+    if (job.preview && job.message.attachments?.length && isUnavailablePhoto(error)) {
+      // Both direct delivery and recovery take the same guarded transition.
+      // Persist the replacement screen atomically with its state before any send.
+      // Background recovery must not refresh the resident's inactivity deadline.
+      const replacement: SessionData = { ...nowData, draftMedia: [], draftEditField: 'photo', draftPhotoRetry: true };
+      delete replacement.previewDeliveryPending;
+      const message = photoReplacement('Фотография больше недоступна в MAX.');
+      message.keyboard = bindDraftKeyboard(replacement, message.keyboard);
+      const type = 'WAITING_INCIDENT_EDIT_VALUE' as const;
+      prepareScreenDelivery(replacement, message, false, type);
+      if (job.inboxId) replacement.draftScreenDelivery!.inboxId = job.inboxId;
+      if (!await services.sessions.replaceCurrent(live, type, replacement)) return;
+      log.info({ ...screenFacts(replacement), inboxId: job.inboxId, result: 'photo-replacement' }, 'draft screen delivery');
+      await deliverSavedScreen(services, { ...live, type, data: replacement as never });
+      return;
+    }
     const retryable = !(error instanceof ValidationError) && (!(error instanceof MaxError) || [408, 425, 429, 500, 502, 503, 504].includes(error.status));
     const exhausted = !retryable || attempt >= 4;
     await services.sessions.replaceCurrent(live, live.type, { ...nowData, draftScreenDelivery: {

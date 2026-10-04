@@ -62,6 +62,22 @@ describeIntegration('resident screen recovery through durable inbox and register
   await db.operatorSession.update({where:{id:s.id},data:{data:{...d,draftScreenDelivery:{...d.draftScreenDelivery,nextAttemptAt:0}}}});
   const worker=new DraftScreenRecovery(h.services);await worker.tick();worker.stop();await worker.waitForIdle();
  }
+ async function failPhotoPreviewTransport() {
+  await page(0);await click(active[0]!.name);
+  const d=await data(),ix=d.screenActions.findIndex((raw:string)=>raw.endsWith('~KALUGA_CITY'));
+  expect(ix).toBeGreaterThanOrEqual(0);await press(buttons().find((b:any)=>b.payload?.endsWith('~'+ix)).payload);
+  await type('Яма у дома 12',true);await click('📞 Поделиться контактом');
+  const transport=new MaxMessageService(h.services.max,{prisma:db,storage:h.services.media as never});
+  const api=vi.spyOn(h.services.max.api,'sendMessageToUser').mockRejectedValue(new MaxError(503,{code:'unavailable',message:'synthetic'}));
+  sendHook=async(t:any,m:any)=>{if(m.immediatePreview)await transport.send(t,m)};
+  try {expect((await type('8 (900) 123-45-67')).status).toBe('PROCESSED');expect(api).toHaveBeenCalledTimes(4);}
+  finally {sendHook=undefined;transport.stop();await transport.waitForIdle();api.mockRestore();}
+  const saved=await session();
+  expect(saved.data).toMatchObject({requesterPhone:'+7 900 123-45-67',previewDeliveryPending:true,
+   draftScreenDelivery:{preview:true,status:'pending',attempts:1}});
+  expect(saved.data.draftMedia).toHaveLength(1);expect(await db.incident.count()).toBe(0);
+  return saved;
+ }
  async function finish(){
   let s=await session();if(s.type==='WAITING_INCIDENT_SELECTION'){const d=s.data;if(d.draftStage==='category')await click('Иное');
    // Fresh visible municipality control; find the bound semantic action only to locate its displayed button.
@@ -233,6 +249,66 @@ describeIntegration('resident screen recovery through durable inbox and register
   const sends=h.messages.sent.length;
   await deliverSavedScreen(h.services,{...old,data:sending});
   expect(await data()).toEqual(newer);expect(h.messages.sent).toHaveLength(sends);
+ });
+
+ it.each([false,true])('restarted recovery replaces unavailable photo, replacement-screen 503=%s, then requires explicit confirmation',async replacementFails=>{
+  const saved=await failPhotoPreviewTransport(),before=saved.data;
+  let photoFailures=0,replacementFailures=0;
+  sendHook=async(_t:any,m:any)=>{
+   if(!m.immediatePreview)return;
+   if(m.attachments?.length){photoFailures++;throw new MaxError(400,{code:'attachment.invalid',message:'Expired photo token'});}
+   if(replacementFails&&replacementFailures++===0)throw new MaxError(503,{code:'unavailable',message:'synthetic'});
+  };
+  // A new worker reconstructs delivery from the database, not from the caller.
+  await recover();const replacement=await session();
+  expect(photoFailures).toBe(1);expect(replacement.type).toBe('WAITING_INCIDENT_EDIT_VALUE');
+  expect(replacement.expiresAt).toEqual(saved.expiresAt);
+  expect(replacement.data).toMatchObject({draftToken:before.draftToken,draftText:before.draftText,
+   requesterPhone:before.requesterPhone,selectedCategoryId:before.selectedCategoryId,
+   problemMunicipalityCode:before.problemMunicipalityCode,problemMunicipalityName:before.problemMunicipalityName,
+   problemLocality:before.problemLocality,draftEditField:'photo',draftPhotoRetry:true,draftMedia:[]});
+  expect(replacement.data.previewDeliveryPending).toBeUndefined();
+  expect(replacement.data.screenToken).not.toBe(before.screenToken);expect(await db.incident.count()).toBe(0);
+  if(replacementFails){
+   expect(replacement.data.draftScreenDelivery).toMatchObject({preview:false,status:'pending',attempts:1});
+   expect(replacement.data.draftScreenDelivery.message.attachments).toBeUndefined();
+   expect(h.messages.toUser(USER).some((x:any)=>x.message.keyboard?.flat().some((b:any)=>b.payload?.includes(replacement.data.screenToken)))).toBe(false);
+   sendHook=undefined;await recover();expect((await session()).expiresAt).toEqual(saved.expiresAt);
+  }
+  sendHook=undefined;
+  expect(screen().text).toContain('Фотография больше недоступна в MAX.');expect(screen().text).toContain('данные сохранены');
+  expect(buttons().map((b:any)=>b.text)).toEqual(['Продолжить без фотографий']);
+  expect((await data()).draftScreenDelivery).toBeUndefined();
+  const oldConfirm=before.draftScreenDelivery.message.keyboard.flat().find((b:any)=>b.text==='✅ Всё верно').payload;
+  await press(oldConfirm);expect(await db.incident.count()).toBe(0);
+  if(replacementFails)await click('Продолжить без фотографий');else await type('',true);
+  expect((await session()).type).toBe('WAITING_INCIDENT_CONFIRMATION');expect(await db.incident.count()).toBe(0);
+  const confirm=button('✅ Всё верно');await press(confirm);await press(confirm);
+  const rows=await db.incident.findMany({include:{attachments:true}});expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({text:before.draftText,requesterPhone:before.requesterPhone,userSelectedCategoryId:before.selectedCategoryId,
+   problemMunicipalityCode:before.problemMunicipalityCode,problemMunicipalityName:before.problemMunicipalityName,problemLocality:before.problemLocality});
+  expect(rows[0].attachments).toHaveLength(replacementFails?0:1);
+  const count=h.messages.sent.length;await new DraftScreenRecovery(h.services).tick();expect(h.messages.sent).toHaveLength(count);
+ });
+
+ it.each(['cancel','new-screen','new-draft','expire'])('unavailable-photo response after %s during recovery cannot replace current state',async mode=>{
+  await failPhotoPreviewTransport();let reject!:()=>void,entered!:()=>void;
+  const gate=new Promise<void>(r=>reject=r),started=new Promise<void>(r=>entered=r);
+  sendHook=async(_t:any,m:any)=>{if(m.immediatePreview&&m.attachments?.length){entered();await gate;throw new MaxError(410,{code:'photo.deleted',message:'Photo unavailable'});}};
+  const recovering=recover();await started;
+  // Simulate a lifecycle change committed while MAX has the request in flight.
+  // The normal UI is serialized by the resident lock; expiry/another process
+  // still require the CAS guard to reject the late result.
+  const current=await session();
+  if(mode==='expire')await db.operatorSession.update({where:{id:current.id},data:{expiresAt:new Date(0)}});
+  else if(mode==='new-screen')await db.operatorSession.update({where:{id:current.id},data:{data:{...current.data,screenToken:'newer-screen',draftEditField:'text',draftScreenDelivery:undefined}}});
+  else {
+   await h.services.sessions.clear(USER,USER);
+   if(mode==='new-draft')await h.services.sessions.start({maxUserId:USER,chatId:USER,type:'WAITING_INCIDENT_SELECTION',data:{draftToken:'new-draft',screenToken:'new-screen',draftStage:'category',draftTouchedAt:Date.now()}});
+  }
+  const after=await session(),sends=h.messages.sent.length;reject();await recovering;sendHook=undefined;
+  if(mode==='expire')expect(await session()).toBeNull();else expect(await session()).toEqual(after);
+  expect(h.messages.sent).toHaveLength(sends);expect(await db.incident.count()).toBe(0);
  });
 
  it('discards a mismatched persisted job without sending or starving the current screen',async()=>{
