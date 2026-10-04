@@ -83,6 +83,7 @@ export class ReviewService {
   async deliverApprovedAnswer(
     incident: IncidentWithRelations,
     answer: IncidentAnswer,
+    manualRetry?: { actorMaxUserId?: bigint },
   ): Promise<DeliveryOutcome> {
     return this.delivery.deliverAnswer(
       incident.id,
@@ -93,6 +94,7 @@ export class ReviewService {
         incident.answeredAt ?? answer.approvedAt ?? new Date(),
         incident.assignedGroup?.authorityName,
       ),
+      manualRetry,
     );
   }
 
@@ -315,12 +317,12 @@ export class ReviewService {
   }
 
   /** Manual retry for an approved-but-undelivered answer. */
-  async resend(incidentId: string): Promise<DeliveryOutcome> {
+  async resend(incidentId: string, actorMaxUserId?: bigint): Promise<DeliveryOutcome> {
     const incident = await this.repository.findById(incidentId);
     if (!incident) throw new NotFoundError(`Incident ${incidentId} not found`);
-    const answer = [...incident.answers].reverse().find((item) => item.status === AnswerStatus.APPROVED);
-    if (!answer) throw new ConflictError(`У ${incident.publicCode} нет согласованного ответа.`);
-    return this.deliverApprovedAnswer(incident, answer);
+    const answer = incident.answers.at(-1);
+    if (incident.status !== IncidentStatus.RESOLVED || answer?.status !== AnswerStatus.APPROVED) throw new ConflictError(`У ${incident.publicCode} нет актуального согласованного ответа.`);
+    return this.deliverApprovedAnswer(incident, answer, { actorMaxUserId });
   }
 
   private alreadyReviewedMessage(incident: IncidentWithRelations): string {
