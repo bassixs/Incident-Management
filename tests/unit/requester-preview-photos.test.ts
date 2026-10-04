@@ -66,13 +66,17 @@ it('sends tokens without downloading bytes and enables confirmation only after M
 });
 
 it.each([new MaxError(503, { code: 'unavailable', message: 'Private error' }), new Error('private network failure')])(
-  'keeps photo tokens and offers retry on temporary failure: %s', async error => {
+  'keeps photo tokens and persists bounded recovery on temporary failure: %s', async error => {
     const services = harness(); services.messages.send.mockRejectedValueOnce(error);
     const photos = [{ kind: 'IMAGE' as const, token: 'photo' }];
     await showIncidentDraftPreview(services as never, 1n, 1n, { ...draft, draftMedia: photos });
     expect((await services.sessions.find()).data).toMatchObject({ ...draft, draftMedia: photos, previewDeliveryPending: true });
     const hint = services.messages.send.mock.calls.at(-1)![1];
     expect(hint.text).not.toContain('private'); expect(hint.text).not.toContain('заново');
-    expect(hint.keyboard.flat().map((b: { text: string }) => b.text)).toEqual(['Повторить показ карточки', 'Отмена']);
+    expect(services.messages.send).toHaveBeenCalledTimes(1);
+    const recovery = (await services.sessions.find()).data.draftScreenDelivery;
+    expect(recovery).toMatchObject({status:'pending',attempts:1,preview:true,message:{attachments:[{type:'IMAGE',maxToken:'photo'}]}});
+    expect(recovery.nextAttemptAt).toBeGreaterThan(Date.now());
+    expect(recovery.message.keyboard.flat().map((b: { text:string })=>b.text)).toContain('✅ Всё верно');
   },
 );

@@ -1,3 +1,4 @@
+import { DraftScreenRecovery } from '../../src/bot/draft-screen-delivery';
 import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { UserRole, type PrismaClient } from '@prisma/client';
@@ -70,7 +71,7 @@ describeIntegration('resident draft screen versions and inactivity', () => {
     await type('Яма у дома 12'); expect((await session()).expiresAt.getTime()-Date.now()).toBeGreaterThan(RESIDENT_DRAFT_TTL_MS-5000);
     const old = await button('draft-confirm'); await prisma.operatorSession.updateMany({ data: { expiresAt: new Date(0) } });
     await press(old); expect(await prisma.incident.count()).toBe(0); expect(await prisma.operatorSession.count()).toBe(0);
-    expect(vi.mocked(h.services.max.answerCallback).mock.calls.some(c => JSON.stringify(c).includes('24 часов'))).toBe(true);
+    expect(vi.mocked(h.services.max.answerCallback).mock.calls.some(c => JSON.stringify(c).includes('24 часа'))).toBe(true);
     const staff = await h.services.sessions.start({ maxUserId: 556n, chatId: -100n, type: 'WAITING_FOR_ANSWER' });
     expect(staff.expiresAt.getTime()-Date.now()).toBeLessThan(RESIDENT_DRAFT_TTL_MS/2);
   });
@@ -133,7 +134,11 @@ describeIntegration('resident draft screen versions and inactivity', () => {
     const send = vi.spyOn(h.messages,'send').mockRejectedValueOnce(new MaxError(503,{code:'unavailable',message:'temporary'}));
     await type('Яма у дома 10'); send.mockRestore();
     expect(await data()).toMatchObject({ draftText:'Яма у дома 10', requesterPhone:'+7 900 123-45-67', draftMedia:[{kind:'IMAGE',token:'photo-one'}], previewDeliveryPending:true });
-    await click('draft-retry'); await click('draft-edit'); await click('draft-phone-remove');
+    const pending = await session(); const pendingData = await data();
+    await prisma.operatorSession.update({where:{id:pending!.id},data:{data:{...pendingData,draftScreenDelivery:{...pendingData.draftScreenDelivery!,nextAttemptAt:0}} as never}});
+    await new DraftScreenRecovery(h.services).tick();
+    expect((await data()).previewDeliveryPending).toBeUndefined();
+    await click('draft-edit'); await click('draft-phone-remove');
     expect((await data()).requesterPhone).toBeUndefined(); expect((await data()).draftMedia).toHaveLength(1);
     expect(await prisma.incident.count()).toBe(0); await click('draft-confirm');
     expect((await prisma.incident.findFirstOrThrow()).requesterPhone).toBeNull();

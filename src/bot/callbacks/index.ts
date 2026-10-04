@@ -1,3 +1,4 @@
+import { DraftActionError, draftRefusal, DRAFT_BUSY } from '../draft-screen';
 import { isResidentDraft } from '../../sessions/operator-session.service';
 import { reportActionError } from '../../utils/errors';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -53,7 +54,10 @@ export async function handleCallbackUpdate(services: AppServices, ctx: Context):
   let leaseAcquired = false;
   try {
     if (lease && !(await services.actionGuard.acquire(lease))) {
-      await answerCallback(services, callback.callback_id, 'Уже обрабатывается. Пожалуйста, подождите.');
+      if (payload.kind === 'user' && payload.action === 'draft-action') {
+        draftRefusal('ACTION_LEASE_ACTIVE', {}, payload.argument?.split('~')[0]);
+        await answerCallback(services, callback.callback_id, DRAFT_BUSY);
+      } else await answerCallback(services, callback.callback_id, 'Уже обрабатывается. Пожалуйста, подождите.');
       return;
     }
     leaseAcquired = !!lease;
@@ -82,7 +86,7 @@ export async function handleCallbackUpdate(services: AppServices, ctx: Context):
     await operation;
   } catch (error) {
     if (lease) await services.actionGuard.release(lease.key).catch(() => undefined);
-    log.warn(
+    if (!(error instanceof DraftActionError)) log.warn(
       incidentLogFields({
         maxUserId: actor.maxUserId,
         chatId,

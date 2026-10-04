@@ -1,6 +1,7 @@
+import { deliverSavedScreen, prepareScreenDelivery, DraftScreenPendingError } from './draft-screen-delivery';
 import { exceedsResidentPhotoLimit, RESIDENT_PHOTO_LIMIT, RESIDENT_PHOTO_LIMIT_MESSAGE } from '../incidents/resident-photo-limit';
-import { bindDraftKeyboard, sendDraftScreen, STALE_DRAFT } from './draft-screen';
-import { MaxError } from '@maxhub/max-bot-api';
+import { bindDraftKeyboard, STALE_DRAFT } from './draft-screen';
+import { photoReplacement } from './draft-screen-content';
 import type { AppServices } from '../app/container';
 import type { IncomingMedia } from '../media/media.service';
 import type { OutboundAttachment } from '../max/max-message.service';
@@ -10,12 +11,8 @@ import { randomUUID } from 'node:crypto';
 
 import { ValidationError } from '../utils/errors';
 import { assertMediaSize } from '../media/media-limits';
-import { isUnavailablePhoto } from '../media/max-photo-reference';
-import { moduleLogger } from '../utils/logger';
-import { incidentDraftConfirmationKeyboard, incidentDraftPhotoRetryKeyboard, incidentDraftPhotoKeyboard } from './keyboards';
+import { incidentDraftConfirmationKeyboard, incidentDraftPhotoKeyboard } from './keyboards';
 import { incidentDraftPreview } from './views/cards';
-
-const log = moduleLogger('requester-draft');
 
 /** Best effort: retire obsolete draft previews and their buttons.
  * Only pass previewMessageId from the validated owner/chat-scoped draft session,
@@ -70,103 +67,62 @@ export function serialiseDraftMedia(media: IncomingMedia[]): IncomingMedia[] {
 }
 
 export async function showIncidentDraftPreview(
-  services: AppServices,
-  maxUserId: bigint,
-  chatId: bigint,
-  data: SessionData,
-  expectedSession?: OperatorSession,
+  services: AppServices, maxUserId: bigint, chatId: bigint, data: SessionData, expectedSession?: OperatorSession,
 ): Promise<void> {
   const { requesterName: _name, pendingPhone: _legacyPhone, ...minimal } = data;
   const draft = requireCompleteIncidentDraft(minimal);
-  // Legacy drafts remain intact, but may not publish an oversized preview or
-  // register. Reuse the version-bound photo editor to replace/remove the set.
   const tooManyPhotos = exceedsResidentPhotoLimit(draft.draftMedia);
-  const nextType = tooManyPhotos ? SessionType.WAITING_INCIDENT_EDIT_SELECTION : SessionType.WAITING_INCIDENT_CONFIRMATION;
-  const { draftEditField: _draftEditField, draftPhotoRetry: _draftPhotoRetry, phoneInputStartedAt: _phoneStarted, ...cleanDraft } = draft;
+  const { draftEditField: _field, draftPhotoRetry: _retry, phoneInputStartedAt: _phoneStarted, ...cleanDraft } = draft;
   cleanDraft.draftToken ??= randomUUID();
   cleanDraft.previewToken = randomUUID();
   cleanDraft.previewStartedAt = Date.now();
-  const previousMessageId = cleanDraft.previewMessageId;
-  delete cleanDraft.previewMessageId;
-  if (tooManyPhotos) delete cleanDraft.previewDeliveryPending;
-  else cleanDraft.previewDeliveryPending = true;
   cleanDraft.draftTouchedAt = Date.now();
-  const keyboard = bindDraftKeyboard(cleanDraft, tooManyPhotos ? incidentDraftPhotoKeyboard(true)
-    : incidentDraftConfirmationKeyboard(cleanDraft.previewToken, !!draft.requesterPhone));
+  let nextType: SessionType = tooManyPhotos ? SessionType.WAITING_INCIDENT_EDIT_SELECTION : SessionType.WAITING_INCIDENT_CONFIRMATION;
+  let message: import('../max/max-message.service').CompositeMessage;
+  if (tooManyPhotos) {
+    delete cleanDraft.previewDeliveryPending;
+    message = {
+      text: `${RESIDENT_PHOTO_LIMIT_MESSAGE}\n\nТекст, телефон, тема, место и прежние фотографии сохранены. Нажмите «Заменить фотографии» и отправьте только выбранные фотографии — до ${RESIDENT_PHOTO_LIMIT} фотографий — или удалите фотографии кнопкой ниже. Сообщение ещё не отправлено.`,
+      keyboard: incidentDraftPhotoKeyboard(true),
+    };
+  } else {
+    let attachments: OutboundAttachment[];
+    try { attachments = await loadPreviewPhotos(draft.draftMedia); }
+    catch (error) {
+      if (!(error instanceof ValidationError)) throw error;
+      // Local validation identifies unavailable photos before saving the next screen.
+      cleanDraft.draftMedia = []; cleanDraft.draftEditField = 'photo'; cleanDraft.draftPhotoRetry = true;
+      delete cleanDraft.previewDeliveryPending;
+      nextType = SessionType.WAITING_INCIDENT_EDIT_VALUE;
+      message = photoReplacement(error.message);
+      attachments = [];
+    }
+    if (nextType === SessionType.WAITING_INCIDENT_CONFIRMATION) {
+      const category = draft.selectedCategoryId ? await services.categories.findById(draft.selectedCategoryId) : null;
+      cleanDraft.previewDeliveryPending = true;
+      message = {
+        text: incidentDraftPreview({ problemMunicipalityName: draft.problemMunicipalityName, problemLocality: draft.problemLocality,
+          draftText: draft.draftText, photoCount: attachments.length, requesterPhone: draft.requesterPhone }, category?.name),
+        keyboard: incidentDraftConfirmationKeyboard(cleanDraft.previewToken, !!draft.requesterPhone),
+        ...(attachments.length ? { attachments } : {}),
+      };
+    }
+  }
+  message!.keyboard = bindDraftKeyboard(cleanDraft, message!.keyboard);
+  prepareScreenDelivery(cleanDraft, message!, nextType === SessionType.WAITING_INCIDENT_CONFIRMATION, nextType);
   expectedSession ??= await services.sessions.find(maxUserId, chatId) ?? undefined;
   if (expectedSession) {
     if (data.draftToken && services.sessions.readData(expectedSession).draftToken !== data.draftToken) throw new ValidationError(STALE_DRAFT);
-    if (!await services.sessions.replaceCurrent(expectedSession, nextType, cleanDraft)) {
-      throw new ValidationError('Черновик изменился. Используйте текущую карточку сообщения.');
-    }
-    expectedSession = { ...expectedSession, type: nextType, data: { ...cleanDraft } as never };
+    if (!await services.sessions.replaceCurrent(expectedSession, nextType, cleanDraft)) throw new ValidationError(STALE_DRAFT);
+    expectedSession = { ...expectedSession, type: nextType, data: cleanDraft as never };
   } else {
     if (data.draftToken) throw new ValidationError(STALE_DRAFT);
-    expectedSession = await services.sessions.start({
-      maxUserId, chatId, type: nextType, data: cleanDraft,
-    });
+    expectedSession = await services.sessions.start({ maxUserId, chatId, type: nextType, data: cleanDraft });
   }
-  await retireIncidentDraftPreview(services, previousMessageId);
-  if (tooManyPhotos) {
-    await services.messages.send({ userId: maxUserId }, {
-      text: `${RESIDENT_PHOTO_LIMIT_MESSAGE}\n\nТекст, телефон, тема, место и прежние фотографии сохранены. Нажмите «Заменить фотографии» и отправьте только выбранные фотографии — до ${RESIDENT_PHOTO_LIMIT} фотографий — или удалите фотографии кнопкой ниже. Сообщение ещё не отправлено.`,
-      keyboard, immediatePreview: true,
-    });
-    return;
-  }
-  let attachments: OutboundAttachment[];
-  let validatingPhotos = true;
-  try {
-    attachments = await loadPreviewPhotos(draft.draftMedia);
-    validatingPhotos = false;
-    const category = draft.selectedCategoryId ? await services.categories.findById(draft.selectedCategoryId) : null;
-    const sent = await services.messages.send({ userId: maxUserId }, {
-      text: incidentDraftPreview({
-        problemMunicipalityName: draft.problemMunicipalityName, problemLocality: draft.problemLocality,
-        draftText: draft.draftText, photoCount: attachments.length,
-        requesterPhone: draft.requesterPhone }, category?.name),
-      keyboard, immediatePreview: true,
-      ...(attachments.length ? { attachments } : {}),
-    });
-    if (!sent?.firstMessageId || sent.state !== 'sent') throw new Error('Preview delivery not confirmed');
-    cleanDraft.previewMessageId = sent.firstMessageId;
-  } catch (error) {
-    // Only local photo validation or an explicit MAX token error proves that
-    // replacement is necessary. Network/5xx failures preserve the whole draft.
-    if (!draft.draftMedia.length || !(isUnavailablePhoto(error) || (validatingPhotos && error instanceof ValidationError))) {
-      log.warn({ status: error instanceof MaxError ? error.status : undefined }, 'draft preview delivery pending; resident can retry');
-      const current = await services.sessions.find(maxUserId, chatId);
-      if (!current || current.id !== expectedSession.id || current.type !== SessionType.WAITING_INCIDENT_CONFIRMATION) return;
-      const currentData = services.sessions.readData(current);
-      if (currentData.draftToken !== cleanDraft.draftToken || currentData.previewToken !== cleanDraft.previewToken) return;
-      // Do not enqueue a static preview/phone or stale retry notice in the outbox.
-      // If MAX is still down, /start or a plain message resumes the saved session.
-      await sendDraftScreen(services, maxUserId, chatId, {
-        text: 'Не удалось показать карточку. Данные сохранены, сообщение не отправлено. Нажмите «Повторить показ карточки» или отправьте «Продолжить». Также можно использовать /start.',
-        keyboard: [[{ type: 'callback', text: 'Повторить показ карточки', payload: `user:draft-retry:${cleanDraft.previewToken}` }],
-          [{ type: 'callback', text: 'Отмена', payload: `user:draft-cancel:${cleanDraft.previewToken}` }]],
-        immediatePreview: true,
-      }).catch(() => undefined);
-      return;
-    }
-    // The failed set must never become confirmable or be silently omitted.
-    // Preserve the entered fields and let the requester replace all photos.
-    log.warn({ err: error instanceof Error ? error.message : String(error) }, 'draft photos require replacement');
-    const retryData = { ...cleanDraft, draftMedia: [], draftEditField: 'photo' as const, draftPhotoRetry: true };
-    delete retryData.previewDeliveryPending;
-    if (!await services.sessions.replaceCurrent(expectedSession, SessionType.WAITING_INCIDENT_EDIT_VALUE, retryData)) return;
-    const reason = isUnavailablePhoto(error) ? 'Фотография больше недоступна в MAX.' : error instanceof ValidationError
-      ? error.message
-      : 'Не удалось показать фотографии через MAX.';
-    await sendDraftScreen(services, maxUserId, chatId, {
-      text: `${reason}\n\nТекст сообщения и остальные данные сохранены. Отправьте до ${RESIDENT_PHOTO_LIMIT} фотографий заново, при необходимости уменьшив их размер, или нажмите «Продолжить без фотографий».`,
-      keyboard: incidentDraftPhotoRetryKeyboard(),
-    });
-    return;
-  }
-  delete cleanDraft.previewDeliveryPending;
-  if (!await services.sessions.replaceCurrent(expectedSession, SessionType.WAITING_INCIDENT_CONFIRMATION, cleanDraft)) {
-    await retireIncidentDraftPreview(services, cleanDraft.previewMessageId);
+  try { await deliverSavedScreen(services, expectedSession); }
+  catch (error) {
+    if (error instanceof DraftScreenPendingError) return; // Persisted retry, not a replacement-photo request.
+    throw error;
   }
 }
 

@@ -55,6 +55,8 @@ export type CompositeMessage = {
   text: string;
   /** Draft previews must either reach MAX or let the user replace the photos. */
   immediatePreview?: boolean;
+  /** Resident screens only: revalidate after recipient/rate waits and before each MAX attempt. Never persisted in outbox. */
+  beforeImmediateSend?: () => Promise<void>;
   operation?: { type: 'delivery-card'; incidentId: string; answerId: string; card: 'review' | 'distribution' }
     | { type: 'superseded-answer' }
     | { type: 'sla-reminder'; incidentId: string; stage: SlaStage }
@@ -164,6 +166,7 @@ export class MaxMessageService {
       const key = targetKey(destination);
       while (this.activeTargets.has(key)) await this.activeTargets.get(key)!.done.catch(() => undefined);
       return this.withTarget(destination, async () => {
+        await message.beforeImmediateSend?.();
         const { firstMessageId } = await this.deliverLogical(target, message);
         return { firstMessageId, state: 'sent' as const, trackingApplied: false };
       });
@@ -254,6 +257,7 @@ export class MaxMessageService {
         attachments.length ? attachments : undefined,
         message.disableLinkPreview,
         index === 0 ? message.replyToMessageId : undefined,
+        message.immediatePreview ? message.beforeImmediateSend : undefined,
       );
       firstMessageId ??= sent?.body?.mid;
       if (isLast && keyboardAttachment) keyboardMessageId = sent?.body?.mid;
@@ -954,6 +958,12 @@ export class MaxMessageService {
     return this.edit(messageId, text, []);
   }
 
+  /** Known resident screen only; preserve photos while disabling obsolete controls. */
+  async retireDraftScreen(messageId: string, text: string): Promise<boolean> {
+    try { await this.max.editCardWithKeyboard(messageId, text, []); return true; }
+    catch { return false; }
+  }
+
   /** Remove a temporary picker after its choice has been applied. */
   async deleteCard(messageId: string): Promise<boolean> {
     try {
@@ -1011,6 +1021,7 @@ export class MaxMessageService {
     attachments?: AttachmentRequest[],
     disableLinkPreview?: boolean,
     replyToMessageId?: string,
+    beforeAttempt?: () => Promise<void>,
   ): Promise<Message | undefined> {
     const extra = {
       ...(attachments?.length ? { attachments } : {}),
@@ -1020,7 +1031,7 @@ export class MaxMessageService {
     try {
       return 'chatId' in target
         ? await this.max.sendToChat(target.chatId, text, extra)
-        : await this.max.sendToUser(target.userId, text, extra);
+        : await this.max.sendToUser(target.userId, text, extra, beforeAttempt);
     } catch (error) {
       log.error(
         {
