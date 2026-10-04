@@ -2,8 +2,8 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { Bot } from '@maxhub/max-bot-api';
 import { MaxClient } from '../../src/max/max-client';
 import { MaxMessageService } from '../../src/max/max-message.service';
-import { OLD_SCREEN_NOTICE, screenFacts } from '../../src/bot/draft-screen-delivery';
-import { draftRefusal } from '../../src/bot/draft-screen';
+import { INACTIVE_SCREEN_NOTICE, OLD_SCREEN_NOTICE, screenFacts } from '../../src/bot/draft-screen-delivery';
+import { draftRefusal, STALE_DRAFT } from '../../src/bot/draft-screen';
 import { withDeliveryTrace } from '../../src/utils/latency';
 
 const recorded = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
@@ -18,10 +18,16 @@ it('retirement removes only controls and preserves all photos; never deletes the
   const edit = vi.spyOn(bot.api, 'editMessage').mockResolvedValue({ success: true });
   const remove = vi.spyOn(bot.api, 'deleteMessage').mockRejectedValue(new Error('Must not delete'));
   const service = new MaxMessageService(new MaxClient(bot));
-  expect(await service.retireDraftScreen('known-draft-message', OLD_SCREEN_NOTICE)).toBe(true);
+  expect(await service.retireDraftScreen('known-draft-message', INACTIVE_SCREEN_NOTICE)).toBe(true);
   expect(get).toHaveBeenCalledWith('known-draft-message');
-  expect(edit).toHaveBeenCalledWith('known-draft-message', { text: OLD_SCREEN_NOTICE, attachments: [photo] });
+  expect(edit).toHaveBeenCalledWith('known-draft-message', { text: INACTIVE_SCREEN_NOTICE, attachments: [photo] });
   expect(remove).not.toHaveBeenCalled();
+});
+
+it('keeps the actual stale-button refusal separate from normal retirement', () => {
+  expect(STALE_DRAFT).toBe('Это действие устарело: открыта старая страница. Используйте последнее сообщение бота или нажмите «Создать сообщение» → «Продолжить черновик».');
+  expect(OLD_SCREEN_NOTICE).toBe(STALE_DRAFT);
+  expect(INACTIVE_SCREEN_NOTICE).not.toBe(STALE_DRAFT);
 });
 
 it('logs bounded safe correlation and explicit refusal reason, without contents or raw tokens', () => {

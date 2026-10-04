@@ -95,6 +95,56 @@ describeIntegration('resident screen recovery through durable inbox and register
   for(let p=4;p>0;p--){await click('⬅️ Назад');expect(buttons().some((x:any)=>x.text===`${p} / 5`)).toBe(true)}
   expect(refusals).toHaveLength(0);
  });
+ it('retires topic and territory pagination quietly, but uses neutral text across stages',async()=>{
+  const topic='Эта страница больше не активна. Выберите тему кнопками в новом сообщении ниже ↓';
+  const territory='Эта страница больше не активна. Выберите территорию кнопками в новом сообщении ниже ↓';
+  const neutral='Эта страница больше не активна. Продолжите оформление в новом сообщении ниже ↓';
+  await page(0);
+  async function transition(label:string,notice:string){
+   const oldId=(await data()).screenMessageId,count=h.messages.sent.length;
+   await click(label);
+   expect(h.messages.sent).toHaveLength(count+1);
+   expect(h.messages.edits.at(-1)).toEqual({messageId:oldId,text:notice,mode:'keyboard'});
+   expect((await data()).screenMessageId).not.toBe(oldId);
+   expect((await data()).screenMessageChoices[oldId]).toBeUndefined();
+  }
+  await transition('Вперёд ➡️',topic);await transition('⬅️ Назад',topic);
+  await transition(active[0]!.name,neutral);
+  await transition('Вперёд ➡️',territory);await transition('⬅️ Назад',territory);
+  const d=await data(),ix=d.screenActions.findIndex((raw:string)=>raw.endsWith('~KALUGA_CITY'));
+  expect(ix).toBeGreaterThanOrEqual(0);
+  await transition(buttons().find((b:any)=>b.payload?.endsWith('~'+ix)).text,neutral);
+  expect((await session()).type).toBe('WAITING_INCIDENT_TEXT');
+  expect(refusals).toHaveLength(0);expect(await db.incident.count()).toBe(0);
+ });
+ it('uses neutral retirement for continue/reset menus even when draftStage still says category',async()=>{
+  await page(0);const oldId=(await data()).screenMessageId;
+  await press('user:menu');await press('user:new');
+  expect((await data()).draftStage).toBe('category');
+  expect(h.messages.edits.find((e:any)=>e.messageId===oldId)?.text).toBe('Эта страница больше не активна. Продолжите оформление в новом сообщении ниже ↓');
+  const menuId=(await data()).screenMessageId;await click('Продолжить черновик');
+  expect(h.messages.edits.find((e:any)=>e.messageId===menuId)?.text).toBe('Эта страница больше не активна. Продолжите оформление в новом сообщении ниже ↓');
+ });
+ it('deferred retirement follows the delivered stage, including after handler restart',async()=>{
+  await page(0);const oldTopic=(await data()).screenMessageId;
+  const retire=vi.spyOn(h.messages,'retireDraftScreen').mockResolvedValue(false);
+  await click('Вперёд ➡️');expect(retire).toHaveBeenLastCalledWith(oldTopic,'Эта страница больше не активна. Выберите тему кнопками в новом сообщении ниже ↓');
+  await click(buttons()[0].text);
+  expect((await data()).draftStage).toBe('municipality');
+  expect(retire).toHaveBeenCalledWith(oldTopic,'Эта страница больше не активна. Продолжите оформление в новом сообщении ниже ↓');
+  const current=await session();await db.operatorSession.update({where:{id:current.id},data:{data:{...current.data,screenRetireAt:0}}});
+  const sends=h.messages.sent.length;retire.mockClear();retire.mockResolvedValue(true);
+  await new DraftScreenRecovery(h.services).tick();
+  expect(retire).toHaveBeenCalledWith(oldTopic,'Эта страница больше не активна. Продолжите оформление в новом сообщении ниже ↓');
+  expect(h.messages.sent).toHaveLength(sends);expect((await data()).screenRetireIds).toEqual([]);
+ });
+ it('uses neutral wording for an existing screen without presentation metadata',async()=>{
+  await page(0);const current=await session(),oldId=current.data.screenMessageId;
+  const legacy={...current.data};delete legacy.screenMessageChoices;
+  await db.operatorSession.update({where:{id:current.id},data:{data:legacy}});
+  await click('Вперёд ➡️');
+  expect(h.messages.edits.at(-1)).toEqual({messageId:oldId,text:'Эта страница больше не активна. Продолжите оформление в новом сообщении ниже ↓',mode:'keyboard'});
+ });
  for(let p=0;p<5;p++)for(const c of active.slice(p*6,p*6+6))it(`fresh page ${p+1}: category ${c.code}`,async()=>{await page(p);await click(c.name);expect((await data()).selectedCategoryId).toBe(c.id);expect((await data()).draftStage).toBe('municipality');expect(refusals).toHaveLength(0)});
  it.each(['Иное','⬅️ Назад','5 / 5'])('fresh last page independent control %s',async(label)=>{await page(4);const before=await data();await click(label);expect(refusals).toHaveLength(0);if(label==='Иное'){expect((await data()).selectedCategoryId).toBeNull();await finish()}else if(label==='5 / 5')expect(await data()).toEqual(before);else expect(buttons().some((b:any)=>b.text==='4 / 5')).toBe(true)});
  it('previous-page topic after advancing is stale; current page still registers',async()=>{const first=await page(0);await click('Вперёд ➡️');const before=await data();await press(button(active[0]!.name,first));expect(await data()).toEqual(before);expect(refusals.at(-1).guard).toBe('SCREEN_TOKEN_MISMATCH');for(let i=1;i<4;i++)await click('Вперёд ➡️');await click('Иное');await finish()});
@@ -162,11 +212,12 @@ describeIntegration('resident screen recovery through durable inbox and register
   await click('Вперёд ➡️'); expect(retire).not.toHaveBeenCalled();
   fail=false; await recover();
   const now=await data(); expect(now.screenMessageId).not.toBe(oldId); expect(now.screenRetireIds).toContain(oldId);
-  expect(retire).toHaveBeenCalledWith(oldId,expect.any(String));
+  expect(retire).toHaveBeenCalledWith(oldId,'Эта страница больше не активна. Выберите тему кнопками в новом сообщении ниже ↓');
   const sends=h.messages.sent.length; retire.mockResolvedValue(true);
   const current=await session();await db.operatorSession.update({where:{id:current.id},data:{data:{...now,screenRetireAt:0}}});
   await new DraftScreenRecovery(h.services).tick();
   expect((await data()).screenRetireIds).not.toContain(oldId);expect(h.messages.sent).toHaveLength(sends);
+  expect(retire).toHaveBeenLastCalledWith(oldId,'Эта страница больше не активна. Выберите тему кнопками в новом сообщении ниже ↓');
  });
 
  it.each(['expired','completed','replaced','resumed'])('pending recovery is fenced after draft is %s', async mode => {
@@ -196,7 +247,7 @@ describeIntegration('resident screen recovery through durable inbox and register
   });
   await recover();
   if(mode!=='expire') expect(await session()).toEqual(after);else expect(await session()).toBeNull();
-  expect(h.messages.edits.some((e:any)=>e.messageId===late&&e.mode==='keyboard')).toBe(true);
+  expect(h.messages.edits.some((e:any)=>e.messageId===late&&e.mode==='keyboard'&&e.text==='Эта страница больше не активна. Продолжите оформление в новом сообщении ниже ↓')).toBe(true);
   expect(await db.incident.count()).toBe(0);
  });
 
