@@ -17,7 +17,7 @@ jobs:
           POSTGRES_DB: panel_swap_lab
         ports: ['5432:5432']
         options: >-
-          --health-cmd 'pg_isready -U panel_lab -d panel_swap_lab'
+          --health-cmd "pg_isready -U panel_lab -d panel_swap_lab"
           --health-interval 5s --health-timeout 3s --health-retries 12
     env:
       DATABASE_URL: postgresql://panel_lab:synthetic_panel_lab_only@127.0.0.1:5432/panel_swap_lab
@@ -69,10 +69,10 @@ jobs:
         shell: bash
         run: |
           mkdir -p evidence
-          git status --short > evidence/lab-status.txt
-          git -C .fixture-app status --short > evidence/fixture-status.txt
+          if test -d .git; then git status --short > evidence/lab-status.txt; fi
+          if test -d .fixture-app/.git; then git -C .fixture-app status --short > evidence/fixture-status.txt; fi
           docker ps -a --format '{{.Image}} {{.Status}}' > evidence/services.txt
-          sha256sum panel-swap.cjs tests/panel-swap.test.cjs > evidence/final-source-sha256.txt
+          if test -f panel-swap.cjs; then sha256sum panel-swap.cjs tests/panel-swap.test.cjs > evidence/final-source-sha256.txt; fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
