@@ -26,6 +26,7 @@ jobs:
       MAX_API_BASE_URL: http://127.0.0.1:1
       REVIEW_CHAT_ID: '-1002'
       WEBHOOK_AUTO_REGISTER: 'false'
+      WEBHOOK_SECRET: SYNTHETIC_UNUSED_WEBHOOK_SECRET
       BOT_MODE: webhook
       LOG_LEVEL: silent
     steps:
@@ -63,7 +64,7 @@ jobs:
           set -euo pipefail
           node --check panel-swap.cjs
           node --check tests/panel-swap.test.cjs
-          node --test --test-concurrency=1 tests/panel-swap.test.cjs 2>&1 | tee evidence/tests.tap
+          node --test --test-concurrency=1 tests/*.test.cjs 2>&1 | tee evidence/tests.tap
       - name: Collect final state of source and service
         if: always()
         shell: bash

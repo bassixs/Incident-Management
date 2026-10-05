@@ -27,7 +27,7 @@ completed worker cycles and confirmed controls/pin on the selected message.
 The workflow runs only on this named test branch, with contents:read, no deployment,
 SSH, production secrets or production endpoints. It checks out exact 8dcfa330 as a
 separate fixture, installs its lock file, creates an empty PostgreSQL database and
-runs `node --test --test-concurrency=1 tests/panel-swap.test.cjs`.
+runs `node --test --test-concurrency=1 tests/*.test.cjs`.
 
 PostgreSQL and transactions/locks are real. MAX is mocked at the API boundary.
 The actual installed-version MaxMessageService and PinnedPanelService perform normal
