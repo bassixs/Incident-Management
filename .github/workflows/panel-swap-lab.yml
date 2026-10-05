@@ -1,0 +1,81 @@
+name: Isolated review panel replacement
+on:
+  push:
+    branches: [codex/review-panel-swap-lab-20261006]
+permissions:
+  contents: read
+jobs:
+  postgres-mock:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: panel_lab
+          POSTGRES_PASSWORD: synthetic_panel_lab_only
+          POSTGRES_DB: panel_swap_lab
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd 'pg_isready -U panel_lab -d panel_swap_lab'
+          --health-interval 5s --health-timeout 3s --health-retries 12
+    env:
+      DATABASE_URL: postgresql://panel_lab:synthetic_panel_lab_only@127.0.0.1:5432/panel_swap_lab
+      NODE_ENV: test
+      BOT_TOKEN: SYNTHETIC_TOKEN_NOT_VALID_FOR_MAX
+      MAX_API_BASE_URL: http://127.0.0.1:1
+      REVIEW_CHAT_ID: '-1002'
+      WEBHOOK_AUTO_REGISTER: 'false'
+      BOT_MODE: webhook
+      LOG_LEVEL: silent
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 8dcfa330183e47551446d10cabbd3b493a42ea0b
+          path: .fixture-app
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - name: Evidence and source checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir evidence
+          { date -u; uname -a; node --version; npm --version; docker --version; docker compose version; git rev-parse HEAD; git -C .fixture-app rev-parse HEAD; } | tee evidence/environment.txt
+          sha256sum -c SHA256SUMS | tee evidence/checksums.txt
+          test "$(git -C .fixture-app rev-parse HEAD)" = 8dcfa330183e47551446d10cabbd3b493a42ea0b
+          git -C .fixture-app diff --exit-code
+      - name: Install locked isolated fixture dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd .fixture-app
+          npm ci 2>&1 | tee ../evidence/npm-ci.log
+          npx prisma generate 2>&1 | tee ../evidence/prisma-generate.log
+          npx prisma db push --skip-generate 2>&1 | tee ../evidence/schema.log
+      - name: Real PostgreSQL and mocked MAX regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check panel-swap.cjs
+          node --check tests/panel-swap.test.cjs
+          node --test --test-concurrency=1 tests/panel-swap.test.cjs 2>&1 | tee evidence/tests.tap
+      - name: Collect final state of source and service
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p evidence
+          git status --short > evidence/lab-status.txt
+          git -C .fixture-app status --short > evidence/fixture-status.txt
+          docker ps -a --format '{{.Image}} {{.Status}}' > evidence/services.txt
+          sha256sum panel-swap.cjs tests/panel-swap.test.cjs > evidence/final-source-sha256.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: panel-swap-evidence
+          path: evidence/
+          retention-days: 30
