@@ -121,13 +121,20 @@ describeIntegration('MAX photo references in persistent delivery', () => {
   });
 
   it('a refused answer photo does not mark the complete answer delivered or offer a rating', async () => {
+    // A real current approved answer is required by the delivery freshness guard.
+    const author = await actorFor(prisma, TEST_USERS.admin, 'Test administrator', [UserRole.ADMIN]);
+    const resident = await actorFor(prisma, 1n, 'Test resident', []);
+    const incident = await prisma.incident.create({ data: { publicCode: 'INC-000001', requesterId: resident.userId, requesterMaxUserId: 1n,
+      requesterName: 'Resident', text: 'Test problem', status: 'RESOLVED', deadlineAt: new Date(), answeredAt: new Date() } });
+    const answer = await prisma.incidentAnswer.create({ data: { incidentId: incident.id, version: 1, text: 'Test answer',
+      status: 'APPROVED', approvedAt: new Date(), createdByUserId: author.userId } });
     const files = storage();
     const sendToUser = vi.fn().mockRejectedValueOnce(new MaxError(400, { code: 'attachment.invalid', message: 'Invalid image token' }))
       .mockResolvedValue({ body: { mid: 'notice' } });
     const messages = createMessages({ sendToUser } as never, { prisma, storage: files as never });
     const result = await messages.send({ userId: 1n }, { text: 'Ответ', attachments: [{ type: 'IMAGE', maxToken: 'expired' }],
       keyboard: [[{ type: 'callback', text: '5', payload: 'rating' }]],
-      delivery: { dedupeKey: 'answer:expired', tracking: { type: 'ANSWER_TO_REQUESTER', incidentId: 'incident', answerId: 'answer' } },
+      delivery: { dedupeKey: 'answer:expired', tracking: { type: 'ANSWER_TO_REQUESTER', incidentId: incident.id, answerId: answer.id } },
     });
     expect(result.state).toBe('queued');
     await messages.flush();

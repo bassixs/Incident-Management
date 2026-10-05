@@ -6,7 +6,7 @@ import { isPhotoReference, photoReference, photoToken, isUnavailablePhoto } from
 import { ValidationError } from '../utils/errors';
 import { getConfig } from '../config';
 import { distributionAlertsAllowed, panelSettingKey, queueKeyboard, queuePanelText, queueSnapshot } from '../distribution/queue-state';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { MaxError } from '@maxhub/max-bot-api';
 
 import {
@@ -92,6 +92,8 @@ export type MessageSendResult = {
 type DurableMessageDependencies = { prisma: PrismaClient; storage: MediaStorage };
 
 type StoredPayload = {
+  /** Confirmed MAX acknowledgements only. See docs/reserve-delivery-v1.md. */
+  deliveryProgress?: { version: 1; planHash: string; totalParts: number; mids: string[] };
   trace?: DeliveryTrace;
   text: string;
   keyboardMessageId?: string;
@@ -114,6 +116,8 @@ const OUTBOX_INTERVAL_MS = 5_000;
 const OUTBOX_LEASE_MS = 120_000;
 const OUTBOX_MAX_ATTEMPTS = 12;
 type OutboxTarget = Pick<OutboundMessage, 'targetType' | 'targetId'>;
+// Local state refusal must not enter MaxClient's network retry loop.
+class StaleDeliveryError extends ValidationError {}
 const targetKey = (target: OutboxTarget): string => `${target.targetType}:${target.targetId}`;
 
 /**
@@ -158,6 +162,38 @@ export class MaxMessageService {
    */
   async send(target: SendTarget, message: CompositeMessage): Promise<MessageSendResult> {
     return this.activity.run(() => this.sendNow(target, message));
+  }
+  get persistsDelivery(): boolean { return !!this.durable; }
+
+  /** Explicit /resend only. Ordinary deduplication must never revive FAILED jobs. */
+  async retryFailedAnswer(incidentId: string, answerId: string, actorMaxUserId?: bigint): Promise<void> {
+    if (!this.durable) return;
+    await this.durable.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM "Incident" WHERE id=${incidentId} FOR UPDATE`;
+      const incident = await tx.incident.findUnique({ where: { id: incidentId }, include: { answers: { orderBy: { version: 'desc' }, take: 1 } } });
+      const answer = incident?.answers[0];
+      if (incident?.status !== 'RESOLVED' || answer?.id !== answerId || answer.status !== 'APPROVED') throw new ValidationError('Ответ больше не является актуальным согласованным ответом.');
+      if (answer.deliveredAt) return;
+      const row = await tx.outboundMessage.findUnique({ where: { dedupeKey: `answer:${answerId}` } });
+      if (!row || row.status !== 'FAILED') return;
+      if (row.incidentId !== incidentId || row.answerId !== answerId || row.trackingType !== 'ANSWER_TO_REQUESTER'
+        || row.targetType !== 'user' || row.targetId !== incident.requesterMaxUserId
+        || (row.payload as unknown as StoredPayload).operation
+        || row.lastError?.startsWith('MANUALLY_RETIRED_')) throw new ValidationError('Это задание нельзя возобновить командой /resend.');
+      const claimed = await tx.outboundMessage.updateMany({ where: { id: row.id, status: 'FAILED', attempts: row.attempts, payload: { equals: row.payload! } },
+        data: { status: 'PENDING', attempts: 0, nextAttemptAt: new Date(), lockedAt: null } });
+      if (claimed.count) await tx.incidentHistory.create({ data: { incidentId, action: HistoryAction.ANSWER_DELIVERY_RETRY_REQUESTED, actorMaxUserId,
+        metadata: { answerId, outboxId: row.id, previousAttempts: row.attempts, previousError: row.lastError, requestedAt: new Date().toISOString() } } });
+    });
+  }
+
+  private async assertCurrentAnswer(row: OutboundMessage, db: Pick<PrismaClient, 'incident'> = this.durable!.prisma): Promise<void> {
+    if (row.trackingType !== 'ANSWER_TO_REQUESTER') return;
+    const incident = row.incidentId && await db.incident.findUnique({ where: { id: row.incidentId }, include: { answers: { orderBy: { version: 'desc' }, take: 1 } } });
+    const answer = incident && incident.answers[0];
+    if (!incident || incident.status !== 'RESOLVED' || !answer || answer.id !== row.answerId || answer.status !== 'APPROVED'
+      || row.targetType !== 'user' || row.targetId !== incident.requesterMaxUserId) throw new StaleDeliveryError('STALE_ANSWER_VERSION');
+    if (answer.deliveredAt) throw new StaleDeliveryError('ANSWER_ALREADY_DELIVERED');
   }
 
   private async sendNow(target: SendTarget, message: CompositeMessage): Promise<MessageSendResult> {
@@ -232,6 +268,7 @@ export class MaxMessageService {
     target: SendTarget,
     message: Omit<CompositeMessage, 'delivery'>,
     strictAttachments = true,
+    durableRow?: OutboundMessage,
   ): Promise<{ firstMessageId?: string; keyboardMessageId?: string }> {
     const parts = splitText(message.text, message.label);
     const keyboardAttachment: AttachmentRequest | undefined = message.keyboard?.length
@@ -240,39 +277,64 @@ export class MaxMessageService {
 
     const groups = groupAttachments(message.attachments ?? []);
     const [inlineGroup, ...trailingGroups] = groups;
-    const inlineAttachments = inlineGroup ? await this.upload(inlineGroup, strictAttachments) : [];
-
-    let firstMessageId: string | undefined;
-    let keyboardMessageId: string | undefined;
-
+    const totalParts = parts.length + trailingGroups.length;
+    const planHash = createHash('sha256').update(JSON.stringify({ parts, label: message.label, keyboard: message.keyboard,
+      replyTo: message.replyToMessageId, disableLinkPreview: message.disableLinkPreview,
+      target: 'chatId' in target ? `chat:${target.chatId}` : `user:${target.userId}`, attachments: durableRow?.attachments })).digest('hex');
+    const stored = durableRow?.payload as unknown as StoredPayload | undefined;
+    const saved = stored?.deliveryProgress;
+    const hasProgress = stored != null && Object.prototype.hasOwnProperty.call(stored, 'deliveryProgress');
+    if (hasProgress && (!saved || saved.version !== 1 || saved.planHash !== planHash || saved.totalParts !== totalParts
+      || !Array.isArray(saved.mids) || saved.mids.length > totalParts || saved.mids.some(mid => typeof mid !== 'string' || !mid.trim()))) {
+      throw new StaleDeliveryError('DELIVERY_PROGRESS_MISMATCH: требуется проверка сохранённого плана, повтор с начала запрещён.');
+    }
+    const mids: string[] = [...(saved?.mids ?? [])];
+    const keyboardPart = parts.length - 1;
+    if (hasProgress && (new Set(mids).size !== mids.length
+      || (durableRow?.firstMessageId != null && durableRow.firstMessageId !== mids[0])
+      || (stored?.keyboardMessageId != null && stored.keyboardMessageId !== mids[keyboardPart]))) {
+      throw new StaleDeliveryError('DELIVERY_PROGRESS_MISMATCH: сохранённые MID противоречат прогрессу.');
+    }
+    // Backport: retain the installed version's separate text/media loops.
+    // ACK persistence is shared; confirmed parts are skipped before uploading.
+    const acknowledge = async (sent: Message | undefined): Promise<void> => {
+      const mid = sent?.body?.mid;
+      if (durableRow && (typeof mid !== 'string' || !mid.trim())) throw new Error('MAX_SEND_ACK_WITHOUT_MID: результат отправки неоднозначен.');
+      if (durableRow && mids.includes(mid!)) throw new StaleDeliveryError('MAX_SEND_DUPLICATE_MID: требуется проверка подтверждения.');
+      mids.push(mid ?? '');
+      if (durableRow) {
+        const payload: StoredPayload = { ...(durableRow.payload as unknown as StoredPayload),
+          deliveryProgress: { version: 1, planHash, totalParts, mids: [...mids] },
+          ...(keyboardAttachment && mids[keyboardPart] ? { keyboardMessageId: mids[keyboardPart] } : {}) };
+        const nextLease = new Date();
+        const savedPart = await this.durable!.prisma.outboundMessage.updateMany({
+          where: { id: durableRow.id, status: 'SENDING', attempts: durableRow.attempts, lockedAt: durableRow.lockedAt, payload: { equals: durableRow.payload! } },
+          data: { payload: payload as unknown as Prisma.InputJsonValue, firstMessageId: mids[0], lockedAt: nextLease },
+        });
+        if (!savedPart.count) throw new StaleDeliveryError('DELIVERY_PROGRESS_OWNERSHIP_LOST');
+        durableRow.payload = payload as unknown as Prisma.JsonValue; durableRow.lockedAt = nextLease; durableRow.firstMessageId = mids[0]!;
+      }
+    };
     for (let index = 0; index < parts.length; index += 1) {
+      if (index < mids.length) continue;
+      await message.beforeImmediateSend?.();
       const isLast = index === parts.length - 1;
-      // Media and buttons ride along with the final chunk of text.
-      const attachments = isLast
-        ? [...inlineAttachments, ...(keyboardAttachment ? [keyboardAttachment] : [])]
-        : [];
-      const sent = await this.deliver(
-        target,
-        parts[index]!,
-        attachments.length ? attachments : undefined,
-        message.disableLinkPreview,
-        index === 0 ? message.replyToMessageId : undefined,
-        message.immediatePreview ? message.beforeImmediateSend : undefined,
-      );
-      firstMessageId ??= sent?.body?.mid;
-      if (isLast && keyboardAttachment) keyboardMessageId = sent?.body?.mid;
+      const inlineAttachments = isLast && inlineGroup ? await this.upload(inlineGroup, strictAttachments) : [];
+      const attachments = isLast ? [...inlineAttachments, ...(keyboardAttachment ? [keyboardAttachment] : [])] : [];
+      await acknowledge(await this.deliver(target, parts[index]!, attachments.length ? attachments : undefined,
+        message.disableLinkPreview, index === 0 ? message.replyToMessageId : undefined, message.beforeImmediateSend));
     }
-
-    // Anything that could not share the first message (a file next to photos,
-    // or more media than one message may carry) follows, labelled so the
-    // fragment stays traceable to its incident.
-    for (const group of trailingGroups) {
+    for (const [index, group] of trailingGroups.entries()) {
+      if (parts.length + index < mids.length) continue;
+      await message.beforeImmediateSend?.();
       const uploaded = await this.upload(group, strictAttachments);
-      if (uploaded.length === 0) continue;
-      await this.deliver(target, message.label ?? '', uploaded, true);
+      if (!uploaded.length) {
+        if (durableRow) throw new StaleDeliveryError('DELIVERY_EMPTY_ATTACHMENT_GROUP');
+        continue;
+      }
+      await acknowledge(await this.deliver(target, message.label ?? '', uploaded, true, undefined, message.beforeImmediateSend));
     }
-
-    return { firstMessageId: firstMessageId ?? undefined, ...(keyboardMessageId ? { keyboardMessageId } : {}) };
+    return { firstMessageId: mids[0] || undefined, ...(keyboardAttachment && mids[keyboardPart] ? { keyboardMessageId: mids[keyboardPart] } : {}) };
   }
 
   /** Start the persistent outbox worker. Immediate delivery still happens in send(). */
@@ -421,7 +483,7 @@ export class MaxMessageService {
     }
 
     const row = await durable.prisma.outboundMessage.findUniqueOrThrow({ where: { id } });
-    const payload = row.payload as unknown as StoredPayload;
+    const payload = structuredClone(row.payload) as unknown as StoredPayload;
     latency('outbox-start', { attempt: row.attempts, waitMs: Math.max(0, now.getTime() - Math.max(row.createdAt.getTime(), row.nextAttemptAt.getTime())), ageMs: now.getTime() - row.createdAt.getTime() });
     const staged = row.attachments as unknown as StagedAttachment[];
     // Retired questions from older releases must never reach a resident.
@@ -431,10 +493,10 @@ export class MaxMessageService {
     }
     if (row.trackingType === 'SECTOR_CARD' && row.incidentId) {
       const current = await durable.prisma.incident.findUnique({ where: { id: row.incidentId }, include: INCIDENT_INCLUDE });
-      const expected = current && `sector-card:${current.id}${current.history?.[0] ? ':return:' + current.history[0].id : ''}`;
-      if (!current?.assignedGroup || current.assignedGroup.maxChatId !== row.targetId || row.dedupeKey !== expected) {
-        await durable.prisma.outboundMessage.update({ where: { id }, data: { status: 'SENT', trackingApplied: true, lockedAt: null } });
-        return { state: 'sent', trackingApplied: true };
+      if (!await this.currentSectorPublication(row, current)) {
+        await durable.prisma.outboundMessage.update({ where: { id }, data: { status: 'FAILED', trackingApplied: false, lockedAt: null, lastError: 'STALE_SECTOR_ASSIGNMENT: карточка относится к прежнему назначению.' } });
+        if (row.firstMessageId) await durable.prisma.$transaction(tx => queueStaffRefresh(tx, row.incidentId!, `stale:${row.id}`));
+        return { state: 'queued', trackingApplied: false };
       }
     }
     if (payload.keyboard) payload.keyboard = payload.keyboard.map(buttons => buttons.filter(button =>
@@ -447,6 +509,7 @@ export class MaxMessageService {
     }
 
     try {
+      await this.assertCurrentAnswer(row);
       if (payload.operation?.type === 'bot-status') {
         const text = botStatusDeliveryText(payload.operation, payload.text, row.targetId, getConfig(), new Date());
         if (text === undefined) {
@@ -540,21 +603,45 @@ export class MaxMessageService {
         ? await this.refreshSectorCard(payload.operation.incidentId, payload.operation.textOnly)
         : payload.operation?.type === 'delivery-card'
         ? await this.refreshDeliveryCard(payload.operation)
-        : await this.deliverLogical(target, { ...payload, attachments }, true);
-      await this.complete(row, result.firstMessageId, 'keyboardMessageId' in result ? result.keyboardMessageId as string | undefined : undefined);
+        : await this.deliverLogical(target, { ...payload, attachments, beforeImmediateSend: async () => {
+          const lease = await durable.prisma.outboundMessage.findFirst({ where: { id: row.id, status: 'SENDING', attempts: row.attempts,
+            lockedAt: row.lockedAt, payload: { equals: row.payload! } }, select: { id: true } });
+          if (!lease || (row.payload as unknown as StoredPayload).operation?.type === 'superseded-answer') throw new StaleDeliveryError('DELIVERY_PROGRESS_OWNERSHIP_LOST');
+          await this.assertCurrentAnswer(row);
+          const progress = (row.payload as unknown as StoredPayload).deliveryProgress;
+          if (progress?.mids.length && (row.trackingType === 'REVIEW_CARD' || row.dedupeKey?.startsWith('work-copy:review:'))) {
+            const current = await durable.prisma.incident.findUnique({ where: { id: row.incidentId! }, include: { answers: { orderBy: { version: 'desc' }, take: 1 } } });
+            if (current?.status !== 'WAITING_REVIEW' || current.answers[0]?.id !== row.answerId || current.answers[0]?.status !== 'WAITING_REVIEW') {
+              throw new StaleDeliveryError('STALE_PARTIAL_REVIEW_CARD');
+            }
+          }
+          if (progress?.mids.length && row.dedupeKey?.startsWith('work-copy:sector:')) {
+            const current = await durable.prisma.incident.findUnique({ where: { id: row.incidentId! }, include: INCIDENT_INCLUDE });
+            if (!current?.assignedGroup || current.assignedGroup.maxChatId !== row.targetId
+              || !['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(current.status)
+              || (current.history[0] && !row.dedupeKey.endsWith(`:cycle:${current.history[0].id}`))) {
+              throw new StaleDeliveryError('STALE_PARTIAL_SECTOR_COPY');
+            }
+          }
+          if (row.trackingType === 'SECTOR_CARD') {
+            const current = await durable.prisma.incident.findUnique({ where: { id: row.incidentId! }, include: INCIDENT_INCLUDE });
+            if (!await this.currentSectorPublication(row, current)) throw new StaleDeliveryError('STALE_SECTOR_ASSIGNMENT');
+          }
+        } }, true, row);
+      const trackingApplied = await this.complete(row, result.firstMessageId, 'keyboardMessageId' in result ? result.keyboardMessageId as string | undefined : undefined);
       latency('outbox-sent', { attempt: row.attempts, durationMs: Date.now() - now.getTime(), ageMs: Date.now() - row.createdAt.getTime() });
       await this.cleanupAttachments(staged);
-      return { firstMessageId: result.firstMessageId, state: 'sent', trackingApplied: true };
+      return { firstMessageId: result.firstMessageId, state: 'sent', trackingApplied };
     } catch (error) {
       const unavailablePhoto = staged.some(item => isPhotoReference(item.storageKey)) && isUnavailablePhoto(error);
-      const terminal = unavailablePhoto || row.attempts >= OUTBOX_MAX_ATTEMPTS;
+      const terminal = error instanceof StaleDeliveryError || unavailablePhoto || row.attempts >= OUTBOX_MAX_ATTEMPTS;
       const detail = unavailablePhoto
         ? 'Фотография недоступна в MAX. Полное сообщение не доставлено; требуется проверка сотрудником.'
         : payload.operation?.type === 'bot-status' ? 'Не удалось доставить плановый отчёт MAX.'
         : error instanceof Error ? error.message : String(error);
       if (unavailablePhoto) await this.queuePhotoRecovery(row, payload);
-      await durable.prisma.outboundMessage.update({
-        where: { id: row.id },
+      await durable.prisma.outboundMessage.updateMany({
+        where: { id: row.id, status: 'SENDING', attempts: row.attempts, lockedAt: row.lockedAt },
         data: {
           status: terminal ? OutboxStatus.FAILED : OutboxStatus.PENDING,
           lockedAt: null,
@@ -562,6 +649,10 @@ export class MaxMessageService {
           nextAttemptAt: new Date(Date.now() + retryDelayMs(row.attempts)),
         },
       });
+      if (error instanceof StaleDeliveryError && row.incidentId && row.firstMessageId
+        && (row.trackingType === 'SECTOR_CARD' || row.trackingType === 'REVIEW_CARD' || row.dedupeKey?.startsWith('work-copy:'))) {
+        await durable.prisma.$transaction(tx => queueStaffRefresh(tx, row.incidentId!, `stale:${row.id}`));
+      }
       log[terminal ? 'error' : 'warn'](
         { outboxId: row.id, attempts: row.attempts, terminal, err: detail },
         terminal ? 'outbound MAX message requires manual attention' : 'outbound MAX message queued for retry',
@@ -570,11 +661,14 @@ export class MaxMessageService {
     }
   }
 
-  private async complete(row: OutboundMessage, firstMessageId: string | undefined, keyboardMessageId?: string): Promise<void> {
+  private async complete(row: OutboundMessage, firstMessageId: string | undefined, keyboardMessageId?: string): Promise<boolean> {
     const prisma = this.durable!.prisma;
+    let trackingApplied = true;
     await prisma.$transaction(async (tx) => {
+      // Match the lock order of manual retry and answer revision transactions.
+      if (row.trackingType === 'ANSWER_TO_REQUESTER' && row.incidentId) await tx.$queryRaw`SELECT id FROM "Incident" WHERE id=${row.incidentId} FOR UPDATE`;
       const marked = await tx.outboundMessage.updateMany({
-        where: { id: row.id, status: OutboxStatus.SENDING },
+        where: { id: row.id, status: OutboxStatus.SENDING, attempts: row.attempts, lockedAt: row.lockedAt },
         data: {
           status: OutboxStatus.SENT,
           sentAt: new Date(),
@@ -585,11 +679,11 @@ export class MaxMessageService {
           trackingApplied: true,
         },
       });
-      if (marked.count !== 1) return;
+      if (marked.count !== 1) throw new StaleDeliveryError('DELIVERY_COMPLETION_OWNERSHIP_LOST');
       // Panel identity is committed before activation by PinnedPanelService.
       // Retrying completion must not replace a newer reconciled identity.
       if (row.incidentId && firstMessageId && (row.trackingType === 'REVIEW_CARD' || row.trackingType === 'SECTOR_CARD' || row.dedupeKey?.startsWith('work-copy:') || row.dedupeKey?.startsWith('revision:'))) {
-        await queueStaffRefresh(tx, row.incidentId, `published:${firstMessageId}`);
+        await queueStaffRefresh(tx, row.incidentId, `published:${firstMessageId}:attempt:${row.attempts}`);
       }
       if (row.incidentId && firstMessageId && (row.dedupeKey?.startsWith('distribution-claim:') || row.dedupeKey?.startsWith('redistribution-notice:'))) {
         // The assignment may have happened while MAX was delivering this copy.
@@ -598,6 +692,13 @@ export class MaxMessageService {
       if (!row.trackingType) return;
 
       if (row.trackingType === DeliveryTrackingType.ANSWER_TO_REQUESTER && row.answerId && row.incidentId) {
+        try { await this.assertCurrentAnswer(row, tx); }
+        catch (error) {
+          if (!(error instanceof StaleDeliveryError)) throw error;
+          await tx.outboundMessage.update({ where: { id: row.id }, data: { trackingApplied: false, lastError: 'STALE_ANSWER_AFTER_SEND: версия изменилась во время доставки.' } });
+          trackingApplied = false;
+          return;
+        }
         const deliveredAt = new Date();
         const answer = await tx.incidentAnswer.updateMany({
           where: { id: row.answerId, incidentId: row.incidentId, deliveredAt: null },
@@ -631,8 +732,11 @@ export class MaxMessageService {
       }
       if (row.trackingType === 'SECTOR_CARD') {
         const current = await tx.incident.findUnique({ where: { id: row.incidentId }, include: INCIDENT_INCLUDE });
-        const expected = current && `sector-card:${current.id}${current.history?.[0] ? ':return:' + current.history[0].id : ''}`;
-        if (!current?.assignedGroup || current.assignedGroup.maxChatId !== row.targetId || row.dedupeKey !== expected) return;
+        if (!await this.currentSectorPublication(row, current, tx)) {
+          await tx.outboundMessage.update({ where: { id: row.id }, data: { trackingApplied: false } });
+          trackingApplied = false;
+          return;
+        }
       }
       const field =
         row.trackingType === DeliveryTrackingType.DISTRIBUTION_CARD
@@ -656,7 +760,7 @@ export class MaxMessageService {
         });
       } else if (row.trackingType === DeliveryTrackingType.SECTOR_CARD) {
         // A status can change while the original card is still being delivered.
-        await queueSectorRefresh(tx, row.incidentId, `sector-status:${row.id}:published:${firstMessageId}`, true);
+        await queueSectorRefresh(tx, row.incidentId, `sector-status:${row.id}:published:${firstMessageId}:attempt:${row.attempts}`, true);
         await tx.incidentHistory.create({
           data: {
             incidentId: row.incidentId,
@@ -666,6 +770,7 @@ export class MaxMessageService {
         });
       }
     });
+    return trackingApplied;
   }
 
   private async cleanupAttachments(attachments: StagedAttachment[]): Promise<void> {
@@ -673,6 +778,22 @@ export class MaxMessageService {
     await Promise.all(
       attachments.filter(item => item.owned !== false && !isPhotoReference(item.storageKey)).map((item) => this.durable!.storage.remove(item.storageKey).catch(() => undefined)),
     );
+  }
+
+  /** A recovery is tied to the original publication/cycle, never merely its chat. */
+  private async sectorPublicationKey(row: OutboundMessage, db: Pick<PrismaClient, 'outboundMessage'> = this.durable!.prisma): Promise<string | null> {
+    if (!row.dedupeKey?.startsWith('photo-recovery:')) return row.dedupeKey;
+    const original = await db.outboundMessage.findUnique({ where: { id: row.dedupeKey.slice('photo-recovery:'.length) } });
+    return original?.trackingType === 'SECTOR_CARD' && original.incidentId === row.incidentId
+      && original.targetType === row.targetType && original.targetId === row.targetId
+      && original.dedupeKey?.startsWith(`sector-card:${row.incidentId}`) ? original.dedupeKey : null;
+  }
+
+  private async currentSectorPublication(row: OutboundMessage, current: import('../incidents/incident.repository').IncidentWithRelations | null,
+    db: Pick<PrismaClient, 'outboundMessage'> = this.durable!.prisma): Promise<boolean> {
+    const expected = current && `sector-card:${current.id}${current.history[0] ? ':return:' + current.history[0].id : ''}`;
+    return !!current?.assignedGroup && current.assignedGroup.maxChatId === row.targetId
+      && await this.sectorPublicationKey(row, db) === expected;
   }
 
   private async deliverSlaReminder(operation: Extract<CompositeMessage['operation'], { type: 'sla-reminder' }>): Promise<{ firstMessageId?: string }> {
@@ -719,11 +840,17 @@ export class MaxMessageService {
     const seen = new Set<string>();
     for (const row of rows) {
       const stored = row.payload as unknown as StoredPayload | undefined;
-      const messageId = stored?.keyboardMessageId ?? row.firstMessageId;
+      const fragments = stored && splitText(stored.text, stored.label);
+      // firstMessageId is now saved before the keyboard-bearing text part arrives.
+      // Refresh only an acknowledged text tail, even for PENDING/FAILED jobs.
+      const progress = stored?.deliveryProgress;
+      const messageId = progress
+        ? progress.version === 1 && Array.isArray(progress.mids) ? progress.mids[(fragments?.length ?? 1) - 1] : undefined
+        : stored?.keyboardMessageId ?? row.firstMessageId;
       if (!messageId || seen.has(messageId)) continue;
       seen.add(messageId);
       const review = row.trackingType === 'REVIEW_CARD' || row.dedupeKey?.startsWith('work-copy:review:');
-      const oldSector = !review && (row.targetId !== incident.assignedGroup?.maxChatId || (incident.history?.[0] && (row.trackingType === 'SECTOR_CARD' ? row.dedupeKey !== `sector-card:${incidentId}:return:${incident.history[0].id}` : row.dedupeKey?.startsWith('work-copy:sector:') ? !row.dedupeKey.endsWith(`:cycle:${incident.history[0].id}`) : row.createdAt < incident.history[0].createdAt)));
+      const oldSector = !review && (row.targetId !== incident.assignedGroup?.maxChatId || (incident.history?.[0] && (row.trackingType === 'SECTOR_CARD' ? await this.sectorPublicationKey(row) !== `sector-card:${incidentId}:return:${incident.history[0].id}` : row.dedupeKey?.startsWith('work-copy:sector:') ? !row.dedupeKey.endsWith(`:cycle:${incident.history[0].id}`) : row.createdAt < incident.history[0].createdAt)));
       let text: string; let buttons: Button[][] = [];
       if (oldSector) {
         text = `↩️ ${incident.publicCode}: сообщение возвращено на перераспределение. Работа по этой карточке завершена.\nПричина: ${(incident.history?.[0]?.metadata as { reason?: string })?.reason ?? 'Организация изменена'}`;
@@ -743,13 +870,12 @@ export class MaxMessageService {
         text = sectorCard(incident, incident.assignedGroup!, sectorLease);
         buttons = sectorKeyboard(incidentId, { hasPhone: !!incident.requesterPhone, status: incident.status, hasTemplate: !!incident.assignedGroup?.answerTemplate });
       }
-      if (stored?.keyboardMessageId && stored.keyboardMessageId !== row.firstMessageId) {
+      if (stored && messageId !== row.firstMessageId) {
         // Keep every original text fragment; only the final fragment carries actions.
-        const fragments = splitText(stored.text, stored.label);
-        const tail = fragments.at(-1)!;
+        const tail = fragments!.at(-1)!;
         const banner = buttons.length ? 'Закрепление — рядом с кнопками.' : 'Действия по карточке завершены.';
-        const head = fragments[0]!.replace(/^👤 Закреплено за:.*\n⏳ До[^\n]*|^🟢 Свободно[^\n]*/m, banner);
-        if (head !== fragments[0]) {
+        const head = fragments![0]!.replace(/^👤 Закреплено за:.*\n⏳ До[^\n]*|^🟢 Свободно[^\n]*/m, banner);
+        if (head !== fragments![0]) {
           try { await this.max.editCardWithKeyboard(row.firstMessageId!, head, []); }
           catch (error) { if (!(error instanceof MaxError) || error.status !== 404) throw error; }
         }
@@ -1029,8 +1155,9 @@ export class MaxMessageService {
       ...(replyToMessageId ? { link: { type: 'reply' as const, mid: replyToMessageId } } : {}),
     };
     try {
+      await beforeAttempt?.();
       return 'chatId' in target
-        ? await this.max.sendToChat(target.chatId, text, extra)
+        ? await this.max.sendToChat(target.chatId, text, extra, beforeAttempt)
         : await this.max.sendToUser(target.userId, text, extra, beforeAttempt);
     } catch (error) {
       log.error(

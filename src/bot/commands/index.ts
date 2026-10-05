@@ -167,11 +167,13 @@ export const COMMANDS: Record<string, CommandHandler> = {
     const incident = await services.incidents.findByPublicCode(code);
     if (!incident) throw new AppError(`Сообщение ${code.toUpperCase()} не найдено.`, 'NOT_FOUND');
     assertIncidentVisible(actor, incident, chatId);
-    const sent = await services.review.resend(incident.id);
+    const sent = await services.review.resend(incident.id, actor.maxUserId);
     await services.messages.send(
       { chatId },
       {
-        text: sent === 'queued'
+        text: sent === 'failed'
+          ? `⚠️ Ответ по ${incident.publicCode} не доставлен. Автоматические попытки прекращены; требуется проверка причины отказа.`
+          : sent === 'queued'
           ? `⏳ Ответ по ${incident.publicCode} ожидает доставки. Бот повторит отправку автоматически.`
           : sent === 'sent'
           ? `✅ Ответ по ${incident.publicCode} доставлен пользователю.`

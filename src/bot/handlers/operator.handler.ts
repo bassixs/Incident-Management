@@ -1,4 +1,4 @@
-import { answerDeliveredNotice } from '../../delivery/delivery-status';
+import { answerDeliveredNotice, answerDeliveryFailedNotice } from '../../delivery/delivery-status';
 import { type OperatorSession, SessionType } from '@prisma/client';
 
 import type { AppServices } from '../../app/container';
@@ -163,7 +163,7 @@ async function applyAnswer(
     { chatId },
     {
       text: deliveryFailed
-        ? `⚠️ ${incident.publicCode}: ответ сохранён, но не доставлен. Повторите командой /resend ${incident.publicCode}.`
+        ? answerDeliveryFailedNotice(incident)
         : deliveryQueued
         ? `⏳ ${incident.publicCode}: ответ (версия ${answer.version}) сохранён, ожидает доставки пользователю.`
         : sentDirectly

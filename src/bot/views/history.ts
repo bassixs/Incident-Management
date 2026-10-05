@@ -24,6 +24,7 @@ const ACTION_LABELS: Record<string, string> = {
   ANSWER_APPROVED: 'Ответ согласован',
   ANSWER_SENT_DIRECT: 'Ответ подготовлен без согласования',
   ANSWER_SENT: 'Ответ доставлен заявителю',
+  ANSWER_DELIVERY_RETRY_REQUESTED: 'Запрошен ручной повтор доставки ответа',
   CLARIFICATION_REQUESTED: 'Запрошены сведения у жителя',
   CLARIFICATION_DELIVERED: 'Вопрос доставлен, срок приостановлен',
   CLARIFICATION_RECEIVED: 'Получено уточнение, срок возобновлён',
