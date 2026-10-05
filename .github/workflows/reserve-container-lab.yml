@@ -30,6 +30,8 @@ jobs:
         run: |
           mkdir -p lab-images
           docker image save incident-lab:main incident-lab:reserve | gzip -1 > lab-images/main-and-reserve.tar.gz
+          gzip -t lab-images/main-and-reserve.tar.gz
+          gzip -dc lab-images/main-and-reserve.tar.gz | docker image load
           sha256sum lab-images/main-and-reserve.tar.gz > lab-images/SHA256SUMS
       - name: Upload tested images (no registry publication)
         if: success()

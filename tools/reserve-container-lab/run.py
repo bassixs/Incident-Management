@@ -151,6 +151,7 @@ def build():
             (OUT / f'build-{version}-{target}.log').write_text(result.stdout + result.stderr)
         info = json.loads(docker('image', 'inspect', f'incident-lab:{version}').stdout)[0]
         report['images'][version] = {'sha': sha, 'tree': cmd('git', 'rev-parse', sha+'^{tree}').stdout.strip(), 'id': info['Id'], 'repoDigests': info['RepoDigests'], 'size': info['Size'], 'lockSha256': hashlib.sha256((source/'package-lock.json').read_bytes()).hexdigest()}
+        report['images'][version]['nodeVersions'] = json.loads(docker('run', '--rm', '--network', 'none', '--entrypoint', 'node', f'incident-lab:{version}', '-e', 'console.log(JSON.stringify(process.versions))').stdout)
         script = "const fs=require('fs'),c=require('crypto'),p=require('path'),out={};function walk(d){for(const n of fs.readdirSync(d)){const f=p.join(d,n);if(fs.statSync(f).isDirectory())walk(f);else out[f]=c.createHash('sha256').update(fs.readFileSync(f)).digest('hex')}}walk('dist');walk('prisma');for(const f of ['package.json','package-lock.json'])out[f]=c.createHash('sha256').update(fs.readFileSync(f)).digest('hex');console.log(JSON.stringify(out))"
         manifests = []
         for tag in [f'incident-lab:build-{version}', f'incident-lab:{version}']:
@@ -195,6 +196,8 @@ def scenarios():
     check('main-reserve-main keeps prefix without repeating', len(parts)==5 and done['payload']['deliveryProgress']['mids'][:1]==prefix)
     media=[a for r in parts for a in r['message']['body']['attachments'] if a['type']!='inline_keyboard']
     check('all nine photos and file retained', sum(a['type']=='image' for a in media)==9 and sum(a['type']=='file' for a in media)==1)
+    file_hash=hashlib.sha256(b'synthetic persistent attachment').hexdigest()
+    check('HTTP file upload contains original bytes', any(u['sha256']==file_hash for u in control()['uploads']))
 
     job,target=partial(4); helper('pending-to-stale-sending', id=job['id']); start('reserve'); terminal(job['id'])
     check('stale SENDING resumes saved prefix', len(accepted(target))==2)
@@ -244,6 +247,14 @@ def scenarios():
     finish_stop(APP,began); check('ACK and final state preserved on shutdown',state('lab-job-18')['status']=='SENT')
     start('main'); check('ACK not replayed after SIGTERM',len(accepted('user:10018'))==1); stop()
 
+    # Creation failure must also allow safe return without starting a second app.
+    before=helper('snapshot')
+    creation=docker('create','--name','reserve-lab-rejected-create','--network',NET,
+                    '--mount',f'type=bind,src={ROOT}/nonexistent-lab-mount,dst=/app/data/uploads',
+                    'incident-lab:reserve',check=False)
+    check('invalid mount rejects container creation',creation.returncode!=0)
+    check('creation failure preserved current DB',helper('snapshot')==before)
+    start('main'); stop()
     # Bad configuration must not lead to parallel instances or restoring an old DB.
     before=helper('snapshot'); bad=start('reserve',bad=True)
     wait('invalid configuration exits',lambda:not json.loads(docker('inspect',bad).stdout)[0]['State']['Running'],seconds=20)
@@ -254,7 +265,11 @@ def scenarios():
     check('attachments still readable unchanged',docker('exec',APP,'node','-e',"process.stdout.write(require('fs').readFileSync('/app/data/uploads/fixture.txt','utf8'))").stdout=='synthetic persistent attachment')
     check('no unsupported MAX routes or webhook registration',not control()['unexpected'],control()['unexpected'])
     stop()
-    save('final-synthetic-db.json',helper('snapshot')); save('http-ledger.json',control())
+    final=helper('snapshot')
+    check('all synthetic job IDs preserved',set(f'lab-job-{n}' for n in range(1,20)) <= {j['id'] for j in final['jobs']})
+    check('partial and corrupt FAILED remain terminal after all restarts',state('lab-job-5')==failed and state('lab-job-9')['status']=='FAILED' and state('lab-job-9')['payload']['deliveryProgress']['version']==99)
+    check('all synthetic incidents and answers retained',len(final['incidents'])==4 and len(final['answers'])==4)
+    save('final-synthetic-db.json',final); save('http-ledger.json',control())
 
 try:
     if os.environ.get('GITHUB_ACTIONS')!='true':

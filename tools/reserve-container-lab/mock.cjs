@@ -2,7 +2,7 @@
 // Synthetic MAX only. Network is Docker --internal; no production credentials.
 const http = require('node:http');
 const { performance } = require('node:perf_hooks');
-const ledger = [], requests = [], unexpected = [], rules = new Map(), pins = new Map(), held = new Map();
+const ledger = [], requests = [], uploads = [], unexpected = [], rules = new Map(), pins = new Map(), held = new Map();
 let seq = 0;
 function message(target, body) {
   return { sender: { user_id: 999, is_bot: true, name: 'Synthetic bot' }, recipient: { chat_id: Number(target.split(':')[1]), chat_type: target.startsWith('chat:') ? 'chat' : 'dialog' }, timestamp: Date.now(), body: { mid: `lab-mid-${++seq}`, seq, text: body.text ?? '', attachments: body.attachments ?? [] } };
@@ -21,9 +21,12 @@ const server = http.createServer(async (req, res) => {
         else if (body.op === 'release') { held.get(body.target)?.(); held.delete(body.target); }
         else return json(400, { error: 'unknown control operation' });
       }
-      return json(200, { ledger, requests, unexpected, held: [...held.keys()] });
+      return json(200, { ledger, requests, uploads, unexpected, held: [...held.keys()] });
     }
-    if (url.pathname === '/blob') return json(200, { token: 'synthetic-file-token' });
+    if (url.pathname === '/blob') {
+      uploads.push({ bytes: raw.length, sha256: require('node:crypto').createHash('sha256').update(raw).digest('hex') });
+      return json(200, { token: 'synthetic-file-token' });
+    }
     if (req.headers.authorization !== 'synthetic-container-token') return json(401, { code: 'test.token', message: 'Only synthetic token accepted' });
     if (url.pathname === '/me' && req.method === 'GET') return json(200, { user_id: 999, is_bot: true, name: 'Synthetic bot', username: 'synthetic_bot' });
     if (url.pathname === '/me/commands' && req.method === 'PATCH') return json(200, { success: true });
