@@ -1,0 +1,89 @@
+name: R4 immutable Docker review
+on:
+  push:
+    branches: [codex/r4-docker-review-20261006]
+permissions:
+  contents: read
+concurrency:
+  group: r4-docker-review-20261006
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Verify bytes, environment and empty disposable daemon
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci-results
+          sha256sum -c SHA256SUMS | tee ci-results/hashes-before.txt
+          { uname -a; python --version; docker version; docker compose version; } > ci-results/versions.txt 2>&1
+          cat ci-results/versions.txt
+          test "$(uname -m)" = x86_64
+          test "$(docker info --format '{{.OSType}}/{{.Architecture}}')" = linux/x86_64
+          docker ps -a --no-trunc > ci-results/containers-before.txt
+          test -z "$(docker ps -aq)" || { echo 'REFUSE_NONEMPTY_DOCKER_DAEMON'; exit 1; }
+          docker pull --platform linux/amd64 python:3.12-slim 2>&1 | tee ci-results/base-pull.txt
+          docker image inspect python:3.12-slim > ci-results/base-image.json
+      - name: Run unchanged R4 suites including real Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+          export R4_REAL_DOCKER="$(command -v docker)"
+          export R4_CLI_LOG="$GITHUB_WORKSPACE/ci-results/docker-cli.txt"
+          mkdir -p "$RUNNER_TEMP/r4-cli"
+          cat > "$RUNNER_TEMP/r4-cli/docker" <<'WRAPPER'
+          #!/usr/bin/env bash
+          # Transparent transcript of real CLI calls; no simulated responses.
+          dir=$(mktemp -d)
+          "$R4_REAL_DOCKER" "$@" > "$dir/out" 2> "$dir/err"
+          rc=$?
+          {
+            printf '\nUTC=%s docker ' "$(date -u +%FT%TZ)"
+            printf '%q ' "$@"
+            printf '\nEXIT=%s\nSTDOUT:\n' "$rc"
+            cat "$dir/out"
+            printf '\nSTDERR:\n'
+            cat "$dir/err"
+          } >> "$R4_CLI_LOG"
+          cat "$dir/out"
+          cat "$dir/err" >&2
+          rm -f "$dir/out" "$dir/err"
+          rmdir "$dir"
+          exit "$rc"
+          WRAPPER
+          chmod 700 "$RUNNER_TEMP/r4-cli/docker"
+          export PATH="$RUNNER_TEMP/r4-cli:$PATH"
+          python tests/run_checks.py --docker 2>&1 | tee ci-results/runner.txt
+      - name: Preserve diagnostics and unchanged-file evidence even on failure
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p ci-results
+          sha256sum -c SHA256SUMS > ci-results/hashes-after.txt 2>&1
+          hash_rc=$?
+          docker ps -a --no-trunc > ci-results/containers-after.txt 2>&1
+          docker image ls --no-trunc > ci-results/images-after.txt 2>&1
+          sudo journalctl -u docker --no-pager > ci-results/docker-daemon.txt 2>&1
+          git status --porcelain > ci-results/git-status.txt
+          cp SHA256SUMS ci-results/VERIFIED-SOURCE-SHA256SUMS
+          printf '%s\n' "$GITHUB_SHA" > ci-results/commit.txt
+          find ci-results results -type f ! -name ARTIFACT-SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > ci-results/ARTIFACT-SHA256SUMS
+          exit "$hash_rc"
+      - name: Upload full synthetic evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: r4-docker-review-${{ github.run_id }}
+          path: |
+            results/
+            ci-results/
+          retention-days: 14
+          if-no-files-found: error
