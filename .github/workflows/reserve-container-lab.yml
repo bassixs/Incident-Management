@@ -1,0 +1,41 @@
+name: Isolated reserve container validation
+on:
+  push:
+    branches: [codex/container-reserve-validation]
+permissions:
+  contents: read
+concurrency:
+  group: isolated-reserve-container-lab
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build exact frozen sources and validate whole containers
+        run: python3 tools/reserve-container-lab/run.py
+      - name: Upload synthetic reports even on failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: reserve-container-reports
+          path: lab-results/
+          retention-days: 14
+      - name: Save both tested images
+        if: success()
+        run: |
+          mkdir -p lab-images
+          docker image save incident-lab:main incident-lab:reserve | gzip -1 > lab-images/main-and-reserve.tar.gz
+          sha256sum lab-images/main-and-reserve.tar.gz > lab-images/SHA256SUMS
+      - name: Upload tested images (no registry publication)
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: reserve-tested-images
+          path: lab-images/
+          compression-level: 0
+          retention-days: 14
