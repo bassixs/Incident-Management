@@ -7,11 +7,11 @@ import type { IncidentRepository, IncidentWithRelations } from '../incidents/inc
 import { loadOutboundAttachments } from '../media/attachment-loader';
 import type { MediaService } from '../media/media.service';
 import type { MaxMessageService, OutboundAttachment } from '../max/max-message.service';
-import { NotFoundError } from '../utils/errors';
+import { NotFoundError, ConflictError } from '../utils/errors';
 import { incidentLogFields, moduleLogger } from '../utils/logger';
 
 const log = moduleLogger('delivery');
-export type DeliveryOutcome = 'sent' | 'queued' | 'already-sent';
+export type DeliveryOutcome = 'sent' | 'queued' | 'already-sent' | 'failed';
 
 /**
  * The single place allowed to send anything to a requester.
@@ -79,10 +79,13 @@ export class RequesterDeliveryService {
    * Deliver an approved answer and its attachments (§31).
    * Idempotent per answer version: a second call is a no-op.
    */
-  async deliverAnswer(incidentId: string, answerId: string, text: string): Promise<DeliveryOutcome> {
+  async deliverAnswer(incidentId: string, answerId: string, text: string, manualRetry?: { actorMaxUserId?: bigint }): Promise<DeliveryOutcome> {
     const incident = await this.loadIncident(incidentId);
     const answer = incident.answers.find((item) => item.id === answerId);
     if (!answer) throw new NotFoundError(`Answer ${answerId} does not belong to incident ${incidentId}`);
+    if (manualRetry && (incident.status !== 'RESOLVED' || incident.answers.at(-1)?.id !== answerId || answer.status !== 'APPROVED')) {
+      throw new ConflictError('Ответ больше не является актуальным согласованным ответом.');
+    }
     if (answer.deliveredAt) {
       log.warn(
         incidentLogFields({ incidentId, publicCode: incident.publicCode, action: HistoryAction.ANSWER_SENT }),
@@ -90,6 +93,8 @@ export class RequesterDeliveryService {
       );
       return 'already-sent';
     }
+
+    if (manualRetry) await this.messages.retryFailedAnswer(incidentId, answerId, manualRetry.actorMaxUserId);
 
     const userId = this.recipientOf(incident);
     const attachments = await loadOutboundAttachments(this.media, answer.attachments);
@@ -108,7 +113,7 @@ export class RequesterDeliveryService {
       },
     );
 
-    if (result.state === 'sent' && !result.trackingApplied) {
+    if (result.state === 'sent' && !result.trackingApplied && !this.messages.persistsDelivery) {
       await this.prisma.incidentAnswer.update({
         where: { id: answer.id },
         data: { deliveredAt: new Date() },
@@ -125,6 +130,12 @@ export class RequesterDeliveryService {
       });
     }
 
+    let outcome: DeliveryOutcome = result.state;
+    if (this.messages.persistsDelivery) {
+      const job = await this.prisma.outboundMessage.findUnique({ where: { dedupeKey: `answer:${answerId}` } });
+      if (job?.status === 'FAILED' || (job?.status === 'SENT' && !job.trackingApplied)) outcome = 'failed';
+      if (job?.status === 'SENT' && !(await this.prisma.incidentAnswer.findUnique({ where: { id: answerId } }))?.deliveredAt) outcome = 'failed';
+    }
     log.info(
       incidentLogFields({
         incidentId,
@@ -132,8 +143,8 @@ export class RequesterDeliveryService {
         maxUserId: userId,
         action: HistoryAction.ANSWER_SENT,
       }),
-      result.state === 'sent' ? 'answer delivered to requester' : 'answer queued for requester delivery',
+      outcome === 'failed' ? 'answer delivery requires attention' : outcome === 'sent' ? 'answer delivered to requester' : 'answer queued for requester delivery',
     );
-    return result.state;
+    return outcome;
   }
 }

@@ -1,4 +1,4 @@
-import { queueDeliveryStatus, reviewDeliveryNotice, answerDeliveredNotice } from '../delivery/delivery-status';
+import { queueDeliveryStatus, reviewDeliveryNotice, answerDeliveredNotice, answerDeliveryFailedNotice } from '../delivery/delivery-status';
 import type { DeliveryOutcome } from '../delivery/requester-delivery.service';
 import { TRANSACTION_OPTIONS } from '../database/prisma';
 import { assertReviewReservation } from '../work-queues/state';
@@ -83,6 +83,7 @@ export class ReviewService {
   async deliverApprovedAnswer(
     incident: IncidentWithRelations,
     answer: IncidentAnswer,
+    manualRetry?: { actorMaxUserId?: bigint },
   ): Promise<DeliveryOutcome> {
     return this.delivery.deliverAnswer(
       incident.id,
@@ -93,6 +94,7 @@ export class ReviewService {
         incident.answeredAt ?? answer.approvedAt ?? new Date(),
         incident.assignedGroup?.authorityName,
       ),
+      manualRetry,
     );
   }
 
@@ -210,12 +212,18 @@ export class ReviewService {
 
     const fresh = (await this.repository.findById(incidentId))!;
     const deliveredAnswer = fresh.answers.find(a => a.id === answer.id)!;
-    if (outcome !== 'queued') {
-      if (fresh.reviewMessageId) await this.messages.finalizeStaffCard(fresh.reviewMessageId, `${reviewDeliveryNotice(fresh, deliveredAnswer)}\n\n${deliveredAnswer.text}`);
+    if (outcome === 'sent' || outcome === 'already-sent') {
+      // Durable publication may span multiple MAX messages; its queued refresh
+      // knows the confirmed fragments and the keyboard MID.
+      if (fresh.reviewMessageId && !this.messages.persistsDelivery) await this.messages.finalizeStaffCard(fresh.reviewMessageId, `${reviewDeliveryNotice(fresh, deliveredAnswer)}\n\n${deliveredAnswer.text}`);
       await this.distribution.markWorked(fresh);
       await this.sector.notify(fresh, answerDeliveredNotice(fresh, deliveredAnswer), `answer-delivered:${answer.id}:sector`);
-    } else {
+    } else if (outcome === 'queued') {
       await this.sector.notify(fresh, `⏳ ${incident.publicCode}: ответ согласован, ожидает доставки пользователю.`, `answer-queued:${answer.id}:sector`);
+    } else {
+      await this.history.record({ incidentId, action: HistoryAction.DELIVERY_FAILED, actorMaxUserId: actor.maxUserId,
+        metadata: { answerId: answer.id, outcome: 'failed' } });
+      await this.sector.notify(fresh, answerDeliveryFailedNotice(fresh), `answer-failed:${answer.id}:sector`);
     }
 
     log.info(
@@ -225,7 +233,7 @@ export class ReviewService {
         maxUserId: actor.maxUserId,
         action: HistoryAction.ANSWER_APPROVED,
       }),
-      outcome === 'queued' ? 'answer approved and queued' : 'answer approved and delivered',
+      outcome === 'failed' ? 'answer approved but delivery failed' : outcome === 'queued' ? 'answer approved and queued' : 'answer approved and delivered',
     );
 
     return (await this.repository.findById(incidentId))!;
@@ -315,12 +323,12 @@ export class ReviewService {
   }
 
   /** Manual retry for an approved-but-undelivered answer. */
-  async resend(incidentId: string): Promise<DeliveryOutcome> {
+  async resend(incidentId: string, actorMaxUserId?: bigint): Promise<DeliveryOutcome> {
     const incident = await this.repository.findById(incidentId);
     if (!incident) throw new NotFoundError(`Incident ${incidentId} not found`);
-    const answer = [...incident.answers].reverse().find((item) => item.status === AnswerStatus.APPROVED);
-    if (!answer) throw new ConflictError(`У ${incident.publicCode} нет согласованного ответа.`);
-    return this.deliverApprovedAnswer(incident, answer);
+    const answer = incident.answers.at(-1);
+    if (incident.status !== IncidentStatus.RESOLVED || answer?.status !== AnswerStatus.APPROVED) throw new ConflictError(`У ${incident.publicCode} нет актуального согласованного ответа.`);
+    return this.deliverApprovedAnswer(incident, answer, { actorMaxUserId });
   }
 
   private alreadyReviewedMessage(incident: IncidentWithRelations): string {
@@ -328,7 +336,7 @@ export class ReviewService {
       case IncidentStatus.RESOLVED:
         return `Ответ по ${incident.publicCode} уже согласован${
           incident.approvedBy ? ` пользователем ${incident.approvedBy.displayName}` : ''
-        }${incident.answers.some(a => a.deliveredAt) ? ' и доставлен.' : ', ожидает доставки.'}`;
+        }${incident.answers.at(-1)?.deliveredAt ? ' и доставлен.' : '. Доставка последнего ответа не подтверждена.'}`;
       case IncidentStatus.REVISION_REQUIRED:
         return `${incident.publicCode} уже возвращено на доработку.`;
       default:

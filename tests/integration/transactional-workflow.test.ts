@@ -213,6 +213,9 @@ describeIntegration('transactional workflow and recovery', () => {
 
   it('does not delete borrowed answer attachments after delivery', async () => {
     const incident = await assigned(true);
+    // Keep this answer undelivered until the real durable worker below sends it.
+    // The default harness transport would otherwise mark it delivered eagerly.
+    vi.spyOn(h.services.delivery, 'deliverAnswer').mockResolvedValueOnce('queued');
     vi.spyOn(h.services.media, 'ingestAll').mockResolvedValueOnce([{ type: 'IMAGE', storageKey: 'answers/original.jpg', size: 3 }]);
     const { answer } = await h.services.answers.submit(incident.id, await actor(), 'Готово', [{ kind: 'IMAGE', url: 'https://example.test/photo' }]);
     const queued = await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: `answer:${answer.id}` } });

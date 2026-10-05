@@ -8,6 +8,18 @@ import { ValidationError } from '../../src/utils/errors';
 
 afterEach(() => vi.unstubAllGlobals());
 
+it('rechecks chat publication validity before the SDK retry after a transient failure', async () => {
+  const bot = new Bot('test-token'); let current = true;
+  const send = vi.spyOn(bot.api, 'sendMessageToChat').mockImplementation(async () => {
+    current = false;
+    throw new MaxError(503, { code: 'unavailable', message: 'test outage' });
+  });
+  const check = vi.fn(async () => { if (!current) throw new ValidationError('STALE_TEST_ASSIGNMENT'); });
+  await expect(new MaxClient(bot).sendToChat(-1002n, 'Card', undefined, check)).rejects.toThrow('STALE_TEST_ASSIGNMENT');
+  expect(check).toHaveBeenCalledTimes(2);
+  expect(send).toHaveBeenCalledTimes(1);
+});
+
 it('never retries the non-idempotent panel POST after 503', async () => {
   const bot = new Bot('test-token');
   const send = vi.spyOn(bot.api, 'sendMessageToChat').mockRejectedValue(new MaxError(503, { code: 'unavailable', message: 'Unknown outcome' }));
