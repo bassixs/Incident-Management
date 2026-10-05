@@ -14,9 +14,17 @@ import { TEST_USERS, TEST_CHATS } from '../helpers/setup-env';
 describeIntegration('transactional workflow and recovery', () => {
   let prisma: PrismaClient;
   let h: TestHarness;
+  const workers: MaxMessageService[] = [];
+  function trackedWorker(...args: ConstructorParameters<typeof MaxMessageService>) {
+    const worker = new MaxMessageService(...args); workers.push(worker); return worker;
+  }
   beforeAll(() => { pushSchemaOnce(); prisma = createTestPrisma(); });
   beforeEach(async () => { await resetDatabase(prisma); await seedCategories(prisma); h = await createHarness(prisma); });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(async () => {
+    workers.forEach(worker => worker.stop());
+    await Promise.all(workers.splice(0).map(worker => worker.waitForIdle()));
+    vi.restoreAllMocks();
+  });
   afterAll(async () => prisma.$disconnect());
 
   const create = () => h.services.incidents.create({ requester: { maxUserId: TEST_USERS.requesterA, name: 'Иванов Иван', phone: '+79001234567' }, text: 'Не горит фонарь' });
@@ -69,7 +77,7 @@ describeIntegration('transactional workflow and recovery', () => {
     const { answer: second } = await h.services.answers.submit(incident.id, reviewer, 'Новый ответ');
     let counter = 0;
     const max = { sendToChat: async () => ({ body: { mid: `tracked-${++counter}` } }), sendToUser: async () => ({ body: { mid: `tracked-${++counter}` } }), editMessage: async () => undefined, editCardWithKeyboard: async () => undefined };
-    const worker = new MaxMessageService(max as never, { prisma, storage: {} as never });
+    const worker = trackedWorker(max as never, { prisma, storage: {} as never });
     await worker.flush();
     const delivery = await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: `review-card:${second.id}` } });
     expect((await h.services.repository.findById(incident.id))?.reviewMessageId).toBe(delivery.firstMessageId);
@@ -118,7 +126,7 @@ describeIntegration('transactional workflow and recovery', () => {
     const uploadFile = vi.fn().mockResolvedValue({ type: 'file', payload: { token: 'test' } });
     const max = { uploadFile, sendToUser: vi.fn().mockResolvedValue({ body: { mid: 'delivered' } }), sendToChat: async () => ({ body: { mid: 'chat' } }), editCardWithKeyboard: async () => undefined, editMessage: async () => undefined };
     const storage = { load: async () => { if (!available) throw new Error('file temporarily unavailable'); return Buffer.from('pdf'); }, remove: async () => undefined };
-    const worker = new MaxMessageService(max as never, { prisma, storage: storage as never });
+    const worker = trackedWorker(max as never, { prisma, storage: storage as never });
     // Isolate the answer from setup notifications.
     await prisma.outboundMessage.updateMany({ where: { NOT: { dedupeKey: `answer:${answer.id}` } }, data: { status: 'SENT' } });
     await worker.flush();
@@ -176,7 +184,7 @@ describeIntegration('transactional workflow and recovery', () => {
     await expect(h.services.distribution.assign(incident.id, group.id, await actor())).rejects.toThrow('process interrupted');
     const sent: bigint[] = [];
     const max = { sendToChat: async (id: bigint) => { sent.push(id); return { body: { mid: `m-${sent.length}` } }; }, sendToUser: async () => ({ body: { mid: 'user' } }) };
-    const worker = new MaxMessageService(max as never, { prisma, storage: {} as never });
+    const worker = trackedWorker(max as never, { prisma, storage: {} as never });
     await worker.flush();
     await worker.flush();
     expect(sent.filter(id => id === TEST_CHATS.sector)).toHaveLength(1);
@@ -222,7 +230,7 @@ describeIntegration('transactional workflow and recovery', () => {
     expect(queued.attachments).toEqual([{ type: 'IMAGE', storageKey: 'answers/original.jpg', originalName: null, owned: false }]);
     const remove = vi.fn();
     const max = { uploadImage: async () => ({ type: 'image', payload: { token: 't' } }), sendToChat: async () => ({ body: { mid: 'c' } }), sendToUser: async () => ({ body: { mid: 'u' } }) };
-    const worker = new MaxMessageService(max as never, { prisma, storage: { load: async () => Buffer.from('abc'), remove } as never });
+    const worker = trackedWorker(max as never, { prisma, storage: { load: async () => Buffer.from('abc'), remove } as never });
     await worker.flush();
     expect(remove).not.toHaveBeenCalledWith('answers/original.jpg');
     expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: `answer:${answer.id}` } })).status).toBe('SENT');
@@ -232,12 +240,17 @@ describeIntegration('transactional workflow and recovery', () => {
     let fail = true;
     let failInvite = true;
     let sequence = 0;
+    let awaitAnswerAck = false;
+    let answerEntered!: () => void, releaseAnswer!: () => void;
+    const enteredAnswer = new Promise<void>(r => { answerEntered = r; });
+    const acknowledgedAnswer = new Promise<void>(r => { releaseAnswer = r; });
     const edits: string[] = [];
     const chatMessages: string[] = [];
     const userMessages: Array<{ userId: bigint; text: string; extra?: SendMessageExtra }> = [];
     const max = {
       sendToUser: async (userId: bigint, text: string, extra?: SendMessageExtra) => {
         if (fail && text.includes('Получен ответ')) throw new Error('MAX unavailable');
+        if (awaitAnswerAck && text.includes('Получен ответ')) { answerEntered(); await acknowledgedAnswer; }
         if (failInvite && text.includes('Подписывайтесь на наши каналы в MAX')) throw new Error('Invite unavailable');
         userMessages.push({ userId, text, extra });
         return { body: { mid: `u-${++sequence}` } };
@@ -246,7 +259,7 @@ describeIntegration('transactional workflow and recovery', () => {
       editCardWithKeyboard: async (_id: string, text: string) => { edits.push(text); }, editMessage: async (_id: string, text: string) => { edits.push(text); },
     };
     const storage = {} as never;
-    const messages = new MaxMessageService(max as never, { prisma, storage });
+    const messages = trackedWorker(max as never, { prisma, storage });
     const services = buildServices(prisma, { messages, storage, media: new FakeMediaService() as never });
     const incident = await services.incidents.create({ requester: { maxUserId: TEST_USERS.requesterA, name: 'Иванов Иван', phone: '+79001234567' }, text: 'Фонарь' });
     await services.distribution.publishCard(incident.id);
@@ -262,14 +275,27 @@ describeIntegration('transactional workflow and recovery', () => {
     expect(edits.some(t => t.includes('🟢 ОТРАБОТАНО'))).toBe(false);
     expect(chatMessages.some(t => t.includes('доставлен пользователю'))).toBe(false);
     expect(await services.review.resend(incident.id)).toBe('queued');
+    // A restart replaces the owner, not merely its variable. flush() on a new
+    // worker cannot await an in-flight notification owned by this worker.
+    messages.stop(); await messages.waitForIdle();
     fail = false;
+    awaitAnswerAck = true;
     await prisma.outboundMessage.update({ where: { dedupeKey: `answer:${answerId}` }, data: { nextAttemptAt: new Date(0) } });
-    const restartedWorker = new MaxMessageService(max as never, { prisma, storage });
-    await restartedWorker.flush();
+    const restartedWorker = trackedWorker(max as never, { prisma, storage });
+    const delivery = restartedWorker.flush();
+    try {
+      await enteredAnswer;
+      expect((await prisma.incidentAnswer.findUniqueOrThrow({ where: { id: answerId } })).deliveredAt).toBeNull();
+      expect(await prisma.incidentHistory.count({ where: { incidentId: incident.id, action: 'ANSWER_SENT' } })).toBe(0);
+      expect(chatMessages.filter(t => t.includes('доставлен пользователю'))).toHaveLength(0);
+    } finally { releaseAnswer(); }
+    await delivery;
     await restartedWorker.flush();
     expect((await prisma.incidentAnswer.findUniqueOrThrow({ where: { id: answerId } })).deliveredAt).not.toBeNull();
     expect(edits.some(t => t.includes('🟢 ОТРАБОТАНО'))).toBe(true);
     expect(chatMessages.filter(t => t.includes('доставлен пользователю'))).toHaveLength(1);
+    const deliveredAt = (await prisma.incidentAnswer.findUniqueOrThrow({ where: { id: answerId } })).deliveredAt;
+    expect(await prisma.incidentHistory.count({ where: { incidentId: incident.id, action: 'ANSWER_SENT' } })).toBe(1);
     expect(await services.review.resend(incident.id)).toBe('already-sent');
     expect(await prisma.outboundMessage.count({ where: { dedupeKey: inviteKey } })).toBe(0);
     await services.incidents.rateAnswer(incident.id, TEST_USERS.requesterA, 4);
@@ -278,9 +304,10 @@ describeIntegration('transactional workflow and recovery', () => {
     expect(queuedInvite.status).toBe('PENDING');
     expect(queuedInvite.targetId).toBe(TEST_USERS.requesterA);
     expect(userMessages.some(message => message.text.includes('Подписывайтесь на наши каналы в MAX'))).toBe(false);
+    restartedWorker.stop(); await restartedWorker.waitForIdle();
     failInvite = false;
     await prisma.outboundMessage.update({ where: { dedupeKey: inviteKey }, data: { nextAttemptAt: new Date(0) } });
-    const inviteWorker = new MaxMessageService(max as never, { prisma, storage });
+    const inviteWorker = trackedWorker(max as never, { prisma, storage });
     await inviteWorker.flush();
     await inviteWorker.flush();
     const invitations = userMessages.filter(message => message.text.includes('Подписывайтесь на наши каналы в MAX'));
@@ -296,6 +323,10 @@ describeIntegration('transactional workflow and recovery', () => {
     expect(userMessages.findIndex(message => message.text.includes('Подписывайтесь на наши каналы в MAX')))
       .toBeGreaterThan(userMessages.findIndex(message => message.text.includes('Получен ответ')));
     expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: inviteKey } })).status).toBe('SENT');
+    await inviteWorker.flush();
+    expect((await prisma.incidentAnswer.findUniqueOrThrow({ where: { id: answerId } })).deliveredAt).toEqual(deliveredAt);
+    expect(await prisma.incidentHistory.count({ where: { incidentId: incident.id, action: 'ANSWER_SENT' } })).toBe(1);
+    expect(chatMessages.filter(t => t.includes('доставлен пользователю'))).toHaveLength(1);
   });
 
   it('rolls back the rating when queueing its invitation fails', async () => {
@@ -319,7 +350,7 @@ describeIntegration('transactional workflow and recovery', () => {
     // Other deliveries have already been simulated by the harness.
     await prisma.outboundMessage.updateMany({ where: { dedupeKey: { not: dedupeKey } }, data: { status: 'SENT' } });
     const sendToUser = vi.fn().mockResolvedValue({ body: { mid: 'invite' } });
-    const worker = new MaxMessageService({ sendToUser } as never, { prisma, storage: {} as never });
+    const worker = trackedWorker({ sendToUser } as never, { prisma, storage: {} as never });
     await worker.flush();
     expect(sendToUser).not.toHaveBeenCalled();
     const held = await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey } });
@@ -340,7 +371,7 @@ describeIntegration('transactional workflow and recovery', () => {
       sendToUser: async (_id: bigint, text: string) => { texts.push(text); return { body: { mid: 'user' } }; },
       sendToChat: async () => ({ body: { mid: 'chat' } }),
     };
-    await new MaxMessageService(max as never, { prisma, storage: {} as never }).flush();
+    await trackedWorker(max as never, { prisma, storage: {} as never }).flush();
     expect(await prisma.outboundMessage.count({ where: { dedupeKey: `subscription-invite:${incident.id}` } })).toBe(0);
     expect(texts.some(text => text.includes('Подписывайтесь на наши каналы в MAX'))).toBe(false);
   });
