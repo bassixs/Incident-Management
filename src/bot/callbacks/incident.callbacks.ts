@@ -425,8 +425,11 @@ async function approve(
 ): Promise<string> {
   assertApprover(services, actor, chatId);
   const updated = await services.review.approve(incident.id, actor, answerId);
-  return updated.answers.some(a => a.deliveredAt)
-    ? `${updated.publicCode}: ответ согласован и доставлен`
+  const answer = updated.answers.at(-1);
+  if (answer?.deliveredAt) return `${updated.publicCode}: ответ согласован и доставлен`;
+  const job = answer && await services.prisma.outboundMessage.findUnique({ where: { dedupeKey: `answer:${answer.id}` }, select: { status: true, trackingApplied: true } });
+  return job?.status === 'FAILED' || (job?.status === 'SENT' && !job.trackingApplied)
+    ? `${updated.publicCode}: ответ согласован, но не доставлен. Требуется проверка причины отказа; автоматические попытки прекращены.`
     : `${updated.publicCode}: ответ согласован, ожидает доставки`;
 }
 

@@ -8,6 +8,10 @@ export function answerDeliveredNotice(incident: Pick<IncidentWithRelations, 'pub
   return `✅ ${incident.publicCode}: ответ (версия ${answer.version}) доставлен пользователю.`;
 }
 
+export function answerDeliveryFailedNotice(incident: Pick<IncidentWithRelations, 'publicCode'>): string {
+  return `⚠️ ${incident.publicCode}: ответ не доставлен. Автоматические попытки прекращены. Проверьте причину отказа; после устранения используйте /resend ${incident.publicCode}.`;
+}
+
 export function reviewDeliveryNotice(incident: IncidentWithRelations, answer: IncidentAnswer): string {
   return [
     answer.deliveredAt ? answerDeliveredNotice(incident, answer) : `⏳ ${incident.publicCode}: ответ согласован, ожидает доставки пользователю.`,

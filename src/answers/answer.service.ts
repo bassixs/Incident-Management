@@ -250,9 +250,15 @@ export class AnswerService {
     const incident = (await this.repository.findById(incidentId))!;
     let deliveryFailed = false;
     let deliveryQueued = false;
+    let deliverySucceeded = false;
     if (direct) {
       try {
-        deliveryQueued = (await this.review.deliverApprovedAnswer(incident, answer)) === 'queued';
+        const outcome = await this.review.deliverApprovedAnswer(incident, answer);
+        deliveryQueued = outcome === 'queued';
+        deliveryFailed = outcome === 'failed';
+        deliverySucceeded = outcome === 'sent' || outcome === 'already-sent';
+        if (deliveryFailed) await this.history.record({ incidentId, action: HistoryAction.DELIVERY_FAILED,
+          actorMaxUserId: actor.maxUserId, metadata: { answerId: answer.id, outcome } });
       } catch (error) {
         await this.history.record({
           incidentId,
@@ -262,7 +268,7 @@ export class AnswerService {
         });
         deliveryFailed = true;
       }
-      if (!deliveryFailed && !deliveryQueued) {
+      if (deliverySucceeded) {
         await this.distribution.markWorked((await this.repository.findById(incidentId))!);
       }
     } else {

@@ -585,6 +585,21 @@ export class MaxMessageService {
           const lease = await durable.prisma.outboundMessage.findUnique({ where: { id: row.id }, select: { status: true, attempts: true, payload: true } });
           if (lease?.status !== 'SENDING' || lease.attempts !== row.attempts || (lease.payload as unknown as StoredPayload).operation?.type === 'superseded-answer') throw new StaleDeliveryError('DELIVERY_PROGRESS_OWNERSHIP_LOST');
           await this.assertCurrentAnswer(row);
+          const progress = (row.payload as unknown as StoredPayload).deliveryProgress;
+          if (progress?.mids.length && (row.trackingType === 'REVIEW_CARD' || row.dedupeKey?.startsWith('work-copy:review:'))) {
+            const current = await durable.prisma.incident.findUnique({ where: { id: row.incidentId! }, include: { answers: { orderBy: { version: 'desc' }, take: 1 } } });
+            if (current?.status !== 'WAITING_REVIEW' || current.answers[0]?.id !== row.answerId || current.answers[0]?.status !== 'WAITING_REVIEW') {
+              throw new StaleDeliveryError('STALE_PARTIAL_REVIEW_CARD');
+            }
+          }
+          if (progress?.mids.length && row.dedupeKey?.startsWith('work-copy:sector:')) {
+            const current = await durable.prisma.incident.findUnique({ where: { id: row.incidentId! }, include: INCIDENT_INCLUDE });
+            if (!current?.assignedGroup || current.assignedGroup.maxChatId !== row.targetId
+              || !['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(current.status)
+              || (current.history[0] && !row.dedupeKey.endsWith(`:cycle:${current.history[0].id}`))) {
+              throw new StaleDeliveryError('STALE_PARTIAL_SECTOR_COPY');
+            }
+          }
           if (row.trackingType === 'SECTOR_CARD') {
             const current = await durable.prisma.incident.findUnique({ where: { id: row.incidentId! }, include: INCIDENT_INCLUDE });
             if (!await this.currentSectorPublication(row, current)) throw new StaleDeliveryError('STALE_SECTOR_ASSIGNMENT');
@@ -611,7 +626,8 @@ export class MaxMessageService {
           nextAttemptAt: new Date(Date.now() + retryDelayMs(row.attempts)),
         },
       });
-      if (error instanceof StaleDeliveryError && row.trackingType === 'SECTOR_CARD' && row.incidentId && row.firstMessageId) {
+      if (error instanceof StaleDeliveryError && row.incidentId && row.firstMessageId
+        && (row.trackingType === 'SECTOR_CARD' || row.trackingType === 'REVIEW_CARD' || row.dedupeKey?.startsWith('work-copy:'))) {
         await durable.prisma.$transaction(tx => queueStaffRefresh(tx, row.incidentId!, `stale:${row.id}`));
       }
       log[terminal ? 'error' : 'warn'](
@@ -801,7 +817,13 @@ export class MaxMessageService {
     const seen = new Set<string>();
     for (const row of rows) {
       const stored = row.payload as unknown as StoredPayload | undefined;
-      const messageId = stored?.keyboardMessageId ?? row.firstMessageId;
+      const fragments = stored && splitText(stored.text, stored.label);
+      // firstMessageId is now saved before the keyboard-bearing text part arrives.
+      // Refresh only an acknowledged text tail, even for PENDING/FAILED jobs.
+      const progress = stored?.deliveryProgress;
+      const messageId = progress
+        ? progress.version === 1 && Array.isArray(progress.mids) ? progress.mids[(fragments?.length ?? 1) - 1] : undefined
+        : stored?.keyboardMessageId ?? row.firstMessageId;
       if (!messageId || seen.has(messageId)) continue;
       seen.add(messageId);
       const review = row.trackingType === 'REVIEW_CARD' || row.dedupeKey?.startsWith('work-copy:review:');
@@ -825,13 +847,12 @@ export class MaxMessageService {
         text = sectorCard(incident, incident.assignedGroup!, sectorLease);
         buttons = sectorKeyboard(incidentId, { hasPhone: !!incident.requesterPhone, status: incident.status, hasTemplate: !!incident.assignedGroup?.answerTemplate });
       }
-      if (stored?.keyboardMessageId && stored.keyboardMessageId !== row.firstMessageId) {
+      if (stored && messageId !== row.firstMessageId) {
         // Keep every original text fragment; only the final fragment carries actions.
-        const fragments = splitText(stored.text, stored.label);
-        const tail = fragments.at(-1)!;
+        const tail = fragments!.at(-1)!;
         const banner = buttons.length ? 'Закрепление — рядом с кнопками.' : 'Действия по карточке завершены.';
-        const head = fragments[0]!.replace(/^👤 Закреплено за:.*\n⏳ До[^\n]*|^🟢 Свободно[^\n]*/m, banner);
-        if (head !== fragments[0]) {
+        const head = fragments![0]!.replace(/^👤 Закреплено за:.*\n⏳ До[^\n]*|^🟢 Свободно[^\n]*/m, banner);
+        if (head !== fragments![0]) {
           try { await this.max.editCardWithKeyboard(row.firstMessageId!, head, []); }
           catch (error) { if (!(error instanceof MaxError) || error.status !== 404) throw error; }
         }
