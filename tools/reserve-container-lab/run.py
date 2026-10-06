@@ -180,6 +180,7 @@ def setup():
     cmd('tar','-xf',archive,'-C',installed)
     migration = docker('run','--rm','--network',NET,'--env-file',env_file,'-v',f'{installed}:/installed:ro','--entrypoint','node','incident-lab:main','node_modules/prisma/build/index.js','migrate','deploy','--schema','/installed/prisma/schema.prisma')
     (OUT/'migrate-installed.txt').write_text(migration.stdout+migration.stderr)
+    report['bulkBaseline']=helper('switch-bulk-probe',guarded=False)
     before = helper('switch-seed-installed')
     migration = docker('run','--rm','--network',NET,'--env-file',env_file,'--entrypoint','node','incident-lab:main','node_modules/prisma/build/index.js','migrate','deploy')
     (OUT/'migrate-pr13.txt').write_text(migration.stdout+migration.stderr)
@@ -188,6 +189,8 @@ def setup():
     check('processingToken migration applied', 'processingToken' in sql("SELECT column_name FROM information_schema.columns WHERE table_name='InboundUpdate' AND column_name='processingToken';"))
     report['preservedBaseline']=before
     save('migrations.json', {'preserved':before, 'applied':sql('SELECT migration_name FROM _prisma_migrations ORDER BY migration_name;')})
+    report['bulkGuarded']=helper('switch-bulk-probe',guarded=True)
+    save('bulk-trigger-reproduction.json',{'beforeMigrations':report['bulkBaseline'],'afterMigrations':report['bulkGuarded']})
     helper('switch-seed-journal')
     docker('run', '-d', '--init', '--name', MOCK, '--network', NET, '--network-alias', 'mock', '--cpus', '0.5', '--memory', '256m',
            '-v', f'{LAB}:/lab:ro', '--entrypoint', 'node', 'incident-lab:main', '/lab/mock.cjs')

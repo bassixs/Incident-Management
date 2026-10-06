@@ -61,11 +61,26 @@ module.exports = async function(p, input, req) {
     const result=await drainFileDeletions(p,{remove:async k=>fs.promises.rm('/app/data/uploads/'+k,{force:true})});
     return {...result,unknownPreserved:fs.existsSync('/app/data/uploads/unknown-delete.txt')&&!!await p.systemSetting.findUnique({where:{key:intent('unknown-delete.txt')}}),fencesRetained:await p.systemSetting.count({where:{key:{in:[fence('unknown-delete.txt'),fence('pending-delete.txt')]}}})===2};
   }
+  if(input.op==='switch-bulk-probe') {
+    const count=20000; let error=null;
+    const began=performance.now();
+    try {
+      await p.$executeRawUnsafe(`INSERT INTO "InboundUpdate" (id,"externalUpdateKey","updateType","partitionKey",payload,status,"updatedAt") SELECT 'bulk-probe-'||n,'bulk-probe-'||n,'synthetic_noop','user:'||n,jsonb_build_object('storageKey','bulk-key-'||n||'.txt'),'PROCESSED',now() FROM generate_series(1,20000) n`);
+    } catch(e) {error={code:e.code,sqlstate:e.meta?.code,message:e.meta?.message};}
+    const rows=await p.$queryRawUnsafe(`SELECT count(*)::int AS count FROM "InboundUpdate" WHERE id LIKE 'bulk-probe-%'`);
+    const expected=input.guarded ? 0 : count;
+    assert.equal(rows[0].count,expected);
+    if(input.guarded) assert.equal(error?.sqlstate,'53200'); else assert.equal(error,null);
+    await p.$executeRawUnsafe(`DELETE FROM "InboundUpdate" WHERE id LIKE 'bulk-probe-%'`);
+    return {guarded:input.guarded,count,insertedBeforeCleanup:rows[0].count,error,elapsedMs:performance.now()-began,settings:await p.$queryRawUnsafe(`SELECT name,setting FROM pg_settings WHERE name IN ('max_locks_per_transaction','max_connections','max_prepared_transactions')`)};
+  }
   if(input.op==='benchmark') {
     // App containers have exited. Snapshot evidence was saved before this synthetic load.
     const {drainFileDeletions,queueFileDeletion}=req('/app/dist/retention/file-deletions');
-    await p.$executeRawUnsafe(`INSERT INTO "InboundUpdate" (id,"externalUpdateKey","updateType","partitionKey",payload,status,"updatedAt") SELECT 'load-in-'||n,'load-in-'||n,'synthetic_noop','user:'||n,jsonb_build_object('storageKey','historic-in-'||n||'.txt'),'PROCESSED',now() FROM generate_series(1,20000) n`);
-    await p.$executeRawUnsafe(`INSERT INTO "OutboundMessage" (id,"targetType","targetId",payload,attachments,status,"updatedAt") SELECT 'load-out-'||n,'user',n,jsonb_build_object('text','synthetic','storageKey','historic-out-'||n||'.txt'),'[]','SENT',now() FROM generate_series(1,25000) n`);
+    // Bounded fixture transactions. The separate unchanged bulk probe records
+    // the trigger lock-budget regression; this does not raise database limits.
+    for(let first=1;first<=20000;first+=250) await p.$executeRawUnsafe(`INSERT INTO "InboundUpdate" (id,"externalUpdateKey","updateType","partitionKey",payload,status,"updatedAt") SELECT 'load-in-'||n,'load-in-'||n,'synthetic_noop','user:'||n,jsonb_build_object('storageKey','historic-in-'||n||'.txt'),'PROCESSED',now() FROM generate_series(${first},${first+249}) n`);
+    for(let first=1;first<=25000;first+=250) await p.$executeRawUnsafe(`INSERT INTO "OutboundMessage" (id,"targetType","targetId",payload,attachments,status,"updatedAt") SELECT 'load-out-'||n,'user',n,jsonb_build_object('text','synthetic','storageKey','historic-out-'||n||'.txt'),'[]','SENT',now() FROM generate_series(${first},${first+249}) n`);
     await p.$executeRawUnsafe(`INSERT INTO "Incident" (id,"publicCode","requesterId","requesterMaxUserId","requesterName",text,status,"deadlineAt","updatedAt") SELECT 'bench-incident-'||n,'INC-BENCH-'||n,'preserved-user',99001,'Synthetic','Synthetic benchmark','ASSIGNED',now()+interval '3 days',now() FROM generate_series(1,500) n`);
     await p.$executeRawUnsafe(`INSERT INTO "IncidentAttachment" (id,"incidentId",type,"storageKey") SELECT 'bench-attachment-'||n,'bench-incident-'||n,'FILE','synthetic-shared-'||n||'.txt' FROM generate_series(1,500) n`);
     const guards=['IncidentAttachment','AnswerAttachment','ClarificationAttachment','OutboundMessage','OperatorSession','PrivateWorkItem','InboundUpdate'];
@@ -89,8 +104,9 @@ module.exports = async function(p, input, req) {
     const entered=barrier(),release=barrier();
     await p.$transaction(tx=>queueFileDeletion(tx,{storageKey:'bench-slow.txt',size:1,publicCode:'INC-BENCH'}));
     let settled=false;
+    const beganDelete=performance.now();
     const deleting=drainFileDeletions(p,{remove:async()=>{entered.resolve();await release.promise;}},{removeTimeoutMs:5000}).then(r=>{settled=true;return r});
-    await entered.promise;
+    await entered.promise; const referenceCheckMs=performance.now()-beganDelete;
     try {
       await measure('slow-delete');
       assert.equal(settled,false,'concurrent writes must complete while storage request is still held');
@@ -98,7 +114,7 @@ module.exports = async function(p, input, req) {
       assert.equal(locks[0].count,0);
     } finally {release.resolve();}
     const result=await deleting; assert.equal(result.deletedFiles,1);
-    return {syntheticVolume:{inbox:20000,outbox:25000,incidents:500,attachments:500},concurrentUsers:8,writesPerPhase:640,measurements,deleteResult:result,scope:'DB durable admission only, excludes MAX/network/user-device latency; single runner, no production performance guarantee'};
+    return {syntheticVolume:{inbox:20000,outbox:25000,incidents:500,attachments:500},concurrentUsers:8,writesPerPhase:640,referenceCheckMs,measurements,deleteResult:result,scope:'DB durable admission only, excludes MAX/network/user-device latency; single runner, no production performance guarantee'};
   }
   throw Error('Unknown switch operation');
 };
