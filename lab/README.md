@@ -8,7 +8,8 @@ No daemon settings on a real installation are changed by this lab.
 
 All deletion tests use native `docker builder prune` with DOCKER_BUILDKIT=0
 to disable CLI forwarding to Buildx, an anchored ID regular expression and
-`shared=false`. This environment variable changes only CLI routing for the
+`private=""` (the BuildKit presence field's value is an empty string, not a
+boolean string). This environment variable changes only CLI routing for the
 one command: the Engine still handles its BuildKit cache.
 Buildx bundled in the disposable image is used only to create synthetic cache.
 

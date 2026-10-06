@@ -41,6 +41,9 @@ def docker(*args, native=False, expect=0):
 
 def cache():
     rows = api('/system/df')['BuildCache'] or []
+    for row in rows:
+        # Engine 29.1.3 API has a leading space in this JSON field's tag.
+        row['Parents'] = row.get('Parents', row.get(' Parents')) or []
     require(len({r['ID'] for r in rows}) == len(rows), 'duplicate cache ID')
     return {r['ID']: r for r in rows}
 
@@ -80,7 +83,7 @@ def prune(ids, name):
     save(name + '-before', list(before.values()))
     pattern = '^(' + '|'.join(ids) + ')$'
     output = docker('builder', 'prune', '--all', '--force', '--filter', 'id=' + pattern,
-                    '--filter', 'shared=false', native=True)
+                    '--filter', 'private=""', native=True)
     (OUT / (name + '-prune.txt')).write_text(output)
     reported = re.findall(r'^([a-z0-9]{25})$', output, flags=re.M)
     require(set(reported) <= set(ids), f'{name}: reported deletion outside allowlist')
