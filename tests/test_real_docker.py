@@ -15,6 +15,7 @@ import sys
 import tempfile
 import unittest
 import uuid
+import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'revision-4'))
@@ -53,7 +54,10 @@ class DockerResume(unittest.TestCase):
         cls.net = cls.prefix+'-net'
         base = 'python:3.12-slim'
         run('docker', 'image', 'inspect', base)  # no implicit image download
-        run('docker', 'network', 'create', '--internal', cls.net)
+        # A sole internal network does not provide this localhost published port.
+        # Use an owned bridge on the empty runner; never bind to a public address.
+        run('docker', 'network', 'create', '--driver', 'bridge',
+            '--opt', 'com.docker.network.bridge.host_binding_ipv4=127.0.0.1', cls.net)
         cls.addClassCleanup(cls.clean_lab)
         (cls.root/'server.py').write_text(HTTP_APP)
         (cls.root/'Dockerfile').write_text('FROM python:3.12-slim\nCOPY server.py /server.py\nENTRYPOINT ["python","-u","/server.py"]\n')
@@ -109,7 +113,19 @@ class DockerResume(unittest.TestCase):
         self.settings = r/'settings.json'; self.settings.write_text(json.dumps(self.s))
         self.addCleanup(self.clean_container)
         run('docker', 'compose', '-p', self.project, '-f', str(self.install/'compose.yml'), 'up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'app')
-        o.wait_ready(self.s, self.images['old']['id'])
+        # Inspect actual publication, not only the requested Compose binding.
+        expected = [{'HostIp': '127.0.0.1', 'HostPort': str(port)}]
+        actual = o.app(self.s)['NetworkSettings']['Ports'].get('3000/tcp')
+        self.assertEqual(actual, expected)
+        self.assertEqual(run('docker', 'port', self.name, '3000/tcp'), '127.0.0.1:'+str(port))
+        o.wait_ready(self.s, self.images['old']['id'])  # unchanged real readiness
+        statuses = {}
+        for endpoint in ('health', 'ready'):
+            with urllib.request.urlopen(self.s['health_base']+'/'+endpoint, timeout=2) as response:
+                statuses[endpoint] = response.status
+                self.assertEqual(response.status, 200)
+        print('LAB_NETWORK_READY '+json.dumps({'test': self.id(), 'bindings': actual,
+              'http': statuses}), flush=True)
         self.initial = o.app(self.s)['Id']
 
     def clean_container(self):
@@ -125,6 +141,8 @@ class DockerResume(unittest.TestCase):
         p = subprocess.run([sys.executable, str(ROOT/'revision-4'/script), '--settings', str(self.settings), *args],
                            env=dict(os.environ, INCIDENT_OPS_LOCK_FD=str(fd)), pass_fds=(fd,),
                            capture_output=True, text=True, timeout=150)
+        print('R4_SCRIPT_RESULT '+json.dumps({'test': self.id(), 'script': script,
+              'exit': p.returncode, 'output': p.stdout+p.stderr}), flush=True)
         return p.returncode, p.stdout+p.stderr
 
     def test_same_real_container_resumes_and_repeat_refused(self):

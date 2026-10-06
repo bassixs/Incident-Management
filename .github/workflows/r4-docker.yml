@@ -1,11 +1,11 @@
-name: R4 immutable Docker review
+name: R4 Docker loopback network review
 on:
   push:
-    branches: [codex/r4-docker-review-20261006]
+    branches: [codex/r4-docker-network-20261006]
 permissions:
   contents: read
 concurrency:
-  group: r4-docker-review-20261006
+  group: r4-docker-network-20261006
   cancel-in-progress: false
 jobs:
   verify:
@@ -29,10 +29,12 @@ jobs:
           test "$(uname -m)" = x86_64
           test "$(docker info --format '{{.OSType}}/{{.Architecture}}')" = linux/x86_64
           docker ps -a --no-trunc > ci-results/containers-before.txt
+          docker network ls --no-trunc --format '{{.ID}} {{.Name}}' | sort > ci-results/networks-before.txt
+          docker volume ls --format '{{.Name}}' | sort > ci-results/volumes-before.txt
           test -z "$(docker ps -aq)" || { echo 'REFUSE_NONEMPTY_DOCKER_DAEMON'; exit 1; }
           docker pull --platform linux/amd64 python:3.12-slim 2>&1 | tee ci-results/base-pull.txt
           docker image inspect python:3.12-slim > ci-results/base-image.json
-      - name: Run unchanged R4 suites including real Docker
+      - name: Run unchanged R4 operations with corrected Docker network
         shell: bash
         run: |
           set -euo pipefail
@@ -66,17 +68,26 @@ jobs:
         if: always()
         shell: bash
         run: |
+          set +e
           mkdir -p ci-results
           sha256sum -c SHA256SUMS > ci-results/hashes-after.txt 2>&1
           hash_rc=$?
           docker ps -a --no-trunc > ci-results/containers-after.txt 2>&1
           docker image ls --no-trunc > ci-results/images-after.txt 2>&1
+          docker network ls --no-trunc --format '{{.ID}} {{.Name}}' | sort > ci-results/networks-after.txt
+          docker volume ls --format '{{.Name}}' | sort > ci-results/volumes-after.txt
+          cleanup_rc=0
+          test -z "$(docker ps -aq)" || cleanup_rc=1
+          test -z "$(docker image ls --format '{{.Repository}}' | grep '^ops-resume-')" || cleanup_rc=1
+          diff -u ci-results/networks-before.txt ci-results/networks-after.txt || cleanup_rc=1
+          diff -u ci-results/volumes-before.txt ci-results/volumes-after.txt || cleanup_rc=1
+          printf 'CLEANUP_CHECK_EXIT=%s\n' "$cleanup_rc" > ci-results/cleanup-check.txt
           sudo journalctl -u docker --no-pager > ci-results/docker-daemon.txt 2>&1
           git status --porcelain > ci-results/git-status.txt
           cp SHA256SUMS ci-results/VERIFIED-SOURCE-SHA256SUMS
           printf '%s\n' "$GITHUB_SHA" > ci-results/commit.txt
           find ci-results results -type f ! -name ARTIFACT-SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > ci-results/ARTIFACT-SHA256SUMS
-          exit "$hash_rc"
+          test "$hash_rc" = 0 && test "$cleanup_rc" = 0
       - name: Upload full synthetic evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
