@@ -1,3 +1,4 @@
+import { drainFileDeletions, queueFileDeletion } from './file-deletions';
 import { randomUUID } from 'node:crypto';
 import { isPhotoReference } from '../media/max-photo-reference';
 
@@ -64,10 +65,9 @@ export type RetentionRunResult = {
 /**
  * Removes completed incidents after the published 90-day retention window.
  *
- * Physical objects are removed before the database row. A failed object
- * deletion leaves the incident in PostgreSQL so the next sweep can retry it.
- * Both local storage and S3 deletion are idempotent, therefore a crash after
- * deleting a file but before deleting the row is safe to retry.
+ * Eligibility and dependent rows are checked/deleted under one row lock.
+ * File deletion intents commit with the deletion, and are processed afterwards.
+ * A failed or ambiguous commit never permits removing files by assumption.
  */
 export class RetentionService {
   constructor(
@@ -116,36 +116,24 @@ export class RetentionService {
       const result = emptyRun(preview, false);
 
       for (const incident of candidates) {
-        const files = uniqueFiles(incident);
         try {
-          for (const file of files) await this.storage.remove(file.storageKey);
-
-          const answerIds = incident.answers.map((answer) => answer.id);
           const deleted = await this.prisma.$transaction(async (tx) => {
-            await tx.outboundMessage.deleteMany({
-              where: {
-                OR: [
-                  { incidentId: incident.id },
-                  ...(answerIds.length ? [{ answerId: { in: answerIds } }] : []),
-                ],
-              },
-            });
-            await tx.actionLock.deleteMany({ where: { incidentId: incident.id } });
-            return tx.incident.deleteMany({
-              where: {
-                id: incident.id,
-                status: { in: [...TERMINAL_STATUSES] },
-                answeredAt: { lte: cutoff },
-              },
-            });
+            // Serialize with status changes before touching any dependent rows.
+            await tx.$queryRaw`SELECT id FROM "Incident" WHERE id=${incident.id} FOR UPDATE`;
+            const current = await tx.incident.findFirst({ where: { id: incident.id,
+              status: { in: [...TERMINAL_STATUSES] }, answeredAt: { lte: cutoff } }, select: RETENTION_SELECT });
+            if (!current) return false;
+            const answerIds = current.answers.map(answer => answer.id);
+            await tx.outboundMessage.deleteMany({ where: { OR: [{ incidentId: current.id },
+              ...(answerIds.length ? [{ answerId: { in: answerIds } }] : [])] } });
+            await tx.actionLock.deleteMany({ where: { incidentId: current.id } });
+            const removed = await tx.incident.deleteMany({ where: { id: current.id,
+              status: { in: [...TERMINAL_STATUSES] }, answeredAt: { lte: cutoff } } });
+            if (removed.count !== 1) throw Error('RETENTION_ELIGIBILITY_CHANGED');
+            for (const file of uniqueFiles(current)) await queueFileDeletion(tx, { ...file, publicCode: current.publicCode });
+            return true;
           });
-
-          if (deleted.count !== 1) {
-            throw new Error('сообщение перестало соответствовать условиям очистки');
-          }
-          result.deletedIncidents += 1;
-          result.deletedFiles += files.length;
-          result.deletedBytes += files.reduce((sum, file) => sum + file.size, 0);
+          if (deleted) result.deletedIncidents += 1;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           result.failures.push({ publicCode: incident.publicCode, error: message });
@@ -153,6 +141,10 @@ export class RetentionService {
         }
       }
 
+      const files = await drainFileDeletions(this.prisma, this.storage);
+      result.deletedFiles = files.deletedFiles;
+      result.deletedBytes = files.deletedBytes;
+      result.failures.push(...files.failures);
       result.deletedRequesterProfiles = await this.purgeOrphanRequesterProfiles(cutoff, now);
       log.info(
         {

@@ -371,6 +371,7 @@ export class MaxMessageService {
     }
     const id = randomUUID();
     const staged: StagedAttachment[] = [];
+    let insertAttempted = false;
 
     try {
       for (const [index, attachment] of (message.attachments ?? []).entries()) {
@@ -407,6 +408,7 @@ export class MaxMessageService {
       const tracking = message.delivery?.tracking;
 
       try {
+        insertAttempted = true;
         return await durable.prisma.outboundMessage.create({
           data: {
             id,
@@ -422,16 +424,27 @@ export class MaxMessageService {
           },
         });
       } catch (error) {
-        if (!message.delivery?.dedupeKey || !isUniqueViolation(error)) throw error;
-        const existing = await durable.prisma.outboundMessage.findUnique({
-          where: { dedupeKey: message.delivery.dedupeKey },
-        });
-        if (!existing) throw error;
-        await this.cleanupAttachments(staged);
-        return existing;
+        // A transport failure does not prove INSERT rolled back. First reconcile the
+        // UUID generated before staging, even when the caller has no dedupe key.
+        // Failed reads (or absence after an ambiguous write) never authorize deletion.
+        const committed = await durable.prisma.outboundMessage.findUnique({ where: { id } });
+        if (committed) return committed;
+        if (message.delivery?.dedupeKey) {
+          const existing = await durable.prisma.outboundMessage.findUnique({ where: { dedupeKey: message.delivery.dedupeKey } });
+          if (existing) {
+            // P2002 is a confirmed rejection, unlike a lost commit acknowledgement.
+            if (isUniqueViolation(error)) await this.cleanupAttachments(staged);
+            return existing;
+          }
+        }
+        if (isUniqueViolation(error)) await this.cleanupAttachments(staged);
+        else log.error({ outboxId: id, code: 'ENQUEUE_RESULT_UNCERTAIN' }, 'retaining staged files; reconcile by outbox ID before retry without a dedupe key');
+        throw error;
       }
     } catch (error) {
-      await this.cleanupAttachments(staged);
+      // Only pre-INSERT staging failures are known not to have a database owner.
+      if (!insertAttempted) await this.cleanupAttachments(staged);
+      else log.error({ outboxId: id, code: 'ENQUEUE_RECONCILIATION_REQUIRED' }, 'enqueue failed; preserve files if commit cannot be excluded');
       throw error;
     }
   }

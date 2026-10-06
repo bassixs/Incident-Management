@@ -140,8 +140,8 @@ describeIntegration('transactional workflow and recovery', () => {
   });
 
   it('commits registration, history, consumed draft and both outgoing messages together', async () => {
-    const session = await h.services.sessions.start({ maxUserId: TEST_USERS.requesterA, chatId: TEST_USERS.requesterA, type: 'WAITING_INCIDENT_CONFIRMATION' });
-    const input = { requester: { maxUserId: TEST_USERS.requesterA, name: 'Иванов Иван', phone: '+79001234567' }, text: 'Фонарь', draftSessionId: session.id };
+    const session = await h.services.sessions.start({ maxUserId: TEST_USERS.requesterA, chatId: TEST_USERS.requesterA, type: 'WAITING_INCIDENT_CONFIRMATION', data: { previewToken: 'synthetic-current-preview' } });
+    const input = { requester: { maxUserId: TEST_USERS.requesterA, name: 'Иванов Иван', phone: '+79001234567' }, text: 'Фонарь', draftSessionId: session.id, draftPreviewToken: 'synthetic-current-preview' };
     const incident = await h.services.incidents.create(input);
     expect(await prisma.operatorSession.count()).toBe(0);
     expect(await prisma.outboundMessage.count({ where: { incidentId: incident.id } })).toBe(2);
