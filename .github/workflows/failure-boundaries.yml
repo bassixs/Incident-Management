@@ -78,6 +78,7 @@ jobs:
           docker exec "${{ job.services.postgres.id }}" createdb -U synthetic review_baseline
           git worktree add --detach "$RUNNER_TEMP/review-baseline" 97a30be381e935c241006b74852e05c11650a269
           ln -s "$GITHUB_WORKSPACE/node_modules" "$RUNNER_TEMP/review-baseline/node_modules"
+          cp tests/integration/resident-draft-safety.test.ts "$RUNNER_TEMP/review-baseline/tests/integration/"
           cd "$RUNNER_TEMP/review-baseline"
           export DATABASE_URL=postgresql://synthetic:synthetic-only@127.0.0.1:5432/review_baseline
           export TEST_DATABASE_URL="$DATABASE_URL"

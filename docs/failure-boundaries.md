@@ -176,3 +176,20 @@ shared reference commits, permanent rejection of retired keys, bounded deletion
 budgets and preserved malformed records. The earlier identical-clock owner test
 explicitly supplies a stale eligibility read so it still reaches the competing
 CAS, rather than passing by skipping the claim.
+
+The expanded comparison identified nine unchanged failures in the old phone,
+parallel-photo and manual-cleanup fixtures. Three other draft tests had used
+`handle()` to overtake a previously reserved event deliberately. That setup no
+longer describes an allowed inbox schedule. Only those out-of-band screen-change
+steps now call the real message/callback handlers directly; all assertions about
+stale input, photos, phone, registration and ownership remain unchanged. The same
+fixture is run on the unchanged review runtime and the new runtime. A separate
+regression requires direct `handle()` to leave the follower PENDING until its
+lane head completes. The eligibility-outage test uses concurrency=1 to count
+requests deterministically; concurrent workers are tested separately.
+
+The CI deliberately retains failed exit codes for the expanded old tests. Its
+comparison step checks **all 105 outcomes**, not only the number of failures.
+An overall red workflow caused by identical known failures is not reported as a
+fully green suite. Targeted regressions, typecheck, build and unit are separate
+steps. Intermediate failed attempts remain in Actions artifacts.

@@ -30,8 +30,14 @@ describeIntegration('resident draft screen versions and inactivity', () => {
     timestamp: Date.now(), sender: { user_id: 555, name: 'Житель' }, recipient: { chat_type: 'dialog', chat_id: 555 },
     body: { mid: randomUUID(), text, attachments: photo ? [{ type: 'image', payload: { token: 'photo-one' } }] : [] },
   } });
-  const press = (payload: string, id = randomUUID()) => inbox.handle({ update_type: 'message_callback', timestamp: Date.now(),
-    callback: { callback_id: id, user: { user_id: 555, name: 'Житель' }, payload }, message: message('').message } as never);
+  const callbackUpdate = (payload: string, id = randomUUID()) => ({ update_type: 'message_callback', timestamp: Date.now(),
+    callback: { callback_id: id, user: { user_id: 555, name: 'Житель' }, payload }, message: message('').message });
+  const press = (payload: string, id = randomUUID()) => inbox.handle(callbackUpdate(payload, id) as never);
+  // These binding fixtures deliberately change a screen while inbox work is held.
+  // handle() must no longer bypass an earlier event. Exercise real business
+  // handlers explicitly for this out-of-band fixture step; no guard is mocked.
+  const controlPress = (payload: string) => handleCallbackUpdate(h.services, { update: callbackUpdate(payload) } as never);
+  const controlClick = async (action: string, argument?: string) => controlPress(await button(action, argument));
   const button = async (action: string, argument?: string) => {
     const d = await data();
     const index = d.screenActions?.findIndex(raw => { const p = parseCallbackPayload(raw); return p?.kind === 'user' && p.action === action && (argument === undefined || p.argument === argument || p.argument?.endsWith('~'+argument)); }) ?? -1;
@@ -94,7 +100,7 @@ describeIntegration('resident draft screen versions and inactivity', () => {
     const municipality = await button('municipality','BOROVSKY'); await press(municipality);
     const locality = await button('locality','BOROVSK'); const other = await button('locality','other');
     await press(other); const delayed = await inbox.reserve(message('Старое село') as never);
-    await type('/start'); await click('draft-resume');
+    await handleMessageUpdate(h.services, { update: message('/start') } as never); await controlClick('draft-resume');
     await inbox.kick(); await inbox.waitForIdle(); expect((await session()).type).toBe('WAITING_CUSTOM_LOCALITY');
     expect((await prisma.inboundUpdate.findUniqueOrThrow({where:{id:delayed.id!}})).status).toBe('PROCESSED');
     await type('Новое село'); await type('Яма у дома 2',true);
@@ -109,7 +115,7 @@ describeIntegration('resident draft screen versions and inactivity', () => {
 
   it('binds queued text/photos to their screen; cannot fill a replacement or cancelled draft', async () => {
     await startText(); const incoming = message('Яма у дома 2',true); const reservation = await inbox.reserve(incoming as never);
-    await press('user:new'); await click('draft-reset');
+    await controlPress('user:new'); await controlClick('draft-reset');
     const before = await data(); await inbox.kick(); await inbox.waitForIdle(); expect((await prisma.inboundUpdate.findUniqueOrThrow({where:{id:reservation.id!}})).status).toBe('PROCESSED'); expect(await data()).toEqual(before);
     await click('category','none'); await click('municipality','KALUGA_CITY'); await type('Яма у дома 3',true);
     const confirm = await button('draft-confirm');
@@ -122,7 +128,7 @@ describeIntegration('resident draft screen versions and inactivity', () => {
     await startText(); const old = message('Старое сообщение до обновления', true);
     const queued = await inbox.reserve(old as never);
     await prisma.inboundUpdate.update({where:{id:queued.id!},data:{payload:old as never}});
-    await press('user:new'); await click('draft-reset'); await click('category','none'); await click('municipality','KALUGA_CITY');
+    await controlPress('user:new'); await controlClick('draft-reset'); await controlClick('category','none'); await controlClick('municipality','KALUGA_CITY');
     const before = await data(); await inbox.kick(); await inbox.waitForIdle();
     expect(await data()).toEqual(before); expect(await prisma.incident.count()).toBe(0);
     expect((await prisma.inboundUpdate.findUniqueOrThrow({where:{id:queued.id!}})).status).toBe('PROCESSED');

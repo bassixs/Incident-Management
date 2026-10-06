@@ -166,7 +166,7 @@ export class UpdateDispatcher {
                   AND head.status IN ('PENDING','PROCESSING'))
             ORDER BY i.sequence LIMIT 1`;
           if (!row && blocked.length && !active.size) continue;
-          if (!row || this.stopping || this.paused) break;
+          if (!row || this.stopping || this.paused || failure) break;
           const task = this.processById(row.id)
             .catch(error => { failure = error; })
             .finally(() => { active.delete(row.partitionKey); });

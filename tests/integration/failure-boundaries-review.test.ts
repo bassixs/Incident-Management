@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import type { PrismaClient } from '@prisma/client';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { UpdateDispatcher } from '../../src/server/update-dispatcher';
@@ -20,7 +21,7 @@ describeIntegration('PR13 review boundaries', () => {
   afterEach(() => vi.restoreAllMocks());
   afterAll(() => db.$disconnect());
   async function event(key: string, partitionKey: string) {
-    return db.inboundUpdate.create({ data: { externalUpdateKey: key, partitionKey, updateType: 'bot_started', payload: { key } } });
+    return db.inboundUpdate.create({ data: { externalUpdateKey: key, partitionKey, updateType: 'bot_started', nextAttemptAt: new Date(0), payload: { key } } });
   }
   async function intent(key: string) {
     await db.$transaction(tx => queueFileDeletion(tx, { storageKey: key, size: 1, publicCode: 'INC-SYNTHETIC' }));
@@ -44,12 +45,27 @@ describeIntegration('PR13 review boundaries', () => {
       if (++calls === 2) throw Error('eligibility unavailable');
       return (query as any)(...args);
     }) as never);
-    const worker = new UpdateDispatcher(db, { dispatch } as never);
+    const worker = new UpdateDispatcher(db, { dispatch } as never, 1);
     try {
       await expect(worker.kick()).rejects.toThrow('eligibility unavailable');
       expect(calls).toBe(2); expect(dispatch).not.toHaveBeenCalled();
       expect(await db.inboundUpdate.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({ status: 'PENDING', attempts: 0 });
       await worker.kick(); expect(dispatch).toHaveBeenCalledTimes(1);
+    } finally { worker.stop(); await worker.waitForIdle(); }
+  });
+
+  it('direct handle cannot bypass an earlier reserved event in the same lane', async () => {
+    const head = await event('first', 'user:1');
+    await db.inboundUpdate.update({ where: { id: head.id }, data: { nextAttemptAt: new Date(Date.now() + 60_000) } });
+    const seen: string[] = []; const dispatch = vi.fn(async (v: any) => { seen.push(v.key); });
+    const worker = new UpdateDispatcher(db, { dispatch } as never, 1);
+    try {
+      await worker.handle({ update_type: 'bot_started', user: { user_id: 1 }, chat_id: 1, timestamp: 1, key: 'second' } as never);
+      expect(seen).toEqual([]);
+      expect(await db.inboundUpdate.count({ where: { status: 'PENDING', attempts: 0 } })).toBe(2);
+      await db.inboundUpdate.update({ where: { id: head.id }, data: { nextAttemptAt: new Date(0) } });
+      await worker.kick(); expect(seen).toEqual(['first','second']);
+      expect(await db.inboundUpdate.count({ where: { status: 'PROCESSED' } })).toBe(2);
     } finally { worker.stop(); await worker.waitForIdle(); }
   });
 
@@ -160,6 +176,29 @@ describeIntegration('PR13 review boundaries', () => {
     expect(await db.systemSetting.count({ where: { key: { startsWith: FILE_DELETION_FENCE_PREFIX } } })).toBe(0);
   });
 
+  it('a writer already waiting for the key sees the fence committed after its statement began', async () => {
+    const key = 'fence-commit-race'; const entered = barrier(); const release = barrier();
+    const writer = createTestPrisma();
+    const fence = db.$transaction(async tx => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 724091))`;
+      await tx.systemSetting.create({ data: { key: FILE_DELETION_FENCE_PREFIX + createHash('sha256').update(key).digest('hex'), value: 'PERMANENT_STORAGE_KEY_RETIREMENT_V1' } });
+      entered.resolve(); await release.promise;
+    });
+    await entered.promise;
+    const writing = writer.outboundMessage.create({ data: { targetType: 'user', targetId: 1n, payload: {}, attachments: [{ storageKey: key }] } })
+      .then(() => 'UNEXPECTED_COMMIT', e => String(e));
+    try {
+      await expect.poll(async () => {
+        const rows = await db.$queryRaw<Array<{ waiting: boolean }>>`SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event='advisory') AS waiting`;
+        return rows[0]?.waiting;
+      }).toBe(true);
+    } finally { release.resolve(); await fence; }
+    try {
+      expect(await writing).toContain('STORAGE_KEY_RETIRED');
+      expect(await db.outboundMessage.count()).toBe(0);
+    } finally { await writer.$disconnect(); }
+  });
+
   it('all seven reference writers reject retired keys and permit unrelated keys', async () => {
     await intent('retired'); await drainFileDeletions(db, { remove: async () => undefined } as never);
     const tables = ['IncidentAttachment','AnswerAttachment','ClarificationAttachment','OutboundMessage','OperatorSession','PrivateWorkItem','InboundUpdate'];
@@ -183,6 +222,10 @@ describeIntegration('PR13 review boundaries', () => {
       await expect(writer('safe')).resolves.toBeDefined();
     }
     await expect(db.inboundUpdate.update({ where: { externalUpdateKey: 'safe' }, data: { payload: { storageKey: 'retired' } } })).rejects.toThrow('STORAGE_KEY_RETIRED');
+    // Retaining an existing key is permitted even under an older snapshot;
+    // adding a reference there cannot safely prove fence absence and is refused.
+    await db.$transaction(tx => tx.inboundUpdate.update({ where: { externalUpdateKey: 'safe' }, data: { lastError: 'synthetic' } }), { isolationLevel: 'RepeatableRead' });
+    await expect(db.$transaction(tx => tx.inboundUpdate.update({ where: { externalUpdateKey: 'safe' }, data: { payload: { storageKey: 'another-safe' } } }), { isolationLevel: 'RepeatableRead' })).rejects.toThrow('STORAGE_REFERENCE_REQUIRES_READ_COMMITTED');
     await event('unrelated', 'user:3');
     expect(await db.systemSetting.count({ where: { key: { startsWith: FILE_DELETION_FENCE_PREFIX } } })).toBe(1);
   });
