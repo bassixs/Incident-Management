@@ -58,6 +58,14 @@ class MigrationKit(unittest.TestCase):
         cls.tmp=tempfile.TemporaryDirectory(prefix='migration-kit-');cls.root=Path(cls.tmp.name)
         cls.addClassCleanup(cls.cleanup)
         run('docker','network','create','--driver','bridge','--opt','com.docker.network.bridge.host_binding_ipv4=127.0.0.1',NET)
+        network=json.loads(run('docker','network','inspect',NET).stdout)[0]
+        cls.bridge='br-'+network['Id'][:12]
+        # Keep localhost publication (the accepted R4 networking fix), while
+        # forbidding NEW routed connections out of this disposable bridge.
+        cls.firewall=['-i',cls.bridge,'!','-o',cls.bridge,'-m','conntrack','--ctstate','NEW','-j','REJECT']
+        run('sudo','iptables','-I','DOCKER-USER','1',*cls.firewall)
+        run('sudo','iptables','-C','DOCKER-USER',*cls.firewall)
+        (OUT/'network-isolation.json').write_text(json.dumps({'network':network,'forwardReject':cls.firewall,'scope':'only owned synthetic bridge'},indent=2))
         run('docker','run','-d','--name',PG,'--network',NET,'--network-alias','postgres','--cpus','1','--memory','768m','-e','POSTGRES_USER=lab','-e','POSTGRES_PASSWORD=synthetic-only','-e','POSTGRES_DB=template_old','postgres:16-alpine')
         wait(lambda:run('docker','exec',PG,'pg_isready','-U','lab',check=False).returncode==0)
         cls.env=cls.root/'template.env';cls.env.write_text('DATABASE_URL=postgresql://lab:synthetic-only@postgres:5432/template_old\n')
@@ -84,6 +92,7 @@ class MigrationKit(unittest.TestCase):
         for name in [MOCK,PG]:
             if name in names:
                 run('docker','stop','-t','30',name);run('docker','rm','-v',name)
+        if hasattr(cls,'firewall'):run('sudo','iptables','-D','DOCKER-USER',*cls.firewall,check=False)
         run('docker','network','rm',NET,check=False)
         cls.tmp.cleanup()
 
@@ -105,7 +114,7 @@ INSERT INTO "OperatorSession" (id,"maxUserId","chatId",type,data,"expiresAt") VA
         (self.uploads/'preserved.txt').write_text('synthetic attachment')
         with socket.socket() as sock: sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
         runtime=self.install/'private/runtime.env'
-        values={'BOT_TOKEN':'synthetic-'+suffix,'DATABASE_URL':f'postgresql://lab:synthetic-only@postgres:5432/{self.db}',
+        values={'BOT_TOKEN':'synthetic-container-token','DATABASE_URL':f'postgresql://lab:synthetic-only@postgres:5432/{self.db}',
           'NODE_ENV':'production','MAX_API_BASE_URL':'http://mock:8080','BOT_MODE':'webhook','WEBHOOK_URL':'https://synthetic.invalid/webhook/max','WEBHOOK_SECRET':'synthetic-only','WEBHOOK_AUTO_REGISTER':'false','LOG_PRETTY':'false','SLA_ENABLED':'false','DISTRIBUTION_QUEUE_ENABLED':'false','MEDIA_STORAGE':'local','MEDIA_LOCAL_PATH':'/app/data/uploads','ADMINS':'9001','BOT_STATUS_USER_IDS':''}
         runtime.write_text(''.join(k+'='+v+'\n' for k,v in values.items()))
         self.s={'install':str(self.install),'prepared':str(self.prepared),'backup_script':str(self.rootcase/'backup.py'),'backup_lock':str(self.lock),'releases':str(self.rootcase/'releases'),'app':self.name,'project':self.name,'health_base':'http://127.0.0.1:'+str(port),'runtime_sha256':o.sha(runtime.read_bytes()),'images':{}}
@@ -125,6 +134,9 @@ INSERT INTO "OperatorSession" (id,"maxUserId","chatId",type,data,"expiresAt") VA
         self.assertEqual(o.app(self.s)['NetworkSettings']['Ports']['3000/tcp'],[{'HostIp':'127.0.0.1','HostPort':str(port)}])
 
     def clean_case(self):
+        records={str(p.relative_to(self.prepared)):p.read_text() for p in self.prepared.rglob('*.json')}
+        evidence={'test':self.id(),'records':records,'migrations':sql(self.db,'SELECT migration_name,finished_at IS NOT NULL,rolled_back_at IS NOT NULL FROM _prisma_migrations ORDER BY migration_name;')}
+        (OUT/(self._testMethodName+'.json')).write_text(json.dumps(evidence,indent=2))
         for name in [self.name,self.migrator,self.name+'-second']:
             if name not in run('docker','ps','-a','--format','{{.Names}}').stdout.splitlines():continue
             c=o.inspect(name)
@@ -142,6 +154,11 @@ INSERT INTO "OperatorSession" (id,"maxUserId","chatId",type,data,"expiresAt") VA
         print(json.dumps({'test':self.id(),'script':script,'exit':p.returncode,'output':p.stdout+p.stderr}),flush=True)
         self.assertEqual(p.returncode,code,p.stdout+p.stderr)
         if contains:self.assertIn(contains,p.stdout+p.stderr)
+        if script=='start-app.py' and code==0:
+            env=dict(v.split('=',1) for v in o.app(self.s)['Config']['Env'] if '=' in v)
+            self.assertEqual(env['MAX_API_BASE_URL'],'http://mock:8080')
+            self.assertEqual(env['BOT_TOKEN'],'synthetic-container-token')
+            run('sudo','iptables','-C','DOCKER-USER',*self.firewall)
         return p
 
     def stop(self,fd):self.cli(fd,'stop-app.py',self.images['old'],'run')
@@ -150,9 +167,25 @@ INSERT INTO "OperatorSession" (id,"maxUserId","chatId",type,data,"expiresAt") VA
 
     def test_cancel_before_migrations_same_container(self):
         with o.backup_lock(self.s) as fd:
-            self.stop(fd);self.cli(fd,'resume-unapplied.py',self.images['old'],'run')
+            self.stop(fd)
+            self.cli(fd,'apply-config.py',self.images['old'],self.images['main'],self.s['baseline_config_sha256'],self.s['images']['main']['candidate'],'run',code=2,contains='MIGRATION_RECEIPT_REQUIRED')
+            self.cli(fd,'resume-unapplied.py',self.images['old'],'run')
             self.assertEqual(o.app(self.s)['Id'],self.initial)
             self.cli(fd,'resume-unapplied.py',self.images['old'],'run',code=2,contains='RESUME_ALREADY_ATTEMPTED')
+
+    def test_migrator_container_without_receipt_blocks_old_resume(self):
+        with o.backup_lock(self.s) as fd:
+            self.stop(fd)
+            run('docker','create','--name',self.migrator,'--entrypoint','node',self.images['main'],'-e','process.exit(0)')
+            self.cli(fd,'resume-unapplied.py',self.images['old'],'run',code=2,contains='MIGRATION_CONTAINER_ALREADY_EXISTS')
+            self.assertFalse(o.app(self.s)['State']['Running'])
+
+    def test_identity_mismatch_preserves_running_old(self):
+        self.s['migration']['identity']['oid']='0'
+        self.settings.write_text(json.dumps(self.s))
+        with o.backup_lock(self.s) as fd:
+            self.cli(fd,'stop-app.py',self.images['old'],'run',code=2,contains='DATABASE_IDENTITY_CHANGED')
+        self.assertTrue(o.app(self.s)['State']['Running'])
 
     def test_interrupted_migration_denies_old_and_new(self):
         with o.backup_lock(self.s) as fd:
@@ -173,6 +206,36 @@ CREATE EVENT TRIGGER synthetic_failure ON ddl_command_start EXECUTE FUNCTION syn
             self.stop(fd);g.ledger(self.s).write_text('{')
             self.cli(fd,'resume-unapplied.py',self.images['old'],'run',code=2,contains='MIGRATION_ALREADY_STARTED')
             self.assertFalse(o.app(self.s)['State']['Running'])
+
+    def test_lost_cli_result_and_late_migration_completion(self):
+        with o.backup_lock(self.s) as fd,patch.dict(os.environ,INCIDENT_OPS_LOCK_FD=str(fd)):
+            self.stop(fd)
+            holder=subprocess.Popen(['docker','exec','-i',PG,'psql','-XqAt','-v','ON_ERROR_STOP=1','-U','lab','-d',self.db],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+            try:
+                holder.stdin.write('BEGIN; LOCK TABLE "InboundUpdate" IN ACCESS EXCLUSIVE MODE; SELECT \'LOCK_READY\';\n');holder.stdin.flush()
+                import select
+                self.assertTrue(select.select([holder.stdout],[],[],30)[0],'lock holder timeout')
+                self.assertEqual(holder.stdout.readline().strip(),'LOCK_READY')
+                actual=o.command
+                def lost(args,*pos,**kw):
+                    if args[:2]==['docker','run'] and '--name' in args and self.migrator in args:
+                        actual(args[:2]+['-d']+args[2:],*pos,**kw)
+                        wait(lambda:sql(self.db,"SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'ALTER TABLE%';").strip()!='0')
+                        raise o.Refusal('COMMAND_UNAVAILABLE_OR_TIMEOUT')
+                    return actual(args,*pos,**kw)
+                with patch.object(o,'command',side_effect=lost):
+                    with self.assertRaisesRegex(o.Refusal,'COMMAND_UNAVAILABLE_OR_TIMEOUT'):g.migrate(self.s,'run')
+                self.assertTrue(o.inspect(self.migrator)['State']['Running'])
+                self.cli(fd,'resume-unapplied.py',self.images['old'],'run',code=2,contains='MIGRATION_ALREADY_STARTED')
+                self.cli(fd,'apply-config.py',self.images['old'],self.images['main'],self.s['baseline_config_sha256'],self.s['images']['main']['candidate'],'run',code=2,contains='MIGRATION_RESULT_UNKNOWN')
+            finally:
+                holder.stdin.write('ROLLBACK;\n');holder.stdin.close();holder.wait(timeout=30)
+            wait(lambda:not o.inspect(self.migrator)['State']['Running'])
+            self.assertEqual(o.inspect(self.migrator)['State']['ExitCode'],0)
+            self.assertEqual(probe(self.install/'private/runtime.env')['schema'],json.loads(self.manifest.read_text())['new'])
+            # Late successful DDL is evidence for review, not implicit permission.
+            self.assertEqual(json.loads(g.ledger(self.s).read_text())['state'],'started')
+            self.cli(fd,'apply-config.py',self.images['old'],self.images['main'],self.s['baseline_config_sha256'],self.s['images']['main']['candidate'],'run',code=2,contains='MIGRATION_RESULT_UNKNOWN')
 
     def test_complete_migrations_old_compose_no_old_resume(self):
         with o.backup_lock(self.s) as fd:
@@ -200,6 +263,9 @@ CREATE EVENT TRIGGER synthetic_failure ON ddl_command_start EXECUTE FUNCTION syn
                 self.assertEqual(o.app(self.s)['Image'],self.images[new])
 
     def test_second_instance_refuses_stop(self):
+        with o.backup_lock(self.s) as fd:
+            self.cli(fd,'migrate-app.py','run',code=2,contains='UNCLEAN_OR_RUNNING_APP')
+        self.assertFalse(g.ledger(self.s).exists())
         cfg=o.compose(self.s,o.live_path(self.s))['services']['app']
         run('docker','run','-d','--name',self.name+'-second','--env-file',self.install/'private/runtime.env',self.images['old'])
         with o.backup_lock(self.s) as fd:
@@ -216,10 +282,10 @@ CREATE EVENT TRIGGER synthetic_failure ON ddl_command_start EXECUTE FUNCTION syn
         with o.backup_lock(self.s) as fd,patch.dict(os.environ,INCIDENT_OPS_LOCK_FD=str(fd)):
             self.stop(fd);self.migrate(fd);self.apply(fd)
             actual=o.command
-            def failed(args,**kw):
+            def failed(args,*pos,**kw):
                 if args[:2]==['docker','compose'] and 'up' in args:
                     return subprocess.CompletedProcess(args,125,'','synthetic create failure')
-                return actual(args,**kw)
+                return actual(args,*pos,**kw)
             with patch.object(o,'command',side_effect=failed):
                 with self.assertRaisesRegex(o.Refusal,'CREATE_OR_START_FAILED'):o.start(self.s,self.images['main'],'run')
             self.cli(fd,'recover-config.py',self.images['main'],self.images['reserve'],self.s['images']['main']['compose_sha256'],'run','reviewed-start-failure')
@@ -230,14 +296,14 @@ CREATE EVENT TRIGGER synthetic_failure ON ddl_command_start EXECUTE FUNCTION syn
         with o.backup_lock(self.s) as fd,patch.dict(os.environ,INCIDENT_OPS_LOCK_FD=str(fd)):
             self.stop(fd);self.migrate(fd);self.apply(fd)
             actual=o.command
-            def failed(args,**kw):
+            def failed(args,*pos,**kw):
                 if args[:2]==['docker','compose'] and 'up' in args:
                     # Controlled real Docker exit replaces only this stopped
                     # synthetic container. No candidate image is modified.
                     run('docker','rm',self.name)
                     run('docker','run','--name',self.name,'--entrypoint','node',self.images['main'],'-e','process.exit(17)',check=False)
                     return subprocess.CompletedProcess(args,125,'','synthetic start failure')
-                return actual(args,**kw)
+                return actual(args,*pos,**kw)
             with patch.object(o,'command',side_effect=failed):
                 with self.assertRaisesRegex(o.Refusal,'CREATE_OR_START_FAILED'):o.start(self.s,self.images['main'],'run')
             self.cli(fd,'recover-config.py',self.images['main'],self.images['reserve'],self.s['images']['main']['compose_sha256'],'run','reviewed-start-failure')

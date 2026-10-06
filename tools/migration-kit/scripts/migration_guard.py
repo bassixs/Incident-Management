@@ -47,13 +47,14 @@ def assert_schema(s,kind):
     _,expected=configuration(s)
     o.need(probe(s)==expected[kind], 'DATABASE_SCHEMA_NOT_'+kind.upper())
 
-def no_migrator(s):
+def no_migrator(s,absent=False):
     # A failed daemon query never establishes absence. Stopped old records stay.
     names=o.output(['docker','ps','-a','--format','{{json .}}'])
     for line in names.splitlines():
         try: name=json.loads(line)['Names']
         except (ValueError,KeyError): raise o.Refusal('INVALID_INVENTORY') from None
         if name==s['migration']['container']:
+            o.need(not absent,'MIGRATION_CONTAINER_ALREADY_EXISTS')
             row=o.inspect(name)
             o.need(not row['State']['Running'],'MIGRATION_STILL_RUNNING')
 
@@ -61,7 +62,7 @@ def ensure_cancel(s):
     configuration(s)
     o.need(not ledger(s).exists() and not ledger(s).is_symlink()
            and not ledger(s).with_name('migration-intent.json.ops-next').exists(),'MIGRATION_ALREADY_STARTED')
-    no_migrator(s)
+    no_migrator(s,absent=True)
     assert_schema(s,'old')
 
 def ensure_new(s):
@@ -110,4 +111,3 @@ def migrate(s,name):
     record.update(state='complete',containerId=current['Id'],completedAt=o.stamp())
     o.atomic(ledger(s),json.dumps(record).encode(),ledger(s).read_bytes());u.sync_directory(ledger(s).parent)
     ensure_new(s)
-
