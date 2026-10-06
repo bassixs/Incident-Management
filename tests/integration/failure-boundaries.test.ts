@@ -47,7 +47,7 @@ describeIntegration('durable failure boundaries', () => {
   it('keeps an attachment when INSERT committed but its acknowledgement was lost', async () => {
     const storage = files();
     const create = db.outboundMessage.create.bind(db.outboundMessage);
-    vi.spyOn(db.outboundMessage, 'create').mockImplementationOnce(async args => { await create(args); throw Error('lost database ACK'); });
+    vi.spyOn(db.outboundMessage, 'create').mockImplementationOnce((async (args: any) => { await create(args); throw Error('lost database ACK'); }) as never);
     const worker = new MaxMessageService({} as never, { prisma: db, storage });
     worker.stop(); // enqueue only; no worker or MAX call
     await worker.send({ userId: 123n }, { text: 'Synthetic', delivery: { dedupeKey: 'stable-send' },
@@ -62,11 +62,11 @@ describeIntegration('durable failure boundaries', () => {
     const { row, job } = await expired(); const storage = files();
     await storage.save({ key: 'synthetic/file', body: Buffer.from('pdf') });
     const find = db.incident.findMany.bind(db.incident);
-    vi.spyOn(db.incident, 'findMany').mockImplementationOnce(async args => {
+    vi.spyOn(db.incident, 'findMany').mockImplementationOnce((async (args: any) => {
       const selected = await find(args);
       await db.incident.update({ where: { id: row.id }, data: { status: 'IN_PROGRESS' } });
       return selected;
-    });
+    }) as never);
     await new RetentionService(db, storage).run(now);
     expect(await db.incident.findUnique({ where: { id: row.id } })).not.toBeNull();
     expect(await db.outboundMessage.findUnique({ where: { id: job.id } })).not.toBeNull();

@@ -2,6 +2,9 @@ name: Isolated failure boundaries
 on:
   push:
     branches: [codex/durable-failure-boundaries]
+defaults:
+  run:
+    shell: bash
 permissions:
   contents: read
 jobs:
