@@ -17,12 +17,14 @@ module.exports = async function(p, input, req) {
   });
   if(input.op==='switch-seed-installed') {
     const user=await p.user.create({data:{id:'preserved-user',maxUserId:99001n,displayName:'Synthetic'}});
-    await p.incident.create({data:{id:'preserved-incident',publicCode:'INC-PRESERVED',requesterId:user.id,requesterMaxUserId:99001n,requesterName:'Synthetic',text:'Synthetic preservation',status:'ASSIGNED',deadlineAt:new Date('2099-01-01'),
+    const group=await p.responsibleGroup.create({data:{id:'preserved-group',code:'preserved-group',name:'Synthetic preserved group',kind:'REGIONAL',maxChatId:-99009n,isActive:false}});
+    await p.incident.create({data:{assignedGroupId:group.id,assignedByUserId:user.id,id:'preserved-incident',publicCode:'INC-PRESERVED',requesterId:user.id,requesterMaxUserId:99001n,requesterName:'Synthetic',text:'Synthetic preservation',status:'ASSIGNED',deadlineAt:new Date('2099-01-01'),
+      history:{create:{id:'preserved-history',action:'ASSIGNED',fromStatus:'DISTRIBUTION',toStatus:'ASSIGNED',actorMaxUserId:99001n}},
       attachments:{create:{id:'preserved-attachment',type:'FILE',storageKey:'preserved.txt',size:15}},
       answers:{create:{id:'preserved-answer',version:1,text:'Synthetic pending answer',status:'DRAFT',createdByUserId:user.id}},
     }});
     fs.writeFileSync('/app/data/uploads/preserved.txt','synthetic bytes');
-    await p.operatorSession.create({data:{id:'preserved-draft',maxUserId:99001n,chatId:99001n,type:'WAITING_INCIDENT_CONFIRMATION',expiresAt:new Date('2099-01-01'),data:{draft:{text:'Synthetic draft',requesterPhone:'+79000000000',attachments:[{storageKey:'preserved.txt',type:'FILE'}]},draftScreenVersion:5}}});
+    await p.operatorSession.create({data:{id:'preserved-draft',maxUserId:99001n,chatId:99001n,type:'WAITING_INCIDENT_CONFIRMATION',expiresAt:new Date('2099-01-01'),data:{draftText:'Synthetic draft',requesterPhone:'+79000000000',draftMedia:[{storageKey:'preserved.txt',kind:'FILE'}],draftToken:'synthetic-draft-token',screenToken:'synthetic-screen-token',previewToken:'synthetic-preview-token',selectedCategoryId:null,problemMunicipalityCode:'SYNTHETIC',problemMunicipalityName:'Synthetic place',inputStartedAt:Date.now()}}});
     for(let n=0;n<8;n++) await p.outboundMessage.create({data:{id:'preserved-failed-'+n,targetType:'chat',targetId:BigInt(-99000-n),payload:{text:'Synthetic terminal'},attachments:[],status:'FAILED',lastError:n<6?'MANUALLY_RETIRED_FOREIGN_BOT_ADDED':'MAX_HTTP_403',attempts:12}});
     // Old schema: do not use a generated SELECT containing the new token column.
     await p.$executeRawUnsafe(`INSERT INTO "InboundUpdate" (id,"externalUpdateKey","updateType","partitionKey",payload,"nextAttemptAt","updatedAt") VALUES ('delayed-head','delayed-head','synthetic_noop','user:99002','{"update_type":"synthetic_noop"}','2099-01-01',now()),('delayed-tail','delayed-tail','synthetic_noop','user:99002','{"update_type":"synthetic_noop"}',now(),now())`);
@@ -60,10 +62,12 @@ module.exports = async function(p, input, req) {
     return {...result,unknownPreserved:fs.existsSync('/app/data/uploads/unknown-delete.txt')&&!!await p.systemSetting.findUnique({where:{key:intent('unknown-delete.txt')}}),fencesRetained:await p.systemSetting.count({where:{key:{in:[fence('unknown-delete.txt'),fence('pending-delete.txt')]}}})===2};
   }
   if(input.op==='benchmark') {
-    // App containers have exited. A separate DB avoids affecting switching evidence.
+    // App containers have exited. Snapshot evidence was saved before this synthetic load.
     const {drainFileDeletions,queueFileDeletion}=req('/app/dist/retention/file-deletions');
-    await p.$executeRawUnsafe(`INSERT INTO "InboundUpdate" (id,"externalUpdateKey","updateType","partitionKey",payload,status,"updatedAt") SELECT 'load-in-'||n,'load-in-'||n,'synthetic_noop','user:'||n,'{}','PROCESSED',now() FROM generate_series(1,20000) n`);
-    await p.$executeRawUnsafe(`INSERT INTO "OutboundMessage" (id,"targetType","targetId",payload,attachments,status,"updatedAt") SELECT 'load-out-'||n,'user',n,'{"text":"synthetic"}','[]','SENT',now() FROM generate_series(1,25000) n`);
+    await p.$executeRawUnsafe(`INSERT INTO "InboundUpdate" (id,"externalUpdateKey","updateType","partitionKey",payload,status,"updatedAt") SELECT 'load-in-'||n,'load-in-'||n,'synthetic_noop','user:'||n,jsonb_build_object('storageKey','historic-in-'||n||'.txt'),'PROCESSED',now() FROM generate_series(1,20000) n`);
+    await p.$executeRawUnsafe(`INSERT INTO "OutboundMessage" (id,"targetType","targetId",payload,attachments,status,"updatedAt") SELECT 'load-out-'||n,'user',n,jsonb_build_object('text','synthetic','storageKey','historic-out-'||n||'.txt'),'[]','SENT',now() FROM generate_series(1,25000) n`);
+    await p.$executeRawUnsafe(`INSERT INTO "Incident" (id,"publicCode","requesterId","requesterMaxUserId","requesterName",text,status,"deadlineAt","updatedAt") SELECT 'bench-incident-'||n,'INC-BENCH-'||n,'preserved-user',99001,'Synthetic','Synthetic benchmark','ASSIGNED',now()+interval '3 days',now() FROM generate_series(1,500) n`);
+    await p.$executeRawUnsafe(`INSERT INTO "IncidentAttachment" (id,"incidentId",type,"storageKey") SELECT 'bench-attachment-'||n,'bench-incident-'||n,'FILE','synthetic-shared-'||n||'.txt' FROM generate_series(1,500) n`);
     const guards=['IncidentAttachment','AnswerAttachment','ClarificationAttachment','OutboundMessage','OperatorSession','PrivateWorkItem','InboundUpdate'];
     const measurements=[];
     const measure=async label=>{
@@ -94,7 +98,7 @@ module.exports = async function(p, input, req) {
       assert.equal(locks[0].count,0);
     } finally {release.resolve();}
     const result=await deleting; assert.equal(result.deletedFiles,1);
-    return {syntheticVolume:{inbox:20000,outbox:25000},concurrentUsers:8,writesPerPhase:640,measurements,deleteResult:result,scope:'DB durable admission only, excludes MAX/network/user-device latency; single runner, no production performance guarantee'};
+    return {syntheticVolume:{inbox:20000,outbox:25000,incidents:500,attachments:500},concurrentUsers:8,writesPerPhase:640,measurements,deleteResult:result,scope:'DB durable admission only, excludes MAX/network/user-device latency; single runner, no production performance guarantee'};
   }
   throw Error('Unknown switch operation');
 };

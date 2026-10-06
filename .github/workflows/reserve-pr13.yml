@@ -57,6 +57,14 @@ jobs:
           npm run typecheck 2>&1 | tee "$GITHUB_WORKSPACE/evidence/typecheck.txt"
           npm run build 2>&1 | tee "$GITHUB_WORKSPACE/evidence/build.txt"
           npx vitest run tests/unit --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/evidence/unit.json" 2>&1 | tee "$GITHUB_WORKSPACE/evidence/unit.txt"
+      - name: Build pinned PR13 reference for in-process switching checks
+        if: always() && matrix.version == 'reserve'
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/reference" 59149006a7b3d30d01218fad84360e7d71e6d79e
+          ln -s "$RUNNER_TEMP/runtime/node_modules" "$RUNNER_TEMP/reference/node_modules"
+          cd "$RUNNER_TEMP/reference"
+          npm run build
+          echo "DELIVERY_REFERENCE_ROOT=$RUNNER_TEMP/reference" >> "$GITHUB_ENV"
       - name: Backport protections and delivery regression
         if: always() && matrix.version == 'reserve'
         run: |

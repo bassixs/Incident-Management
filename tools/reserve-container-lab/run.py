@@ -189,7 +189,7 @@ def setup():
     report['preservedBaseline']=before
     save('migrations.json', {'preserved':before, 'applied':sql('SELECT migration_name FROM _prisma_migrations ORDER BY migration_name;')})
     helper('switch-seed-journal')
-    docker('run', '-d', '--name', MOCK, '--network', NET, '--network-alias', 'mock', '--cpus', '0.5', '--memory', '256m',
+    docker('run', '-d', '--init', '--name', MOCK, '--network', NET, '--network-alias', 'mock', '--cpus', '0.5', '--memory', '256m',
            '-v', f'{LAB}:/lab:ro', '--entrypoint', 'node', 'incident-lab:main', '/lab/mock.cjs')
     wait('local mock ready', lambda: docker('exec', MOCK, 'node', '-e', "fetch('http://localhost:8080/control').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))", check=False).returncode == 0)
 
@@ -300,10 +300,12 @@ def scenarios():
     check('all synthetic incidents and answers retained',len(final['incidents'])==5 and len(final['answers'])==5)
     save('final-synthetic-db.json',final); save('http-ledger.json',control())
 
+ownership_confirmed = False
 try:
     if os.environ.get('GITHUB_ACTIONS')!='true':
         raise RuntimeError('This runner is restricted to the approved disposable GitHub Actions environment')
     check('empty disposable daemon',not docker('ps','-aq').stdout.strip())
+    ownership_confirmed = True
     build(); setup(); scenarios()
     report['benchmark']=helper('benchmark')
     save('benchmark.json',report['benchmark'])
@@ -320,12 +322,16 @@ finally:
         try: save('http-ledger.json',control())
         except Exception: pass
 
-    # Only resources created by this lab; no global prune.
-    for name in docker('ps','-a','--format','{{.Names}}').stdout.splitlines():
-        if name.startswith('reserve-lab-'):
-            if json.loads(docker('inspect',name).stdout)[0]['State']['Running']:
-                docker('kill','--signal=TERM',name)
-                docker('wait',name,timeout=90)
-            docker('rm',name)
-    if docker('volume','inspect',VOLUME,check=False).returncode==0: docker('volume','rm',VOLUME)
-    if docker('network','inspect',NET,check=False).returncode==0: docker('network','rm',NET)
+    if ownership_confirmed:
+        # Only resources created by this lab; no global prune.
+        for name in docker('ps','-a','--format','{{.Names}}').stdout.splitlines():
+            if name.startswith('reserve-lab-'):
+                if json.loads(docker('inspect',name).stdout)[0]['State']['Running']:
+                    docker('kill','--signal=TERM',name)
+                    docker('wait',name,timeout=90)
+                docker('rm',name)
+        if docker('volume','inspect',VOLUME,check=False).returncode==0: docker('volume','rm',VOLUME)
+        if docker('network','inspect',NET,check=False).returncode==0: docker('network','rm',NET)
+        remaining=docker('ps','-aq').stdout.strip()
+        save('cleanup.json', {'remainingContainers':remaining,'volumeAbsent':docker('volume','inspect',VOLUME,check=False).returncode!=0,'networkAbsent':docker('network','inspect',NET,check=False).returncode!=0})
+        check('owned lab cleaned without prune',not remaining)
