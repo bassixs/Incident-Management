@@ -69,7 +69,8 @@ def fixture(group, count, load=False):
         ctx.mkdir(parents=True)
         (ctx / 'a').write_text('shared parent within group ' + group)
         (ctx / 'b').write_text('unique child ' + name)
-        (ctx / 'Dockerfile').write_text('FROM scratch\nCOPY a /a\nCOPY b /b\n')
+        syntax = '# syntax=docker/dockerfile:1.7.0\n' if group == 'frontend' else ''
+        (ctx / 'Dockerfile').write_text(syntax + 'FROM scratch\nCOPY a /a\nCOPY b /b\n')
         args = ['buildx', 'build', '--builder', 'default', '--progress=plain']
         args += ['--load', '-t', 'cache-lab-' + name] if load else ['--output=type=cacheonly']
         docker(*args, '/lab/' + ctx.as_posix())
@@ -111,6 +112,11 @@ def main():
     version, info = api('/version'), api('/info')
     save('version', version); save('info', info)
     require(version['Version'] == '29.1.3' and version['Arch'] == 'amd64', 'wrong Engine')
+    if os.environ.get('LAB_ENGINE') == 'ubuntu':
+        require(version['GitCommit'] == '29.1.3-0ubuntu4.1', 'wrong Ubuntu build')
+        docker('version')
+        print(subprocess.check_output(['docker', 'exec', 'exact-cache-engine', 'dpkg-query',
+              '-W', 'docker.io', 'containerd', 'runc'], text=True))
     require(any('io.containerd.snapshotter.v1' in str(r) for r in info['DriverStatus']), 'not containerd store')
     require(not api('/containers/json?all=1'), 'inner daemon not empty')
     require(not (api('/volumes')['Volumes'] or []), 'inner volumes not empty')
@@ -128,6 +134,7 @@ def main():
     fixture('cache-control', 3)
     controls = set(cache())
     fixture('target', 45)
+    fixture('frontend', 1)
     rows = cache()
     candidates = [i for i, r in rows.items() if i not in controls and not r['InUse'] and not r['Shared']]
     require(len(candidates) >= 125, f'insufficient synthetic private records {len(candidates)}')
@@ -143,6 +150,8 @@ def main():
     require(child in prune([child], '03-single-child'), 'private child was not removed')
     require(parent_ids <= set(cache()), 'unselected parent removed')
     require(not prune([child], '04-repeat-same-id'), 'repeat unexpectedly deleted')
+    front = next(i for i, r in rows.items() if r['Type'] == 'frontend' and not r['InUse'] and not r['Shared'])
+    require(front in prune([front], '05-frontend-exact'), 'frontend cache not removed')
     # Keep children before their parent when selecting a bounded allowlist.
     rows = cache()
     available = {i for i in candidates if i in rows}
@@ -155,7 +164,7 @@ def main():
         available.difference_update(leaves)
     chosen = ordered[:123]
     require(len(chosen) == 123, 'need exactly 123 selected records')
-    removed = prune(chosen, '05-exact-123')
+    removed = prune(chosen, '06-exact-123')
     require(removed == set(chosen), f'only {len(removed)}/123 deleted')
     require(controls <= set(cache()), 'original control cache lost')
     save('final-resources', protected())

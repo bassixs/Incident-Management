@@ -1,0 +1,8 @@
+# Disposable test engine only. Never used for the application.
+FROM docker:29.1.3-dind AS plugin
+FROM ubuntu:26.04
+RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d && chmod 755 /usr/sbin/policy-rc.d
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    docker.io=29.1.3-0ubuntu4.1 ca-certificates
+COPY --from=plugin /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
+ENTRYPOINT ["dockerd"]

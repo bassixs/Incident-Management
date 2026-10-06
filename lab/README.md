@@ -4,7 +4,9 @@ Run only in the fresh GitHub-hosted runner selected by this branch's workflow.
 No production access, credentials, source images or cache IDs are used.
 The nested Engine is 29.1.3 with containerd image storage; its own automatic
 build GC is disabled so unrelated GC cannot invalidate before/after evidence.
-No daemon settings on a real installation are changed by this lab.
+No daemon settings on a real installation are changed by this lab. The second
+matrix job uses the exact Ubuntu docker.io 29.1.3-0ubuntu4.1 package, with its
+dependency versions recorded. Neither job has production access.
 
 All deletion tests use native `docker builder prune` with DOCKER_BUILDKIT=0
 to disable CLI forwarding to Buildx, an anchored ID regular expression and
