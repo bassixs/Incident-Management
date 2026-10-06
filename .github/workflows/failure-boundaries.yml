@@ -57,7 +57,7 @@ jobs:
       - name: Integration
         if: always()
         run: >-
-          npx vitest run tests/integration/failure-boundaries.test.ts
+          npx vitest run tests/integration/failure-boundaries.test.ts tests/integration/failure-boundaries-review.test.ts
           tests/integration/transactional-workflow.test.ts tests/integration/retention.test.ts
           tests/integration/reliable-delivery.test.ts tests/integration/delivery-reliability.test.ts
           tests/integration/delivery-review-regressions.test.ts tests/integration/delivery-worker-lifecycle.test.ts
