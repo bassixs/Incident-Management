@@ -37,6 +37,7 @@ jobs:
           docker run -d --privileged --name exact-cache-engine --cpus 2 --memory 3g \
             -e DOCKER_TLS_CERTDIR= -p 127.0.0.1:23750:2375 \
             --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/lab" \
+            --mount type=volume,src=cache-lab-daemon-root,dst=/var/lib/docker \
             "$engine_image" --host=tcp://0.0.0.0:2375 --host=unix:///var/run/docker.sock \
             --config-file=/lab/lab/daemon.json
           ready=false
