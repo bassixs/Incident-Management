@@ -35,6 +35,7 @@ export async function drainFileDeletions(db: PrismaClient, storage: MediaStorage
     const stateKey = FILE_DELETION_STATE_PREFIX + job.key.slice(FILE_DELETION_PREFIX.length);
     let file: Deletion | undefined;
     let invalidSavedState = false;
+    let phase = 'record';
     let state: State = { version: 1, attempts: 0, status: 'pending', nextAttemptAt: 0, reason: '' };
     const saveState = async () => db.systemSetting.upsert({ where: { key: stateKey },
       create: { key: stateKey, value: JSON.stringify(state) }, update: { value: JSON.stringify(state) } });
@@ -60,6 +61,7 @@ export async function drainFileDeletions(db: PrismaClient, storage: MediaStorage
       state = { ...state, attempts: state.attempts + 1, nextAttemptAt: now() + RETRY_MS, reason: 'ATTEMPT_STARTED' };
       if (state.attempts > MAX_ATTEMPTS) { state.attempts = MAX_ATTEMPTS; state.status = 'exhausted'; await saveState(); continue; }
       await saveState();
+      phase = 'reference-check';
       const fenced = await db.$transaction(async tx => {
         await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '2s'");
         await tx.$executeRawUnsafe("SET LOCAL statement_timeout = '2s'");
@@ -89,6 +91,7 @@ export async function drainFileDeletions(db: PrismaClient, storage: MediaStorage
         await saveState(); continue;
       }
       // No database transaction or lock is held during external I/O.
+      phase = 'remove';
       let timer: NodeJS.Timeout | undefined;
       try {
         await Promise.race([
@@ -96,6 +99,7 @@ export async function drainFileDeletions(db: PrismaClient, storage: MediaStorage
           new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Error('STORAGE_RESULT_UNKNOWN')), timeoutMs); }),
         ]);
       } finally { if (timer) clearTimeout(timer); }
+      phase = 'finalize';
       await db.$transaction(async tx => {
         await tx.systemSetting.deleteMany({ where: { key: job.key, value: job.value } });
         await tx.systemSetting.deleteMany({ where: { key: stateKey } });
@@ -103,11 +107,13 @@ export async function drainFileDeletions(db: PrismaClient, storage: MediaStorage
       result.deletedFiles += 1; result.deletedBytes += file.size;
     } catch (error) {
       const reason = error instanceof Error ? error.message : '';
+      const rawCode = (error as { code?: unknown } | null)?.code;
+      const code = typeof rawCode === 'string' && /^[A-Z0-9_]{1,32}$/.test(rawCode) ? rawCode : 'UNKNOWN';
       const invalid = !file || reason.startsWith('INVALID_');
       state = { version: 1, attempts: Math.min(MAX_ATTEMPTS, Number.isInteger(state?.attempts) ? state.attempts : 0),
         status: invalid ? 'invalid' : reason === 'STORAGE_RESULT_UNKNOWN' ? 'unknown' : state.attempts >= MAX_ATTEMPTS ? 'exhausted' : 'pending',
         nextAttemptAt: now() + RETRY_MS,
-        reason: invalid ? 'INVALID_RECORD_REQUIRES_REVIEW' : reason === 'STORAGE_RESULT_UNKNOWN' ? 'STORAGE_RESULT_UNKNOWN' : 'FILE_DELETION_FAILED' };
+        reason: invalid ? 'INVALID_RECORD_REQUIRES_REVIEW' : reason === 'STORAGE_RESULT_UNKNOWN' ? 'STORAGE_RESULT_UNKNOWN' : `FILE_DELETION_FAILED:${phase}:${code}` };
       // If persistence is unavailable, abort the sweep rather than spin or infer success.
       if (!invalidSavedState) await saveState(); // preserve damaged metadata verbatim for review
       result.failures.push({ publicCode: file?.publicCode ?? 'FILE_DELETION', error: `FILE_DELETION_PENDING: ${state.reason}; ${state.status}; запись сохранена.` });

@@ -37,6 +37,22 @@ describeIntegration('PR13 review boundaries', () => {
     expect((await db.inboundUpdate.findUniqueOrThrow({ where: { id: first.id } })).status).toBe('PENDING');
   });
 
+  it('an eligibility read failure stops the sweep without claiming or spinning', async () => {
+    const row = await event('eligibility', 'user:1'); const dispatch = vi.fn(async () => undefined);
+    const query = db.$queryRaw.bind(db); let calls = 0;
+    vi.spyOn(db, '$queryRaw').mockImplementation(((...args: any[]) => {
+      if (++calls === 2) throw Error('eligibility unavailable');
+      return (query as any)(...args);
+    }) as never);
+    const worker = new UpdateDispatcher(db, { dispatch } as never);
+    try {
+      await expect(worker.kick()).rejects.toThrow('eligibility unavailable');
+      expect(calls).toBe(2); expect(dispatch).not.toHaveBeenCalled();
+      expect(await db.inboundUpdate.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({ status: 'PENDING', attempts: 0 });
+      await worker.kick(); expect(dispatch).toHaveBeenCalledTimes(1);
+    } finally { worker.stop(); await worker.waitForIdle(); }
+  });
+
   it('a suspended storage removal does not block inbox or outbox writes', async () => {
     await intent('slow-file');
     const entered = barrier(); const release = barrier();
