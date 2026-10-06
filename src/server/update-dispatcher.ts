@@ -284,12 +284,20 @@ export class UpdateDispatcher {
     }
   }
 
-  /** Handle an update end to end (used by long polling in development). */
-  async handle(update: Update): Promise<'processed' | 'duplicate'> {
+  /** Long polling uses the same ordered drain; a deferred row is not processed. */
+  async handle(update: Update): Promise<'processed' | 'duplicate' | 'queued' | 'failed'> {
     const reservation = await this.reserve(update);
     if (!reservation.fresh || !reservation.id) return 'duplicate';
-    await this.processById(reservation.id);
-    return 'processed';
+    await this.kick();
+    const current = () => this.prisma.inboundUpdate.findUnique({ where: { id: reservation.id }, select: { status: true } });
+    let row = await current();
+    if (row?.status === InboxStatus.PENDING) {
+      // The first kick may have joined a drain whose final selection preceded
+      // this reservation. One fresh pass closes that race; never poll a future head.
+      await this.kick();
+      row = await current();
+    }
+    return row?.status === InboxStatus.PROCESSED ? 'processed' : row?.status === InboxStatus.FAILED ? 'failed' : 'queued';
   }
 
   /** Housekeeping so both old and new dedup tables stay bounded. */

@@ -60,13 +60,31 @@ describeIntegration('PR13 review boundaries', () => {
     const seen: string[] = []; const dispatch = vi.fn(async (v: any) => { seen.push(v.key); });
     const worker = new UpdateDispatcher(db, { dispatch } as never, 1);
     try {
-      await worker.handle({ update_type: 'bot_started', user: { user_id: 1 }, chat_id: 1, timestamp: 1, key: 'second' } as never);
+      expect(await worker.handle({ update_type: 'bot_started', user: { user_id: 1 }, chat_id: 1, timestamp: 1, key: 'second' } as never)).toBe('queued');
       expect(seen).toEqual([]);
       expect(await db.inboundUpdate.count({ where: { status: 'PENDING', attempts: 0 } })).toBe(2);
       await db.inboundUpdate.update({ where: { id: head.id }, data: { nextAttemptAt: new Date(0) } });
       await worker.kick(); expect(seen).toEqual(['first','second']);
       expect(await db.inboundUpdate.count({ where: { status: 'PROCESSED' } })).toBe(2);
     } finally { worker.stop(); await worker.waitForIdle(); }
+  });
+
+  it('parallel direct handles drain their lane before a subsequent command', async () => {
+    const entered = barrier(); const release = barrier(); const seen: string[] = [];
+    const worker = new UpdateDispatcher(db, { dispatch: async (v: any) => {
+      seen.push(v.key); if (v.key === 'first') { entered.resolve(); await release.promise; }
+    } } as never, 2);
+    const input = (key: string, timestamp: number) => ({ update_type: 'bot_started', user: { user_id: 1 }, chat_id: 1, timestamp, key }) as never;
+    const first = worker.handle(input('first', 1)); await entered.promise;
+    const second = worker.handle(input('second', 2));
+    try {
+      await expect.poll(() => db.inboundUpdate.count({ where: { status: 'PENDING' } })).toBe(1);
+      expect(seen).toEqual(['first']); release.resolve();
+      expect(await Promise.all([first, second])).toEqual(['processed','processed']);
+      expect(await worker.handle(input('third', 3))).toBe('processed');
+      expect(seen).toEqual(['first','second','third']);
+      expect(await db.inboundUpdate.count({ where: { status: 'PENDING' } })).toBe(0);
+    } finally { release.resolve(); await Promise.all([first, second]); worker.stop(); await worker.waitForIdle(); }
   });
 
   it('a suspended storage removal does not block inbox or outbox writes', async () => {

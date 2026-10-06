@@ -17,7 +17,11 @@ attempts, with a five-second delay between them. Failures once dispatch has
 started remain `FAILED` for review, including an uncertain completion write.
 A PENDING retry with a future deadline and a PROCESSING claim hold their lane: a
 later sequence in that partition cannot be selected or directly claimed. Other
-partitions remain eligible. A terminal FAILED head releases its lane without
+partitions remain eligible. Long-polling `handle()` uses the same drain (with one
+bounded fresh pass if it joined an older selection), rather than claiming the
+just-received row directly. It reports `queued`/`failed` explicitly when the row
+is not PROCESSED. Parallel handle calls cannot leave a follower blocking the next
+command unnoticed. A terminal FAILED head releases its lane without
 replaying its business action; persistent PENDING ordering survives restart.
 `PROCESSED` is written only after dispatch returns. If its ACK is lost after the
 database accepted it, the error CAS cannot overwrite the completed row.
