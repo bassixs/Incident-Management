@@ -43,3 +43,9 @@ The load experiment uses 20,000 inbox and 25,000 outbox records, eight concurren
 The nine previously failing scenarios are rerun byte-identically on unchanged main, PR13 and reserve. Test exits are not suppressed; the workflow may be red because those existing failures remain. Read individual artifacts and comparison, not just job color. Final numerical results belong in the review report after execution.
 
 No production image upload/deploy/merge, live MAX, production data, R4 change, retention-period change or unrelated test fix is part of this branch.
+
+## Bulk-transaction lock-budget limitation (separate review)
+
+A synthetic INSERT with 20,000 distinct storage keys in one transaction failed with PostgreSQL SQLSTATE 53200 (`out of shared memory`, max_locks_per_transaction) after enabling the new triggers. Each distinct key takes a transaction-scoped advisory lock. This limitation is shared by PR13 and this reserve; switching does not fix it. The dedicated `switch-bulk-probe` compares the exact statement on the installed schema before and after migrations, verifies rollback leaves zero partial rows, and records settings. It is a negative reproduction, NOT a successful bulk-write capability test.
+
+The ordinary admission benchmark seeds its 20,000/25,000 historical records in bounded batches of 250 before measuring single-event concurrent writers. PostgreSQL lock limits and runtime guards are not changed. This fixture preparation is not a runtime fix. Bulk imports/backfills containing very many distinct new storage keys need a separate design review before installation/use; no production size threshold is claimed. Migration adds triggers without rewriting existing rows, so the migration itself does not take one key lock per historical row. Existing application tests are unchanged for this issue.
