@@ -205,10 +205,16 @@ describeIntegration('durable failure boundaries', () => {
     expect(storage.remove).not.toHaveBeenCalled();
     expect(await db.systemSetting.count({ where: { key: { startsWith: 'retention.file-delete.v1:' } } })).toBe(1);
     await db.incidentAttachment.deleteMany({ where: { incidentId: other.id } });
+    const makeDeletionDue = async () => {
+      const states = await db.systemSetting.findMany({ where: { key: { startsWith: 'retention.file-state.v1:' } } });
+      for (const state of states) await db.systemSetting.update({ where: { key: state.key }, data: { value: JSON.stringify({ ...JSON.parse(state.value), nextAttemptAt: 0 }) } });
+    };
+    await makeDeletionDue();
     storage.remove.mockRejectedValueOnce(Error('storage temporarily unavailable'));
     const failed = await new RetentionService(db, storage).run(now);
     expect(failed.failures).toHaveLength(1);
     expect(await storage.exists('synthetic/file')).toBe(true);
+    await makeDeletionDue();
     const retried = await new RetentionService(db, storage).run(now);
     expect(retried.deletedFiles).toBe(1);
     expect(await storage.exists('synthetic/file')).toBe(false);

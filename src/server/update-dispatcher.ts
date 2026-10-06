@@ -156,12 +156,15 @@ export class UpdateDispatcher {
       while (!this.stopping && !this.paused && !failure) {
         while (active.size < this.concurrency && !this.stopping && !this.paused && !failure) {
           const blocked = [...active.keys()];
-          const row = await this.prisma.inboundUpdate.findFirst({
-            where: { status: InboxStatus.PENDING, nextAttemptAt: { lte: new Date() },
-              partitionKey: { notIn: blocked } },
-            orderBy: { sequence: 'asc' },
-            select: { id: true, partitionKey: true },
-          });
+          // A future retry or active claim is still the head of its lane.
+          const [row] = await this.prisma.$queryRaw<Array<{ id: string; partitionKey: string }>>`
+            SELECT i.id, i."partitionKey" FROM "InboundUpdate" i
+            WHERE i.status='PENDING' AND i."nextAttemptAt" <= NOW()
+              ${blocked.length ? Prisma.sql`AND i."partitionKey" NOT IN (${Prisma.join(blocked)})` : Prisma.empty}
+              AND NOT EXISTS (SELECT 1 FROM "InboundUpdate" head
+                WHERE head."partitionKey"=i."partitionKey" AND head.sequence < i.sequence
+                  AND head.status IN ('PENDING','PROCESSING'))
+            ORDER BY i.sequence LIMIT 1`;
           if (!row && blocked.length && !active.size) continue;
           if (!row || this.stopping || this.paused) break;
           const task = this.processById(row.id)
@@ -188,8 +191,16 @@ export class UpdateDispatcher {
     const lockedAt = new Date();
     const token = randomUUID();
     try {
+      // Direct/long-polling calls must obey the same lane rule as drain.
+      const eligible = await this.prisma.$queryRaw<Array<{ id: string }>>`
+        SELECT i.id FROM "InboundUpdate" i WHERE i.id=${id}
+          AND i.status='PENDING' AND i."nextAttemptAt" <= NOW()
+          AND NOT EXISTS (SELECT 1 FROM "InboundUpdate" head
+            WHERE head."partitionKey"=i."partitionKey" AND head.sequence < i.sequence
+              AND head.status IN ('PENDING','PROCESSING'))`;
+      if (!eligible.length) return;
       const claimed = await this.prisma.inboundUpdate.updateMany({
-        where: { id, status: InboxStatus.PENDING },
+        where: { id, status: InboxStatus.PENDING, nextAttemptAt: { lte: new Date() } },
         data: { status: InboxStatus.PROCESSING, lockedAt, processingToken: token, attempts: { increment: 1 } },
       });
       if (claimed.count !== 1) return;

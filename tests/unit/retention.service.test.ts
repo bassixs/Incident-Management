@@ -66,10 +66,11 @@ function fakePrisma(options: { locked?: boolean } = {}) {
     $executeRawUnsafe: vi.fn(async () => 0),
     systemSetting: {
       upsert: vi.fn(async ({ create }: any) => { journal.set(create.key, create.value); return create; }),
-      findMany: vi.fn(async () => [...journal].map(([key, value]) => ({ key, value }))),
-      findUnique: vi.fn(async ({ where }: any) => ({ key: where.key, value: journal.get(where.key) })),
+      findMany: vi.fn(async () => [...journal].filter(([key]) => key.startsWith('retention.file-delete.v1:')).map(([key, value]) => ({ key, value }))),
+      findUnique: vi.fn(async ({ where }: any) => journal.has(where.key) ? ({ key: where.key, value: journal.get(where.key) }) : null),
+      updateMany: vi.fn(async () => ({ count: 1 })),
       deleteMany: vi.fn(async ({ where }: any) => {
-        if (where.key.startsWith('retention.file-delete.')) journal.delete(where.key);
+        if (where.key.startsWith('retention.file-')) journal.delete(where.key);
         else calls.releasedLocks += 1;
         return { count: 1 };
       }),

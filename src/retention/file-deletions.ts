@@ -2,34 +2,63 @@ import { createHash } from 'node:crypto';
 import type { Prisma, PrismaClient } from '@prisma/client';
 import type { MediaStorage } from '../media/media-storage.interface';
 
-// Durable post-commit work; deliberately separate from business/outbox delivery.
 export const FILE_DELETION_PREFIX = 'retention.file-delete.v1:';
+export const FILE_DELETION_STATE_PREFIX = 'retention.file-state.v1:';
+export const FILE_DELETION_FENCE_PREFIX = 'retention.file-fence.v1:';
+const MAX_ATTEMPTS = 3;
+const RETRY_MS = 60_000;
 type Deletion = { version: 1; storageKey: string; size: number; publicCode: string };
+type State = { version: 1; attempts: number; status: 'pending' | 'exhausted' | 'unknown' | 'invalid'; nextAttemptAt: number; reason: string };
+const digest = (key: string) => createHash('sha256').update(key).digest('hex');
 
 export async function queueFileDeletion(tx: Prisma.TransactionClient, file: Omit<Deletion, 'version'>): Promise<void> {
-  const key = FILE_DELETION_PREFIX + createHash('sha256').update(file.storageKey).digest('hex');
+  const key = FILE_DELETION_PREFIX + digest(file.storageKey);
   await tx.systemSetting.upsert({ where: { key }, create: { key, value: JSON.stringify({ version: 1, ...file }) }, update: {} });
 }
 
-/** Called only after the incident transaction returned, or by a later retention run.
- * A lost COMMIT ACK leaves a durable intent; it never authorizes guessing ownership.
+/** An external timeout never cancels storage I/O. A committed, permanent per-key
+ * fence keeps late completion safe; it must survive success, restart and rollback.
+ * Database triggers serialize reference creation with this fence (migration required).
  */
-export async function drainFileDeletions(db: PrismaClient, storage: MediaStorage) {
+export async function drainFileDeletions(db: PrismaClient, storage: MediaStorage, options: { now?: () => number; removeTimeoutMs?: number } = {}) {
+  const now = options.now ?? Date.now;
+  const timeoutMs = options.removeTimeoutMs ?? 5_000;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 5_000) throw Error('INVALID_STORAGE_TIMEOUT');
   const result = { deletedFiles: 0, deletedBytes: 0, failures: [] as Array<{ publicCode: string; error: string }> };
-  const jobs = await db.systemSetting.findMany({ where: { key: { startsWith: FILE_DELETION_PREFIX } }, orderBy: { updatedAt: 'asc' }, take: 100 });
+  const jobs = await db.systemSetting.findMany({ where: { key: { startsWith: FILE_DELETION_PREFIX } }, orderBy: [{ updatedAt: 'asc' }, { key: 'asc' }], take: 100 });
   for (const job of jobs) {
+    const stateKey = FILE_DELETION_STATE_PREFIX + job.key.slice(FILE_DELETION_PREFIX.length);
     let file: Deletion | undefined;
+    let invalidSavedState = false;
+    let state: State = { version: 1, attempts: 0, status: 'pending', nextAttemptAt: 0, reason: '' };
+    const saveState = async () => db.systemSetting.upsert({ where: { key: stateKey },
+      create: { key: stateKey, value: JSON.stringify(state) }, update: { value: JSON.stringify(state) } });
     try {
+      // Rotate every examined record, including malformed/exhausted records. No
+      // failing prefix of 100 records can starve subsequent intents across runs.
+      await db.systemSetting.updateMany({ where: { key: job.key, value: job.value }, data: { updatedAt: new Date(now()) } });
+      const saved = await db.systemSetting.findUnique({ where: { key: stateKey } });
+      if (saved) {
+        invalidSavedState = true;
+        state = JSON.parse(saved.value) as State;
+        if (state.version !== 1 || !Number.isInteger(state.attempts) || state.attempts < 0 || state.attempts > MAX_ATTEMPTS
+          || !['pending','exhausted','unknown','invalid'].includes(state.status) || !Number.isFinite(state.nextAttemptAt)) throw Error('INVALID_FILE_STATE');
+        invalidSavedState = false;
+      }
+      if (state.status !== 'pending' || state.nextAttemptAt > now()) continue;
       file = JSON.parse(job.value) as Deletion;
       if (file.version !== 1 || typeof file.storageKey !== 'string' || !file.storageKey
-        || typeof file.size !== 'number' || typeof file.publicCode !== 'string'
-        || job.key !== FILE_DELETION_PREFIX + createHash('sha256').update(file.storageKey).digest('hex')) throw Error('INVALID_FILE_DELETION_RECORD');
+        || !Number.isFinite(file.size) || file.size < 0 || typeof file.publicCode !== 'string'
+        || job.key !== FILE_DELETION_PREFIX + digest(file.storageKey)) throw Error('INVALID_FILE_DELETION_RECORD');
       const candidate = file;
-      const removed = await db.$transaction(async tx => {
-        // Keep reference writers out while checking shared ownership and removing
-        // an already committed orphan. No incident is deleted in this transaction.
-        await tx.$executeRawUnsafe('SET LOCAL lock_timeout = \'2s\'');
-        await tx.$executeRawUnsafe('LOCK TABLE "IncidentAttachment", "AnswerAttachment", "ClarificationAttachment", "OutboundMessage", "OperatorSession", "PrivateWorkItem", "InboundUpdate" IN SHARE ROW EXCLUSIVE MODE');
+      // Persist the budget before attempting work: process failure cannot reset it.
+      state = { ...state, attempts: state.attempts + 1, nextAttemptAt: now() + RETRY_MS, reason: 'ATTEMPT_STARTED' };
+      if (state.attempts > MAX_ATTEMPTS) { state.attempts = MAX_ATTEMPTS; state.status = 'exhausted'; await saveState(); continue; }
+      await saveState();
+      const fenced = await db.$transaction(async tx => {
+        await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '2s'");
+        await tx.$executeRawUnsafe("SET LOCAL statement_timeout = '2s'");
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${candidate.storageKey}, 724091))`;
         const current = await tx.systemSetting.findUnique({ where: { key: job.key } });
         if (current?.value !== job.value) return false;
         const refs = await tx.$queryRaw<Array<{ present: boolean }>>`
@@ -43,18 +72,40 @@ export async function drainFileDeletions(db: PrismaClient, storage: MediaStorage
             UNION ALL SELECT 1 FROM "PrivateWorkItem" WHERE jsonb_path_exists("data", '$.**.storageKey ? (@ == $key)', jsonb_build_object('key', ${candidate.storageKey}::text))
             UNION ALL SELECT 1 FROM "InboundUpdate" WHERE jsonb_path_exists("payload", '$.**.storageKey ? (@ == $key)', jsonb_build_object('key', ${candidate.storageKey}::text))
           ) AS present`;
-        if (refs[0]?.present !== false) {
-          // Rotate shared objects so they do not starve later unreferenced intents.
-          await tx.systemSetting.updateMany({ where: { key: job.key, value: job.value }, data: { updatedAt: new Date() } });
-          return false; // unknown is not absence
-        }
-        await storage.remove(candidate.storageKey); // idempotent; intent survives failure/rollback
-        await tx.systemSetting.deleteMany({ where: { key: job.key, value: job.value } });
+        if (refs[0]?.present !== false) return false;
+        const fenceKey = FILE_DELETION_FENCE_PREFIX + digest(candidate.storageKey);
+        await tx.systemSetting.upsert({ where: { key: fenceKey },
+          create: { key: fenceKey, value: 'PERMANENT_STORAGE_KEY_RETIREMENT_V1' }, update: {} });
         return true;
-      }, { maxWait: 5_000, timeout: 20_000 });
-      if (removed) { result.deletedFiles += 1; result.deletedBytes += file.size; }
-    } catch {
-      result.failures.push({ publicCode: file?.publicCode ?? 'FILE_DELETION', error: 'FILE_DELETION_PENDING: задание сохранено для повторной проверки/удаления файла.' });
+      }, { maxWait: 5_000, timeout: 5_000, isolationLevel: 'ReadCommitted' });
+      if (!fenced) {
+        state.reason = 'REFERENCED_OR_CHANGED';
+        if (state.attempts >= MAX_ATTEMPTS) state.status = 'exhausted';
+        await saveState(); continue;
+      }
+      // No database transaction or lock is held during external I/O.
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([
+          storage.remove(candidate.storageKey),
+          new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Error('STORAGE_RESULT_UNKNOWN')), timeoutMs); }),
+        ]);
+      } finally { if (timer) clearTimeout(timer); }
+      await db.$transaction(async tx => {
+        await tx.systemSetting.deleteMany({ where: { key: job.key, value: job.value } });
+        await tx.systemSetting.deleteMany({ where: { key: stateKey } });
+      });
+      result.deletedFiles += 1; result.deletedBytes += file.size;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : '';
+      const invalid = !file || reason.startsWith('INVALID_');
+      state = { version: 1, attempts: Math.min(MAX_ATTEMPTS, Number.isInteger(state?.attempts) ? state.attempts : 0),
+        status: invalid ? 'invalid' : reason === 'STORAGE_RESULT_UNKNOWN' ? 'unknown' : state.attempts >= MAX_ATTEMPTS ? 'exhausted' : 'pending',
+        nextAttemptAt: now() + RETRY_MS,
+        reason: invalid ? 'INVALID_RECORD_REQUIRES_REVIEW' : reason === 'STORAGE_RESULT_UNKNOWN' ? 'STORAGE_RESULT_UNKNOWN' : 'FILE_DELETION_FAILED' };
+      // If persistence is unavailable, abort the sweep rather than spin or infer success.
+      if (!invalidSavedState) await saveState(); // preserve damaged metadata verbatim for review
+      result.failures.push({ publicCode: file?.publicCode ?? 'FILE_DELETION', error: `FILE_DELETION_PENDING: ${state.reason}; ${state.status}; запись сохранена.` });
     }
   }
   return result;
