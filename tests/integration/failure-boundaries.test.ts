@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { Prisma, type PrismaClient } from '@prisma/client';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { UpdateDispatcher } from '../../src/server/update-dispatcher';
@@ -321,6 +322,21 @@ describeIntegration('durable failure boundaries', () => {
       await Promise.all([first.waitForIdle(), second.waitForIdle()]); vi.useRealTimers();
     }
     expect(max.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies the additive claim-token migration without changing legacy inbox data', async () => {
+    await db.$transaction(async tx => {
+      await tx.$executeRawUnsafe('CREATE SCHEMA inbox_migration_probe');
+      await tx.$executeRawUnsafe('SET LOCAL search_path TO inbox_migration_probe, public');
+      await tx.$executeRawUnsafe('CREATE TABLE "InboundUpdate" (LIKE public."InboundUpdate" INCLUDING DEFAULTS)');
+      await tx.$executeRawUnsafe('ALTER TABLE "InboundUpdate" DROP COLUMN "processingToken"');
+      await tx.$executeRawUnsafe(`INSERT INTO "InboundUpdate" (id, "externalUpdateKey", "updateType", payload, "updatedAt") VALUES ('legacy', 'legacy', 'bot_started', '{}', NOW())`);
+      const before = await tx.$queryRawUnsafe<Array<{ id: string; status: string; payload: object }>>('SELECT id, status, payload FROM "InboundUpdate"');
+      await tx.$executeRawUnsafe(readFileSync('prisma/migrations/20261006120000_inbox_processing_token/migration.sql', 'utf8'));
+      const after = await tx.$queryRawUnsafe<Array<{ id: string; status: string; payload: object; processingToken: string | null }>>('SELECT id, status, payload, "processingToken" FROM "InboundUpdate"');
+      expect(after).toEqual(before.map(row => ({ ...row, processingToken: null })));
+      await tx.$executeRawUnsafe('DROP SCHEMA inbox_migration_probe CASCADE');
+    });
   });
 
 });

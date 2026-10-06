@@ -30,6 +30,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -45,6 +46,14 @@ jobs:
       - name: Unit
         if: always()
         run: npx vitest run tests/unit --reporter=default --reporter=json --outputFile=evidence/unit.json 2>&1 | tee evidence/unit.txt
+      - name: Compare existing drain race on unchanged main
+        if: always()
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/boundaries-baseline" bbfa7b91c3a149d8951d36a28aefbe9b8e3ffa6c
+          ln -s "$GITHUB_WORKSPACE/node_modules" "$RUNNER_TEMP/boundaries-baseline/node_modules"
+          cp tests/integration/outbox-drain-snapshot.test.ts "$RUNNER_TEMP/boundaries-baseline/tests/integration/"
+          cd "$RUNNER_TEMP/boundaries-baseline"
+          npx vitest run tests/integration/outbox-drain-snapshot.test.ts --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/evidence/drain-baseline.json" 2>&1 | tee "$GITHUB_WORKSPACE/evidence/drain-baseline.txt"
       - name: Integration
         if: always()
         run: >-
@@ -52,7 +61,7 @@ jobs:
           tests/integration/transactional-workflow.test.ts tests/integration/retention.test.ts
           tests/integration/reliable-delivery.test.ts tests/integration/delivery-reliability.test.ts
           tests/integration/delivery-review-regressions.test.ts tests/integration/delivery-worker-lifecycle.test.ts
-          tests/integration/parallel-outbox.test.ts
+          tests/integration/parallel-outbox.test.ts tests/integration/outbox-drain-snapshot.test.ts
           --reporter=default --reporter=json --outputFile=evidence/integration.json
           2>&1 | tee evidence/integration.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
