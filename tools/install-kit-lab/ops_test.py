@@ -301,7 +301,13 @@ CREATE EVENT TRIGGER synthetic_failure ON ddl_command_start EXECUTE FUNCTION syn
                     # Controlled real Docker exit replaces only this stopped
                     # synthetic container. No candidate image is modified.
                     run('docker','rm',self.name)
-                    run('docker','run','--name',self.name,'--entrypoint','node',self.images['main'],'-e','process.exit(17)',check=False)
+                    run('docker','run','--name',self.name,
+                        '--label','com.docker.compose.project='+self.name,
+                        '--label','com.docker.compose.service=app',
+                        '--label','com.docker.compose.config-hash=synthetic-start-failure',
+                        '--label','com.docker.compose.container-number=1',
+                        '--label','com.docker.compose.oneoff=False',
+                        '--entrypoint','node',self.images['main'],'-e','process.exit(17)',check=False)
                     return subprocess.CompletedProcess(args,125,'','synthetic start failure')
                 return actual(args,*pos,**kw)
             with patch.object(o,'command',side_effect=failed):
