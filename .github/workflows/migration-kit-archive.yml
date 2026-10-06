@@ -1,0 +1,79 @@
+name: Verify reviewed migration kit archive on fresh Docker
+on:
+  push:
+    branches: [codex/migration-install-kit]
+    paths:
+      - .github/workflows/migration-kit-archive.yml
+      - tools/install-kit-lab/verify_archive.py
+permissions:
+  contents: read
+  actions: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  verify-archive:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Require the exact successful source run, without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/bassixs/Incident-Management/actions/runs/37539492499 > source-run.json
+          python3 - <<'PY'
+          import json
+          r=json.load(open('source-run.json'))
+          if r['head_sha']!='e93e9504285c4732d1fdf91d7fd818240852d9d4' or r['conclusion']!='success' or r['head_branch']!='codex/migration-install-kit':
+              raise SystemExit('Wrong or unverified source run')
+          PY
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 37539492499
+          name: installation-kit
+          path: installation-kit
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 37539492499
+          name: migration-kit-evidence
+          path: evidence
+      - name: Verify original checksums and add exact-build code manifests
+        run: |
+          (cd installation-kit && sha256sum -c SHA256SUMS)
+          cp evidence/lab-results/main-files.json installation-kit/
+          cp evidence/lab-results/reserve-files.json installation-kit/
+          python3 - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          r=json.load(open('source-run.json'))
+          p=Path('installation-kit')
+          (p/'VERIFIED-SOURCE.json').write_text(json.dumps({k:r[k] for k in ('id','html_url','head_sha','conclusion')},indent=2))
+          sums=[]
+          for f in sorted(p.rglob('*')):
+              if f.is_file() and f.name!='SHA256SUMS':
+                  with f.open('rb') as stream: h=hashlib.file_digest(stream,'sha256').hexdigest()
+                  sums.append(h+'  '+f.relative_to(p).as_posix())
+          (p/'SHA256SUMS').write_text('\n'.join(sums)+'\n')
+          PY
+      - name: Load the actual archive on an empty Docker daemon and verify every code file
+        run: python3 tools/install-kit-lab/verify_archive.py 2>&1 | tee archive-console.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: fresh-archive-proof
+          path: |
+            fresh-archive-verification.json
+            archive-console.txt
+            source-run.json
+          retention-days: 14
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: installation-kit-complete
+          path: installation-kit/
+          compression-level: 0
+          retention-days: 14

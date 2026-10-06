@@ -2,6 +2,12 @@ name: Migration aware installation kit isolated validation
 on:
   push:
     branches: [codex/migration-install-kit]
+    paths:
+      - tools/migration-kit/**
+      - tools/install-kit-lab/restore.py
+      - tools/install-kit-lab/ops_test.py
+      - tools/install-kit-lab/build_kit.py
+      - tools/reserve-container-lab/run.py
 permissions:
   contents: read
 defaults:
