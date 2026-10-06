@@ -1,0 +1,152 @@
+name: PR13 compatible reserve isolated validation
+on:
+  push:
+    branches: [codex/reserve-pr13]
+permissions:
+  contents: read
+concurrency:
+  group: reserve-pr13-validation
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+jobs:
+  regression:
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [reserve, pr13, main]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: synthetic
+          POSTGRES_PASSWORD: synthetic-only
+          POSTGRES_DB: incident_test
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U synthetic -d incident_test" --health-interval 5s --health-timeout 3s --health-retries 15
+    env:
+      DATABASE_URL: postgresql://synthetic:synthetic-only@127.0.0.1:5432/incident_test
+      TEST_DATABASE_URL: postgresql://synthetic:synthetic-only@127.0.0.1:5432/incident_test
+      BOT_TOKEN: synthetic-only
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Exact runtime selection
+        run: |
+          mkdir -p evidence
+          ref="$GITHUB_SHA"
+          if [ '${{ matrix.version }}' = main ]; then ref=bbfa7b91c3a149d8951d36a28aefbe9b8e3ffa6c; fi
+          if [ '${{ matrix.version }}' = pr13 ]; then ref=59149006a7b3d30d01218fad84360e7d71e6d79e; fi
+          git worktree add --detach "$RUNNER_TEMP/runtime" "$ref"
+          git -C "$RUNNER_TEMP/runtime" rev-parse HEAD > evidence/runtime-sha.txt
+          git -C "$RUNNER_TEMP/runtime" status --porcelain > evidence/runtime-status.txt
+          cd "$RUNNER_TEMP/runtime"
+          npm ci && npx prisma generate && npx prisma migrate deploy
+      - name: Typecheck build and unit on reserve
+        if: matrix.version == 'reserve'
+        run: |
+          cd "$RUNNER_TEMP/runtime"
+          npm run typecheck 2>&1 | tee "$GITHUB_WORKSPACE/evidence/typecheck.txt"
+          npm run build 2>&1 | tee "$GITHUB_WORKSPACE/evidence/build.txt"
+          npx vitest run tests/unit --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/evidence/unit.json" 2>&1 | tee "$GITHUB_WORKSPACE/evidence/unit.txt"
+      - name: Backport protections and delivery regression
+        if: always() && matrix.version == 'reserve'
+        run: |
+          cd "$RUNNER_TEMP/runtime"
+          npx vitest run tests/integration/failure-boundaries.test.ts tests/integration/failure-boundaries-review.test.ts tests/integration/reserve-switch.test.ts tests/integration/retention.test.ts tests/integration/transactional-workflow.test.ts tests/integration/reliable-delivery.test.ts tests/integration/delivery-reliability.test.ts tests/integration/delivery-review-regressions.test.ts tests/integration/parallel-inbox.test.ts tests/integration/parallel-outbox.test.ts tests/integration/resident-draft-safety.test.ts --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/evidence/core.json" 2>&1 | tee "$GITHUB_WORKSPACE/evidence/core.txt"
+      - name: Same nine failures on unchanged runtimes (do not hide exit code)
+        if: always()
+        run: |
+          cd "$RUNNER_TEMP/runtime"
+          sha256sum tests/integration/{optional-contact,parallel-photo-flow,manual-cleanup}.test.ts > "$GITHUB_WORKSPACE/evidence/nine-test-hashes.txt"
+          npx vitest run tests/integration/optional-contact.test.ts tests/integration/parallel-photo-flow.test.ts tests/integration/manual-cleanup.test.ts --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/evidence/nine.json" 2>&1 | tee "$GITHUB_WORKSPACE/evidence/nine.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: regression-${{ matrix.version }}
+          path: evidence/
+          retention-days: 14
+  compare:
+    needs: regression
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: regression-*
+          path: comparisons
+      - name: Compare every test outcome and full failures
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          results={}
+          hashes=[]
+          for version in ['main','pr13','reserve']:
+              path=Path('comparisons','regression-'+version)
+              data=json.loads((path/'nine.json').read_text())
+              assert data['numPendingTests']==0
+              results[version]={t['fullName']:t['status'] for f in data['testResults'] for t in f['assertionResults']}
+              hashes.append((path/'nine-test-hashes.txt').read_text())
+          assert len(set(hashes))==1, 'test bytes differ'
+          differences={v:[{'test':k,'main':results['main'].get(k),'actual':x} for k,x in r.items() if results['main'].get(k)!=x] for v,r in results.items()}
+          Path('comparisons/comparison.json').write_text(json.dumps({'outcomes':results,'differences':differences},indent=2))
+          assert not any(differences.values()),differences
+          print('Identical outcomes against unchanged main:',len(results['main']))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: nine-comparison
+          path: comparisons/
+          retention-days: 14
+  containers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Whole containers, migrations, switch and measured admission
+        run: python3 tools/reserve-container-lab/run.py 2>&1 | tee container-console.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: container-switch
+          path: |
+            lab-results/
+            container-console.txt
+          retention-days: 14
+  r4:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 58febee9f9e51a816e45d167ab06cf886508608d
+          persist-credentials: false
+      - name: Unchanged accepted R4 including real Docker and Linux flock
+        run: |
+          sha256sum -c SHA256SUMS
+          test -z "$(docker ps -aq)"
+          docker pull --platform linux/amd64 python:3.12-slim
+          python3 tests/run_checks.py --docker
+          sha256sum -c SHA256SUMS
+          test -z "$(docker ps -aq)"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: unchanged-r4
+          path: |
+            results/
+            SHA256SUMS
+          retention-days: 14

@@ -177,6 +177,9 @@ describeIntegration('durable delivery and button guards', () => {
     expect(queued.status).toBe(OutboxStatus.PENDING);
     expect(queued.attempts).toBe(1);
 
+    // Drain the wake scheduled by the first failed send before making the row due.
+    // Otherwise flush() can join an earlier empty SELECT snapshot (see regression).
+    await messages.flush();
     fail = false;
     await prisma.outboundMessage.update({
       where: { id: queued.id },
@@ -187,6 +190,7 @@ describeIntegration('durable delivery and button guards', () => {
     const sent = await prisma.outboundMessage.findUniqueOrThrow({ where: { id: queued.id } });
     expect(sent.status).toBe(OutboxStatus.SENT);
     expect(sent.firstMessageId).toBe('mid-after-retry');
+    messages.stop(); await messages.waitForIdle();
   });
 
   it('stores an inbound update before processing and ignores a redelivery', async () => {

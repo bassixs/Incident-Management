@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { latency, withDeliveryTrace } from '../utils/latency';
 import { AsyncActivity } from '../utils/async-activity';
 import { minimiseInbound } from '../privacy/inbound-privacy';
@@ -30,6 +31,8 @@ export class UpdateDispatcher {
   private readonly activity = new AsyncActivity();
   private timer?: NodeJS.Timeout;
   private drainPromise?: Promise<void>;
+  // Failed state writes are retried by the existing sweep, never by replaying business work.
+  private readonly settlements = new Map<string, { lockedAt: Date; token: string; beforeDispatch: boolean; contact: boolean; detail: string }>();
   private readonly reservations = new Map<string, Promise<Reservation>>();
 
   constructor(
@@ -97,6 +100,7 @@ export class UpdateDispatcher {
         payload: {},
         lastError: CONTACT_FAILURE,
         lockedAt: null,
+        processingToken: null,
       },
     });
     const interrupted = await this.prisma.inboundUpdate.updateMany({
@@ -105,6 +109,7 @@ export class UpdateDispatcher {
         status: InboxStatus.FAILED,
         lastError: 'Обработка была прервана перезапуском; требуется безопасная ручная проверка.',
         lockedAt: null,
+        processingToken: null,
       },
     });
     if (interrupted.count > 0) {
@@ -144,20 +149,24 @@ export class UpdateDispatcher {
   }
 
   private async drain(): Promise<void> {
+    await this.settleFailures();
     const active = new Map<string, Promise<void>>();
     let failure: unknown;
     try {
       while (!this.stopping && !this.paused && !failure) {
         while (active.size < this.concurrency && !this.stopping && !this.paused && !failure) {
           const blocked = [...active.keys()];
-          const row = await this.prisma.inboundUpdate.findFirst({
-            where: { status: InboxStatus.PENDING, nextAttemptAt: { lte: new Date() },
-              partitionKey: { notIn: blocked } },
-            orderBy: { sequence: 'asc' },
-            select: { id: true, partitionKey: true },
-          });
+          // A future retry or active claim is still the head of its lane.
+          const [row] = await this.prisma.$queryRaw<Array<{ id: string; partitionKey: string }>>`
+            SELECT i.id, i."partitionKey" FROM "InboundUpdate" i
+            WHERE i.status='PENDING' AND i."nextAttemptAt" <= ${new Date()}
+              ${blocked.length ? Prisma.sql`AND i."partitionKey" NOT IN (${Prisma.join(blocked)})` : Prisma.empty}
+              AND NOT EXISTS (SELECT 1 FROM "InboundUpdate" head
+                WHERE head."partitionKey"=i."partitionKey" AND head.sequence < i.sequence
+                  AND head.status IN ('PENDING','PROCESSING'))
+            ORDER BY i.sequence LIMIT 1`;
           if (!row && blocked.length && !active.size) continue;
-          if (!row || this.stopping || this.paused) break;
+          if (!row || this.stopping || this.paused || failure) break;
           const task = this.processById(row.id)
             .catch(error => { failure = error; })
             .finally(() => { active.delete(row.partitionKey); });
@@ -179,14 +188,39 @@ export class UpdateDispatcher {
 
   private async processClaimed(id: string): Promise<void> {
     const processingStartedAt = Date.now();
-    const claimed = await this.prisma.inboundUpdate.updateMany({
-      where: { id, status: InboxStatus.PENDING },
-      data: { status: InboxStatus.PROCESSING, lockedAt: new Date(), attempts: { increment: 1 } },
-    });
-    if (claimed.count !== 1) return;
-
-    const row = await this.prisma.inboundUpdate.findUniqueOrThrow({ where: { id } });
+    const lockedAt = new Date();
+    const token = randomUUID();
+    // No claim exists yet: a failed eligibility read stops this sweep,
+    // rather than spinning on the same unclaimed row.
+    // Direct/long-polling calls must obey the same lane rule as drain.
+    const eligible = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT i.id FROM "InboundUpdate" i WHERE i.id=${id}
+        AND i.status='PENDING' AND i."nextAttemptAt" <= ${new Date()}
+        AND NOT EXISTS (SELECT 1 FROM "InboundUpdate" head
+          WHERE head."partitionKey"=i."partitionKey" AND head.sequence < i.sequence
+            AND head.status IN ('PENDING','PROCESSING'))`;
+    if (!eligible.length) return;
     try {
+      const claimed = await this.prisma.inboundUpdate.updateMany({
+        where: { id, status: InboxStatus.PENDING, nextAttemptAt: { lte: new Date() } },
+        data: { status: InboxStatus.PROCESSING, lockedAt, processingToken: token, attempts: { increment: 1 } },
+      });
+      if (claimed.count !== 1) return;
+    } catch {
+      // Even a lost claim ACK cannot imply that business work started. The CAS
+      // below touches only the lease written by this attempt, if it exists.
+      this.settlements.set(id, { lockedAt, token, beforeDispatch: true, contact: false,
+        detail: 'PRE_DISPATCH_CLAIM_UNCERTAIN: бизнес-обработка не начиналась.' });
+      await this.settleFailures();
+      return;
+    }
+
+    let row: Awaited<ReturnType<typeof this.prisma.inboundUpdate.findUniqueOrThrow>> | undefined;
+    let businessStarted = false;
+    try {
+      row = await this.prisma.inboundUpdate.findUniqueOrThrow({ where: { id } });
+      if (row.status !== InboxStatus.PROCESSING || row.processingToken !== token || row.lockedAt?.getTime() !== lockedAt.getTime()) return;
+      const claimedRow = row;
       // Inbox rows admitted before draft-screen binding was introduced have no
       // reliable destination for private text. Do not reinterpret them against
       // a new resident draft or a newly selected employee workspace after restart.
@@ -199,43 +233,71 @@ export class UpdateDispatcher {
       const payload = unboundPrivateText
         ? { ...saved, residentDraftInput: { sessionId: '', draftToken: '', screenToken: '' } }
         : saved;
+      businessStarted = true;
       await withDeliveryTrace({ inboxId: row.id, receivedAt: row.receivedAt.getTime() }, async () => {
-        latency('inbox-start', { waitMs: processingStartedAt - row.receivedAt.getTime(), attempt: row.attempts });
+        latency('inbox-start', { waitMs: processingStartedAt - claimedRow.receivedAt.getTime(), attempt: claimedRow.attempts });
         await this.max.dispatch(payload as unknown as Update);
       });
-      await this.prisma.inboundUpdate.update({
-        where: { id },
+      await this.prisma.inboundUpdate.updateMany({
+        where: { id, status: InboxStatus.PROCESSING, lockedAt, processingToken: token },
         data: {
           status: InboxStatus.PROCESSED,
           processedAt: new Date(),
           lockedAt: null,
+          processingToken: null,
           lastError: null,
           payload: {},
         },
       });
     } catch (error) {
-      const payload = row.payload as { verifiedDraftContact?: unknown; draftPhoneInput?: unknown };
-      const contact = !!(payload.verifiedDraftContact || payload.draftPhoneInput);
-      const detail = contact ? CONTACT_FAILURE : error instanceof Error ? error.message : String(error);
-      await this.prisma.inboundUpdate.update({
-        where: { id },
-        data: {
-          status: InboxStatus.FAILED,
-          lockedAt: null,
-          lastError: detail.slice(0, 4_000),
-          ...(contact ? { payload: {} } : {}),
-        },
-      });
-      log.error({ inboxId: id, key: row.externalUpdateKey, err: detail }, 'inbox update requires attention');
+      const payload = row?.payload as { verifiedDraftContact?: unknown; draftPhoneInput?: unknown } | undefined;
+      const contact = !!(payload?.verifiedDraftContact || payload?.draftPhoneInput);
+      const detail = !businessStarted ? 'PRE_DISPATCH_READ_FAILED: бизнес-обработка не начиналась.'
+        : contact ? CONTACT_FAILURE : error instanceof Error ? error.message : String(error);
+      this.settlements.set(id, { lockedAt, token, beforeDispatch: !businessStarted, contact, detail: detail.slice(0, 4_000) });
+      await this.settleFailures();
+      log.error({ inboxId: id, phase: businessStarted ? 'business-uncertain' : 'before-dispatch' }, 'inbox failure recorded; no blind business replay');
     }
   }
 
-  /** Handle an update end to end (used by long polling in development). */
-  async handle(update: Update): Promise<'processed' | 'duplicate'> {
+  private async settleFailures(): Promise<void> {
+    for (const [id, failure] of this.settlements) {
+      const where = { id, status: InboxStatus.PROCESSING, lockedAt: failure.lockedAt, processingToken: failure.token };
+      // A confirmed pre-dispatch read failure is safe to retry, bounded and delayed.
+      // If this write fails, the next existing sweep retries only this CAS.
+      if (failure.beforeDispatch) {
+        await this.prisma.inboundUpdate.updateMany({ where: { ...where, attempts: { lt: 3 } },
+          data: { status: InboxStatus.PENDING, lockedAt: null, processingToken: null, nextAttemptAt: new Date(Date.now() + 5_000), lastError: failure.detail } });
+      }
+      if (failure.beforeDispatch) await this.prisma.inboundUpdate.updateMany({
+        where: { ...where, attempts: { gte: 3 }, OR: [
+          { payload: { path: ['verifiedDraftContact'], not: Prisma.AnyNull } },
+          { payload: { path: ['draftPhoneInput'], not: Prisma.AnyNull } },
+        ] },
+        data: { status: InboxStatus.FAILED, lockedAt: null, processingToken: null, payload: {},
+          lastError: failure.detail + ' ' + CONTACT_FAILURE },
+      });
+      await this.prisma.inboundUpdate.updateMany({ where,
+        data: { status: InboxStatus.FAILED, lockedAt: null, processingToken: null, lastError: failure.detail,
+          ...(failure.contact ? { payload: {} } : {}) } });
+      this.settlements.delete(id);
+    }
+  }
+
+  /** Long polling uses the same ordered drain; a deferred row is not processed. */
+  async handle(update: Update): Promise<'processed' | 'duplicate' | 'queued' | 'failed'> {
     const reservation = await this.reserve(update);
     if (!reservation.fresh || !reservation.id) return 'duplicate';
-    await this.processById(reservation.id);
-    return 'processed';
+    await this.kick();
+    const current = () => this.prisma.inboundUpdate.findUnique({ where: { id: reservation.id }, select: { status: true } });
+    let row = await current();
+    if (row?.status === InboxStatus.PENDING) {
+      // The first kick may have joined a drain whose final selection preceded
+      // this reservation. One fresh pass closes that race; never poll a future head.
+      await this.kick();
+      row = await current();
+    }
+    return row?.status === InboxStatus.PROCESSED ? 'processed' : row?.status === InboxStatus.FAILED ? 'failed' : 'queued';
   }
 
   /** Housekeeping so both old and new dedup tables stay bounded. */

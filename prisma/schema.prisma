@@ -460,6 +460,8 @@ model InboundUpdate {
   attempts          Int         @default(0)
   nextAttemptAt     DateTime    @default(now())
   lockedAt          DateTime?
+  /// Unique owner of one inbox claim; null for legacy and settled events.
+  processingToken   String?
   lastError         String?
   receivedAt        DateTime    @default(now())
   processedAt       DateTime?
