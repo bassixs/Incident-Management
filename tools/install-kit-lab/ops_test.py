@@ -212,13 +212,15 @@ CREATE EVENT TRIGGER synthetic_failure ON ddl_command_start EXECUTE FUNCTION syn
             self.stop(fd)
             holder=subprocess.Popen(['docker','exec','-i',PG,'psql','-XqAt','-v','ON_ERROR_STOP=1','-U','lab','-d',self.db],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
             try:
-                holder.stdin.write('BEGIN; LOCK TABLE "InboundUpdate" IN ACCESS EXCLUSIVE MODE; SELECT \'LOCK_READY\';\n');holder.stdin.flush()
-                import select
-                self.assertTrue(select.select([holder.stdout],[],[],30)[0],'lock holder timeout')
-                self.assertEqual(holder.stdout.readline().strip(),'LOCK_READY')
                 actual=o.command
                 def lost(args,*pos,**kw):
                     if args[:2]==['docker','run'] and '--name' in args and self.migrator in args:
+                        # Acquire only after read-only preflight, immediately
+                        # before the real CLI starts its first DDL statement.
+                        holder.stdin.write('BEGIN; LOCK TABLE "InboundUpdate" IN ACCESS EXCLUSIVE MODE; SELECT \'LOCK_READY\';\n');holder.stdin.flush()
+                        import select
+                        self.assertTrue(select.select([holder.stdout],[],[],30)[0],'lock holder timeout')
+                        self.assertEqual(holder.stdout.readline().strip(),'LOCK_READY')
                         actual(args[:2]+['-d']+args[2:],*pos,**kw)
                         wait(lambda:sql(self.db,"SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'ALTER TABLE%';").strip()!='0')
                         raise o.Refusal('COMMAND_UNAVAILABLE_OR_TIMEOUT')
