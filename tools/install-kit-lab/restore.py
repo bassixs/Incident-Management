@@ -30,7 +30,7 @@ def fingerprint(db):
     for table in tables:
         result[table]=sql(f'''SELECT count(*)||':'||md5(coalesce(string_agg(doc,E'\\n' ORDER BY doc),'')) FROM (SELECT row_to_json(t)::text doc FROM "{table}" t) s''',db).stdout.strip()
     result['sequences']=sql("SELECT sequencename||':'||last_value FROM pg_sequences WHERE schemaname='public' ORDER BY 1",db).stdout
-    result['guards']=sql("SELECT c.relname||':'||t.tgenabled||':'||pg_get_triggerdef(t.oid) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid WHERE t.tgname='guard_retired_storage' ORDER BY 1",db).stdout
+    result['guards']=sql("SELECT c.relname||':'||t.tgenabled::text||':'||pg_get_triggerdef(t.oid) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid WHERE t.tgname='guard_retired_storage' ORDER BY 1",db).stdout
     result['function']=sql("SELECT pg_get_functiondef('guard_retired_storage_reference'::regproc)",db).stdout
     return result
 
@@ -39,7 +39,7 @@ TABLES={
  'AnswerAttachment':('"answerId",type,"storageKey"',"'a','FILE','key-'||n",'storageKey'),
  'ClarificationAttachment':('"clarificationId",type,"storageKey"',"'c','FILE','key-'||n",'storageKey'),
  'InboundUpdate':('"externalUpdateKey","updateType",payload,"updatedAt"',"'event-'||n,'synthetic',jsonb_build_object('storageKey','key-'||n),now()",'payload'),
- 'OutboundMessage':('"targetType","targetId",payload,attachments,"updatedAt"',"'user',n,jsonb_build_object('deliveryProgress',jsonb_build_object('version',1,'mids',jsonb_build_array('synthetic-confirmed-mid'))),jsonb_build_array(jsonb_build_object('storageKey','key-'||n)),now()",'attachments'),
+ 'OutboundMessage':('"targetType","targetId",payload,attachments,"updatedAt"',"'user',n,jsonb_build_object('deliveryProgress',jsonb_build_object('version',1,'planHash',repeat('a',64),'totalParts',2,'mids',jsonb_build_array('synthetic-confirmed-mid'))),jsonb_build_array(jsonb_build_object('storageKey','key-'||n)),now()",'attachments'),
  'OperatorSession':('"maxUserId","chatId",type,data,"expiresAt"',"n,n,'WAITING_INCIDENT_CONFIRMATION',jsonb_build_object('storageKey','key-'||n),'2099-01-01'",'data'),
  'PrivateWorkItem':('"maxUserId","incidentId","originChatId",data,"updatedAt"',"1,'i',n,jsonb_build_object('storageKey','key-'||n),now()",'data'),
 }

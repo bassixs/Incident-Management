@@ -4,6 +4,9 @@ on:
     branches: [codex/migration-install-kit]
 permissions:
   contents: read
+defaults:
+  run:
+    shell: bash
 concurrency:
   group: migration-install-kit
   cancel-in-progress: false

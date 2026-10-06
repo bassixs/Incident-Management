@@ -93,6 +93,11 @@ class MigrationKit(unittest.TestCase):
         suffix=self.rootcase.name.replace('-','').replace('_','')
         self.db='test_'+suffix;self.name='kit-app-'+suffix;self.migrator='kit-migrate-'+suffix
         sql('postgres',f'CREATE DATABASE "{self.db}" TEMPLATE template_old;')
+        sql(self.db,"""INSERT INTO "OutboundMessage" (id,"targetType","targetId",payload,attachments,status,"lastError","updatedAt")
+SELECT 'preserved-failed-'||n,'user',n,'{}','[]','FAILED',CASE WHEN n<6 THEN 'MANUALLY_RETIRED_FOREIGN_BOT_ADDED' ELSE 'MAX_HTTP_403' END,now() FROM generate_series(0,7) n;
+INSERT INTO "OperatorSession" (id,"maxUserId","chatId",type,data,"expiresAt") VALUES ('preserved-draft',999,999,'WAITING_INCIDENT_CONFIRMATION','{"draftText":"Synthetic","draftMedia":[{"storageKey":"preserved.txt"}]}','2099-01-01');""")
+        self.protected_sql='''SELECT jsonb_build_object('failed',(SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM "OutboundMessage" t WHERE id LIKE 'preserved-failed-%'),'draft',(SELECT to_jsonb(t) FROM "OperatorSession" t WHERE id='preserved-draft'));'''
+        self.protected=sql(self.db,self.protected_sql)
         self.install=self.rootcase/'install';(self.install/'private').mkdir(parents=True)
         self.prepared=self.rootcase/'prepared';self.prepared.mkdir();(self.prepared/'run').mkdir()
         self.lock=self.rootcase/'backup.lock';self.lock.touch()
@@ -129,6 +134,7 @@ class MigrationKit(unittest.TestCase):
         # The lock must be available after every success/refusal/exception.
         with o.backup_lock(self.s): pass
         self.assertEqual((self.uploads/'preserved.txt').read_text(),'synthetic attachment')
+        self.assertEqual(sql(self.db,self.protected_sql),self.protected)
         sql('postgres',f'DROP DATABASE "{self.db}";')
 
     def cli(self,fd,script,*args,code=0,contains=None):
