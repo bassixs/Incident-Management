@@ -303,38 +303,42 @@ def scenarios():
     check('all synthetic incidents and answers retained',len(final['incidents'])==5 and len(final['answers'])==5)
     save('final-synthetic-db.json',final); save('http-ledger.json',control())
 
-ownership_confirmed = False
-try:
-    if os.environ.get('GITHUB_ACTIONS')!='true':
-        raise RuntimeError('This runner is restricted to the approved disposable GitHub Actions environment')
-    check('empty disposable daemon',not docker('ps','-aq').stdout.strip())
-    ownership_confirmed = True
-    build(); setup(); scenarios()
-    report['benchmark']=helper('benchmark')
-    save('benchmark.json',report['benchmark'])
-    report['result']='passed'
-except Exception:
-    report['result']='failed'; report['error']=traceback.format_exc(); print(report['error'],flush=True)
-    raise
-finally:
-    save('report.json',report)
-    for name in docker('ps','-a','--format','{{.Names}}',check=False).stdout.splitlines():
-        if name.startswith('reserve-lab-'):
-            log=docker('logs',name,check=False); (OUT/(name+'.log')).write_text(log.stdout+log.stderr)
-    if docker('inspect',MOCK,check=False).returncode==0:
-        try: save('http-ledger.json',control())
-        except Exception: pass
-
-    if ownership_confirmed:
-        # Only resources created by this lab; no global prune.
-        for name in docker('ps','-a','--format','{{.Names}}').stdout.splitlines():
+def main():
+    ownership_confirmed = False
+    try:
+        if os.environ.get('GITHUB_ACTIONS')!='true':
+            raise RuntimeError('This runner is restricted to the approved disposable GitHub Actions environment')
+        check('empty disposable daemon',not docker('ps','-aq').stdout.strip())
+        ownership_confirmed = True
+        build(); setup(); scenarios()
+        report['benchmark']=helper('benchmark')
+        save('benchmark.json',report['benchmark'])
+        report['result']='passed'
+    except Exception:
+        report['result']='failed'; report['error']=traceback.format_exc(); print(report['error'],flush=True)
+        raise
+    finally:
+        save('report.json',report)
+        for name in docker('ps','-a','--format','{{.Names}}',check=False).stdout.splitlines():
             if name.startswith('reserve-lab-'):
-                if json.loads(docker('inspect',name).stdout)[0]['State']['Running']:
-                    docker('kill','--signal=TERM',name)
-                    docker('wait',name,timeout=90)
-                docker('rm',name)
-        if docker('volume','inspect',VOLUME,check=False).returncode==0: docker('volume','rm',VOLUME)
-        if docker('network','inspect',NET,check=False).returncode==0: docker('network','rm',NET)
-        remaining=docker('ps','-aq').stdout.strip()
-        save('cleanup.json', {'remainingContainers':remaining,'volumeAbsent':docker('volume','inspect',VOLUME,check=False).returncode!=0,'networkAbsent':docker('network','inspect',NET,check=False).returncode!=0})
-        check('owned lab cleaned without prune',not remaining)
+                log=docker('logs',name,check=False); (OUT/(name+'.log')).write_text(log.stdout+log.stderr)
+        if docker('inspect',MOCK,check=False).returncode==0:
+            try: save('http-ledger.json',control())
+            except Exception: pass
+
+        if ownership_confirmed:
+            # Only resources created by this lab; no global prune.
+            for name in docker('ps','-a','--format','{{.Names}}').stdout.splitlines():
+                if name.startswith('reserve-lab-'):
+                    if json.loads(docker('inspect',name).stdout)[0]['State']['Running']:
+                        docker('kill','--signal=TERM',name)
+                        docker('wait',name,timeout=90)
+                    docker('rm',name)
+            if docker('volume','inspect',VOLUME,check=False).returncode==0: docker('volume','rm',VOLUME)
+            if docker('network','inspect',NET,check=False).returncode==0: docker('network','rm',NET)
+            remaining=docker('ps','-aq').stdout.strip()
+            save('cleanup.json', {'remainingContainers':remaining,'volumeAbsent':docker('volume','inspect',VOLUME,check=False).returncode!=0,'networkAbsent':docker('network','inspect',NET,check=False).returncode!=0})
+            check('owned lab cleaned without prune',not remaining)
+
+if __name__ == '__main__':
+    main()
