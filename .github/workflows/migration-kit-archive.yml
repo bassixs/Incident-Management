@@ -61,7 +61,42 @@ jobs:
           (p/'SHA256SUMS').write_text('\n'.join(sums)+'\n')
           PY
       - name: Load the actual archive on an empty Docker daemon and verify every code file
-        run: python3 tools/install-kit-lab/verify_archive.py 2>&1 | tee archive-console.txt
+        run: |
+          # GitHub's default daemon has preloaded images. Do not remove them.
+          # Use a separate managed containerd/data-root/socket, with no bridge.
+          engine="$RUNNER_TEMP/migration-kit-engine"
+          mkdir -p "$engine"
+          printf '{}\n' > "$engine/config.json"
+          docker image ls --no-trunc > default-daemon-before.txt
+          sudo dockerd --config-file "$engine/config.json" \
+            --data-root "$engine/data" --exec-root "$engine/exec" \
+            --pidfile "$engine/dockerd.pid" --host "unix://$engine/docker.sock" \
+            --bridge none --iptables=false --ip-forward=false --ip-masq=false \
+            > isolated-dockerd.log 2>&1 &
+          cleanup() {
+            if [ -f "$engine/dockerd.pid" ]; then
+              pid="$(cat "$engine/dockerd.pid")"
+              if sudo test -r "/proc/$pid/cmdline" && sudo grep -azq -- "$engine/data" "/proc/$pid/cmdline"; then
+                sudo kill -TERM "$pid"
+                for attempt in $(seq 1 60); do
+                  if ! sudo kill -0 "$pid" 2>/dev/null; then break; fi
+                  sleep 1
+                done
+                if sudo kill -0 "$pid" 2>/dev/null; then echo 'ISOLATED_ENGINE_STOP_TIMEOUT'; return 1; fi
+              fi
+            fi
+            env -u DOCKER_HOST docker image ls --no-trunc > default-daemon-after.txt
+            diff -u default-daemon-before.txt default-daemon-after.txt
+          }
+          trap cleanup EXIT
+          export DOCKER_HOST="unix://$engine/docker.sock"
+          ready=0
+          for attempt in $(seq 1 60); do
+            if docker info >/dev/null 2>&1; then ready=1; break; fi
+            sleep 1
+          done
+          test "$ready" = 1
+          python3 tools/install-kit-lab/verify_archive.py 2>&1 | tee archive-console.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -70,6 +105,9 @@ jobs:
             fresh-archive-verification.json
             archive-console.txt
             source-run.json
+            isolated-dockerd.log
+            default-daemon-before.txt
+            default-daemon-after.txt
           retention-days: 14
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
