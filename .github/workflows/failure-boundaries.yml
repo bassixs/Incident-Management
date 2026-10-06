@@ -62,6 +62,9 @@ jobs:
           tests/integration/reliable-delivery.test.ts tests/integration/delivery-reliability.test.ts
           tests/integration/delivery-review-regressions.test.ts tests/integration/delivery-worker-lifecycle.test.ts
           tests/integration/parallel-outbox.test.ts tests/integration/outbox-drain-snapshot.test.ts
+          tests/integration/parallel-inbox.test.ts tests/integration/parallel-photo-flow.test.ts
+          tests/integration/draft-screen-recovery.test.ts tests/integration/optional-contact.test.ts
+          tests/integration/resident-draft-safety.test.ts tests/integration/manual-cleanup.test.ts
           --reporter=default --reporter=json --outputFile=evidence/integration.json
           2>&1 | tee evidence/integration.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

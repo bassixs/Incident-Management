@@ -2,11 +2,14 @@
 -- serialize only on that key, never on a whole inbox/outbox/session table.
 CREATE OR REPLACE FUNCTION guard_retired_storage_reference() RETURNS trigger
 LANGUAGE plpgsql VOLATILE AS $body$
-DECLARE storage_key text;
+DECLARE storage_key text; previous_document jsonb := '{}';
 BEGIN
+  IF TG_OP = 'UPDATE' THEN previous_document := to_jsonb(OLD); END IF;
   FOR storage_key IN
     SELECT DISTINCT v #>> '{}' FROM jsonb_path_query(to_jsonb(NEW), '$.**.storageKey') v
-    WHERE jsonb_typeof(v) = 'string' AND (v #>> '{}') <> '' ORDER BY 1
+    WHERE jsonb_typeof(v) = 'string' AND (v #>> '{}') <> ''
+      AND NOT jsonb_path_exists(previous_document, '$.**.storageKey ? (@ == $key)', jsonb_build_object('key', v))
+    ORDER BY 1
   LOOP
     -- A transaction retaining an older snapshot cannot prove fence absence.
     IF current_setting('transaction_isolation') <> 'read committed' THEN

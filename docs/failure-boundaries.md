@@ -15,6 +15,10 @@ is reconciled through the same ownership predicate, without calling the handler.
 Only a failure **before** dispatch can return to `PENDING`: at most three claim
 attempts, with a five-second delay between them. Failures once dispatch has
 started remain `FAILED` for review, including an uncertain completion write.
+A PENDING retry with a future deadline and a PROCESSING claim hold their lane: a
+later sequence in that partition cannot be selected or directly claimed. Other
+partitions remain eligible. A terminal FAILED head releases its lane without
+replaying its business action; persistent PENDING ordering survives restart.
 `PROCESSED` is written only after dispatch returns. If its ACK is lost after the
 database accepted it, the error CAS cannot overwrite the completed row.
 
@@ -67,30 +71,58 @@ of storageKey>`. The string value is versioned JSON with `version`, `storageKey`
 Only a subsequent committed journal read permits file removal. A lost commit ACK
 does not cause speculative deletion; committed intents can be recovered later.
 
-The existing retention run drains at most 100 intents. It checks references in
-incident, answer and clarification attachments, outbound attachments/payloads,
-resident sessions, private work items and inbound payloads. Shared/unknown files
-are retained and rotated to avoid starving later intents. MAX photo references
-do not enter this journal. Failed removal leaves the intent for a later run;
-repeated physical removal must remain idempotent. A failure after the removal but
-before the journal commit can repeat the removal, never a business action.
+The existing retention run examines at most 100 intents. Every examined record
+rotates by `updatedAt`, including malformed, exhausted and not-yet-due records.
+The companion `retention.file-state.v1:<SHA256>` record stores version, attempts,
+status, nextAttemptAt and a technical reason. Attempts are persisted before work,
+limited to three, separated by at least 60 seconds; there is no new polling timer.
+Shared references consume this budget too: after exhaustion their intent remains
+for review, not silent deletion. Invalid original records are retained verbatim.
+Malformed companion state is also retained rather than guessed or repaired.
 
-Reference checks/removal use a separate transaction and bounded table locks
-(`lock_timeout=2s`, transaction timeout 20s). They occur **after** the incident
-deletion commit; they do not delete incident records. This briefly serializes
-reference writers, including the outbox. A representative deployment must assess
-storage latency and reference-scan cost before enabling the new retention code.
-Filesystem/S3 operations are not a distributed PostgreSQL transaction: storage
-keys must remain immutable and never be recycled for new content. A storage
-operation with unknown outcome retains its intent for reconciliation.
+A short READ COMMITTED transaction takes an advisory lock **only on the storage
+key**, checks current references in the seven reference tables and commits a
+permanent `retention.file-fence.v1:<SHA256>` record before external removal. The
+migration installs INSERT/UPDATE triggers on those tables. A writer adding a new
+storageKey takes the same key lock and rejects a committed fence. Existing keys
+retained by an UPDATE require no new reference lock. New reference writes under
+REPEATABLE READ/SERIALIZABLE fail closed, because their stale snapshot cannot prove
+fence absence; the ordinary application writes use READ COMMITTED. This behavior
+must be included in reserve/tool compatibility review.
+
+No table lock or open transaction is held during `storage.remove()`. Reference
+scanning has a two-second lock/statement timeout, a five-second transaction limit.
+The external call has a five-second observation deadline. **This is not I/O
+cancellation.** A timed-out call records `unknown`, retains intent and fence and
+receives no automatic retry. Its late resolution cannot create new references,
+mark the intent successful, or change other records. Explicit storage failures
+can retry within the budget. A process crash can leave ATTEMPT_STARTED; the next
+scheduled run may retry idempotent removal within that same persisted budget.
+
+The fence is deliberately retained even after successful deletion: stale clients
+cannot resurrect the key, and late external requests remain safe. Do not delete
+fences or recycle storage keys. Journal success and accounting are recorded only
+after a confirmed removal; lost DB acknowledgement retains uncertainty. Corrupt
+records, exhausted records and unknown storage outcomes require a separate review.
+The drain checks that all seven reference triggers are enabled before any removal.
+It is invoked under the existing retention maintenance lock, not as another worker.
+
+MAX references do not enter the journal. Physical files and PostgreSQL are not one
+transaction. Immutable keys, idempotent storage deletion, and backup preservation
+of intents, states and permanent fences are required. Reference-scan cost and
+trigger overhead on representative data remain a pre-installation measurement;
+no production workload was used here.
 
 ## Migration and reserve requirements
 
 Migration `20261006120000_inbox_processing_token` adds one nullable TEXT column
 to `InboundUpdate`, without defaults, backfill, status changes or data deletion.
 Apply it through the ordinary reviewed migration procedure before starting this
-version. The JSON file-deletion journal requires no additional table migration.
-Do not drop the column or delete journal entries during rollback.
+version. Migration `20261006230000_storage_deletion_fence` additionally installs
+a PostgreSQL function and seven reference triggers. No new table is required;
+file intent, retry state and permanent fences live in SystemSetting. `prisma db
+push` alone does **not** install these triggers. Apply and verify the migration.
+Do not drop the column, triggers, function or journal/fence entries during rollback.
 
 Reserve `3479a893e98addf51509cdb331ba371c2c5aaabc` is **not automatically verified
 for this change**. It understands deliveryProgress v1 but retains the three old
@@ -99,7 +131,7 @@ being readable by an older client is not evidence of safe fallback behavior.
 
 Before installation, a separately reviewed reserve must backport claim ownership
 and safe error settlement, enqueue reconciliation, and atomic retention plus its
-post-commit journal (or explicitly keep retention disabled by a separately approved
+post-commit journal, key fences, reference-writer guards and bounded retries (or explicitly keep retention disabled by a separately approved
 operational plan). Re-run main → reserve → main using the same migrated synthetic
 database, partial deliveryProgress, interrupted inbox claims, uncertain enqueue
 and pending/shared file-deletion intents. Validate actual images, graceful worker
@@ -128,3 +160,19 @@ its failing JSON results were retained. Explicit bash/pipefail was then enabled
 and the unchanged baseline was repeated with an actual failed Actions status.
 The review report links both the confirmed baseline and final results; a green
 workflow label alone is not considered test evidence.
+
+## PR13 review follow-up
+
+On unchanged runtime `97a30be`, test-only commit `03a5471` reproduced all three
+review findings: a later event overtook its delayed head, concurrent inbox/outbox
+writes hit PostgreSQL lock_timeout while storage was suspended, and 100 failed
+intents starved the 101st. Actions 37518651038: existing 120 integrations passed,
+three new regressions failed; 545 unit, typecheck and build passed.
+
+Regressions use real PostgreSQL, barriers rather than arbitrary sleeps, controlled
+storage promises, and an explicit short storage observation deadline for the
+late-result case. Tests include repeat failures, restart, competing inbox claims,
+shared reference commits, permanent rejection of retired keys, bounded deletion
+budgets and preserved malformed records. The earlier identical-clock owner test
+explicitly supplies a stale eligibility read so it still reaches the competing
+CAS, rather than passing by skipping the claim.

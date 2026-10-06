@@ -62,8 +62,9 @@ function fakePrisma(options: { locked?: boolean } = {}) {
       findMany: vi.fn(async () => []),
       deleteMany: vi.fn(async () => ({ count: 0 })),
     },
-    $queryRaw: vi.fn(async () => [{ present: false }]),
+    $queryRaw: vi.fn(async () => [{ present: false, count: 7n }]),
     $executeRawUnsafe: vi.fn(async () => 0),
+    $executeRaw: vi.fn(async () => 1),
     systemSetting: {
       upsert: vi.fn(async ({ create }: any) => { journal.set(create.key, create.value); return create; }),
       findMany: vi.fn(async () => [...journal].filter(([key]) => key.startsWith('retention.file-delete.v1:')).map(([key, value]) => ({ key, value }))),

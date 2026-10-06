@@ -314,13 +314,17 @@ describeIntegration('durable failure boundaries', () => {
     try {
       await started;
       const claimed = await read({ where: { id: row.id } });
+      // Its eligibility read may have preceded the owner's claim. Model that
+      // stale snapshot so the test still reaches the competing CAS/lost ACK.
+      vi.spyOn(db, '$queryRaw').mockResolvedValueOnce([{ id: row.id }]);
       const update = db.inboundUpdate.updateMany.bind(db.inboundUpdate);
-      vi.spyOn(db.inboundUpdate, 'updateMany').mockImplementationOnce((async (args: any) => {
+      const competing = vi.spyOn(db.inboundUpdate, 'updateMany').mockImplementationOnce((async (args: any) => {
         expect(args.data.lockedAt.getTime()).toBe(claimed.lockedAt!.getTime());
         expect((await update(args)).count).toBe(0);
         throw Error('competing claim ACK lost');
       }) as never);
       await (second as any).processById(row.id);
+      expect(competing).toHaveBeenCalled();
       expect((await read({ where: { id: row.id } })).processingToken).toBe(claimed.processingToken);
       expect((await read({ where: { id: row.id } })).status).toBe('PROCESSING');
     } finally {

@@ -42,7 +42,7 @@ describeIntegration('PR13 review boundaries', () => {
     const entered = barrier(); const release = barrier();
     const remove = vi.fn(async () => { entered.resolve(); await release.promise; });
     const draining = drainFileDeletions(db, { remove } as never);
-    await entered.promise;
+    await Promise.race([entered.promise, draining.then(r => { if (!remove.mock.calls.length) throw Error(JSON.stringify(r)); })]);
     const writer = createTestPrisma(); let written = false;
     try {
       await writer.$transaction(async tx => {
@@ -110,7 +110,7 @@ describeIntegration('PR13 review boundaries', () => {
     await intent('late'); const entered = barrier(); const release = barrier(); const finished = barrier();
     const remove = vi.fn(async () => { entered.resolve(); await release.promise; finished.resolve(); });
     const work = drainFileDeletions(db, { remove } as never, { removeTimeoutMs: 50 });
-    await entered.promise;
+    await Promise.race([entered.promise, work.then(r => { if (!remove.mock.calls.length) throw Error(JSON.stringify(r)); })]);
     await event('write-while-storage-hangs', 'user:9');
     await db.outboundMessage.create({ data: { targetType: 'user', targetId: 9n, payload: { storageKey: 'unrelated' }, attachments: [] } });
     const result = await work;
@@ -134,7 +134,12 @@ describeIntegration('PR13 review boundaries', () => {
     await entered.promise;
     const remove = vi.fn(async () => undefined);
     const draining = drainFileDeletions(db, { remove } as never);
-    release.resolve(); await transaction; await draining; await writer.$disconnect();
+    try {
+      await expect.poll(async () => {
+        const rows = await db.$queryRaw<Array<{ waiting: boolean }>>`SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event='advisory') AS waiting`;
+        return rows[0]?.waiting;
+      }).toBe(true);
+    } finally { release.resolve(); await transaction; await draining; await writer.$disconnect(); }
     expect(remove).not.toHaveBeenCalled();
     expect(await db.systemSetting.count({ where: { key: { startsWith: FILE_DELETION_FENCE_PREFIX } } })).toBe(0);
   });
@@ -144,12 +149,42 @@ describeIntegration('PR13 review boundaries', () => {
     const tables = ['IncidentAttachment','AnswerAttachment','ClarificationAttachment','OutboundMessage','OperatorSession','PrivateWorkItem','InboundUpdate'];
     const triggers = await db.$queryRaw<Array<{ table_name: string }>>`SELECT event_object_table AS table_name FROM information_schema.triggers WHERE trigger_name='guard_retired_storage' AND event_manipulation='INSERT'`;
     expect(triggers.map(r => r.table_name).sort()).toEqual(tables.sort());
-    // A generic trigger reads top-level and nested JSON storage keys identically.
-    for (const payload of [{ storageKey: 'retired' }, { nested: [{ storageKey: 'retired' }] }]) {
-      await expect(db.inboundUpdate.create({ data: { externalUpdateKey: JSON.stringify(payload), updateType: 'bot_started', payload } })).rejects.toThrow('STORAGE_KEY_RETIRED');
+    const user = await db.user.create({ data: { maxUserId: 10n, displayName: 'Synthetic' } });
+    const incident = await db.incident.create({ data: { publicCode: 'INC-SYNTHETIC', requesterId: user.id, requesterMaxUserId: 10n, requesterName: 'Synthetic', text: 'Synthetic', deadlineAt: new Date() } });
+    const answer = await db.incidentAnswer.create({ data: { incidentId: incident.id, version: 1, text: 'Synthetic', createdByUserId: user.id } });
+    const clarification = await db.clarification.create({ data: { incidentId: incident.id, question: 'Synthetic', askedByUserId: user.id, askedByMaxUserId: 10n, chatId: 10n, questionSourceId: 'synthetic' } });
+    const writers = [
+      (storageKey: string) => db.incidentAttachment.create({ data: { incidentId: incident.id, type: 'FILE', storageKey } }),
+      (storageKey: string) => db.answerAttachment.create({ data: { answerId: answer.id, type: 'FILE', storageKey } }),
+      (storageKey: string) => db.clarificationAttachment.create({ data: { clarificationId: clarification.id, type: 'FILE', storageKey } }),
+      (storageKey: string) => db.outboundMessage.create({ data: { targetType: 'user', targetId: 10n, attachments: [], payload: { nested: [{ storageKey }] } } }),
+      (storageKey: string) => db.operatorSession.create({ data: { maxUserId: 10n, chatId: 10n, type: 'WAITING_INCIDENT_CONFIRMATION', expiresAt: new Date(), data: { nested: [{ storageKey }] } } }),
+      (storageKey: string) => db.privateWorkItem.create({ data: { maxUserId: 10n, incidentId: incident.id, originChatId: 10n, data: { nested: [{ storageKey }] } } }),
+      (storageKey: string) => db.inboundUpdate.create({ data: { externalUpdateKey: storageKey, updateType: 'bot_started', payload: { nested: [{ storageKey }] } } }),
+    ];
+    for (const writer of writers) {
+      await expect(writer('retired')).rejects.toThrow('STORAGE_KEY_RETIRED');
+      await expect(writer('safe')).resolves.toBeDefined();
     }
+    await expect(db.inboundUpdate.update({ where: { externalUpdateKey: 'safe' }, data: { payload: { storageKey: 'retired' } } })).rejects.toThrow('STORAGE_KEY_RETIRED');
     await event('unrelated', 'user:3');
     expect(await db.systemSetting.count({ where: { key: { startsWith: FILE_DELETION_FENCE_PREFIX } } })).toBe(1);
+  });
+
+  it('fails closed without a reference guard and retains damaged retry metadata verbatim', async () => {
+    await intent('guarded'); const remove = vi.fn(async () => undefined);
+    await db.$executeRawUnsafe('DROP TRIGGER guard_retired_storage ON "InboundUpdate"');
+    try { await expect(drainFileDeletions(db, { remove } as never)).rejects.toThrow('STORAGE_REFERENCE_GUARDS_NOT_INSTALLED'); }
+    finally {
+      await db.$executeRawUnsafe('CREATE TRIGGER guard_retired_storage BEFORE INSERT OR UPDATE ON "InboundUpdate" FOR EACH ROW EXECUTE FUNCTION guard_retired_storage_reference()');
+    }
+    expect(remove).not.toHaveBeenCalled();
+    const job = await db.systemSetting.findFirstOrThrow({ where: { key: { startsWith: FILE_DELETION_PREFIX } } });
+    const key = FILE_DELETION_STATE_PREFIX + job.key.slice(FILE_DELETION_PREFIX.length);
+    await db.systemSetting.create({ data: { key, value: '{broken-state' } });
+    await drainFileDeletions(db, { remove } as never);
+    expect((await db.systemSetting.findUniqueOrThrow({ where: { key } })).value).toBe('{broken-state');
+    expect(remove).not.toHaveBeenCalled();
   });
 
   it('bounded persisted retries preserve errors, malformed records and later work', async () => {

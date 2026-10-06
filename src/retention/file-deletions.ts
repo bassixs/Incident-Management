@@ -25,6 +25,11 @@ export async function drainFileDeletions(db: PrismaClient, storage: MediaStorage
   const timeoutMs = options.removeTimeoutMs ?? 5_000;
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 5_000) throw Error('INVALID_STORAGE_TIMEOUT');
   const result = { deletedFiles: 0, deletedBytes: 0, failures: [] as Array<{ publicCode: string; error: string }> };
+  const guards = await db.$queryRaw<Array<{ count: bigint }>>`SELECT COUNT(*) AS count
+    FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname=current_schema() AND t.tgname='guard_retired_storage' AND t.tgenabled='O'
+      AND c.relname IN ('IncidentAttachment','AnswerAttachment','ClarificationAttachment','OutboundMessage','OperatorSession','PrivateWorkItem','InboundUpdate')`;
+  if (Number(guards[0]?.count) !== 7) throw Error('STORAGE_REFERENCE_GUARDS_NOT_INSTALLED');
   const jobs = await db.systemSetting.findMany({ where: { key: { startsWith: FILE_DELETION_PREFIX } }, orderBy: [{ updatedAt: 'asc' }, { key: 'asc' }], take: 100 });
   for (const job of jobs) {
     const stateKey = FILE_DELETION_STATE_PREFIX + job.key.slice(FILE_DELETION_PREFIX.length);
@@ -58,7 +63,7 @@ export async function drainFileDeletions(db: PrismaClient, storage: MediaStorage
       const fenced = await db.$transaction(async tx => {
         await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '2s'");
         await tx.$executeRawUnsafe("SET LOCAL statement_timeout = '2s'");
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${candidate.storageKey}, 724091))`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${candidate.storageKey}, 724091))`;
         const current = await tx.systemSetting.findUnique({ where: { key: job.key } });
         if (current?.value !== job.value) return false;
         const refs = await tx.$queryRaw<Array<{ present: boolean }>>`
