@@ -1,0 +1,31 @@
+name: Migration aware installation kit isolated validation
+on:
+  push:
+    branches: [codex/migration-install-kit]
+permissions:
+  contents: read
+concurrency:
+  group: migration-install-kit
+  cancel-in-progress: false
+jobs:
+  restore:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - name: Full synthetic backup and restore without disabling guards
+        run: python3 tools/install-kit-lab/restore.py 2>&1 | tee restore-console.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: full-restore
+          path: |
+            restore-results/
+            restore-console.txt
+          retention-days: 14
