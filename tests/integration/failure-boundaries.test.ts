@@ -224,4 +224,104 @@ describeIntegration('durable failure boundaries', () => {
     expect(await storage.exists('synthetic/file')).toBe(true); expect(storage.remove).not.toHaveBeenCalled();
   });
 
+  it('reconciles a lost claim ACK before any business action and deduplicates redelivery', async () => {
+    const max = { dispatch: vi.fn(async () => undefined) };
+    const worker = new UpdateDispatcher(db, max as never);
+    const event = { update_type: 'bot_started', timestamp: 1, chat_id: 123, user: { user_id: 123, name: 'Synthetic' } } as never;
+    const reserved = await worker.reserve(event);
+    const update = db.inboundUpdate.updateMany.bind(db.inboundUpdate);
+    vi.spyOn(db.inboundUpdate, 'updateMany').mockImplementationOnce((async (args: any) => { await update(args); throw Error('claim ACK lost'); }) as never);
+    await worker.kick();
+    expect(max.dispatch).not.toHaveBeenCalled();
+    expect((await db.inboundUpdate.findUniqueOrThrow({ where: { id: reserved.id } })).status).toBe('PENDING');
+    expect((await worker.reserve(event)).fresh).toBe(false);
+    await db.inboundUpdate.update({ where: { id: reserved.id }, data: { nextAttemptAt: new Date(0) } });
+    await worker.kick(); worker.stop(); await worker.waitForIdle();
+    expect(max.dispatch).toHaveBeenCalledTimes(1);
+    expect(await db.inboundUpdate.count()).toBe(1);
+  });
+
+  it('a competing dispatcher cannot enter business handling while the claimed read is delayed', async () => {
+    await db.inboundUpdate.create({ data: { externalUpdateKey: 'concurrent-read', updateType: 'bot_started', payload: {} } });
+    let entered!: () => void; let release!: () => void;
+    const started = new Promise<void>(r => { entered = r; });
+    const blocked = new Promise<void>(r => { release = r; });
+    const read = db.inboundUpdate.findUniqueOrThrow.bind(db.inboundUpdate);
+    vi.spyOn(db.inboundUpdate, 'findUniqueOrThrow').mockImplementationOnce((async (args: any) => {
+      entered(); await blocked; return read(args);
+    }) as never);
+    const max = { dispatch: vi.fn(async () => undefined) };
+    const first = new UpdateDispatcher(db, max as never); const second = new UpdateDispatcher(db, max as never);
+    const active = first.kick(); await started; await second.kick();
+    expect(max.dispatch).not.toHaveBeenCalled();
+    release(); await active; first.stop(); second.stop(); await Promise.all([first.waitForIdle(), second.waitForIdle()]);
+    expect(max.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('revalidates eligibility after a real competing transaction locks and changes the incident', async () => {
+    const { row, job } = await expired(); const storage = files();
+    await storage.save({ key: 'synthetic/file', body: Buffer.from('pdf') });
+    const competitor = createTestPrisma();
+    const find = db.incident.findMany.bind(db.incident);
+    vi.spyOn(db.incident, 'findMany').mockImplementationOnce((async (args: any) => {
+      const stale = await find(args);
+      await competitor.$transaction(async tx => {
+        await tx.$queryRaw`SELECT id FROM "Incident" WHERE id=${row.id} FOR UPDATE`;
+        await tx.incident.update({ where: { id: row.id }, data: { status: 'REVISION_REQUIRED' } });
+      });
+      return stale;
+    }) as never);
+    try { await new RetentionService(db, storage).run(now); }
+    finally { await competitor.$disconnect(); }
+    expect((await db.incident.findUniqueOrThrow({ where: { id: row.id } })).status).toBe('REVISION_REQUIRED');
+    expect(await db.outboundMessage.findUnique({ where: { id: job.id } })).not.toBeNull();
+    expect(await storage.exists('synthetic/file')).toBe(true);
+    expect(storage.remove).not.toHaveBeenCalled();
+  });
+
+  it('a lost retention COMMIT acknowledgement leaves durable, safely reconcilable file work', async () => {
+    const { row } = await expired(); const storage = files();
+    await storage.save({ key: 'synthetic/file', body: Buffer.from('pdf') });
+    const transaction = db.$transaction.bind(db);
+    vi.spyOn(db, '$transaction').mockImplementationOnce((async (fn: any) => { await transaction(fn); throw Error('COMMIT ACK lost'); }) as never);
+    const result = await new RetentionService(db, storage).run(now);
+    expect(result.failures).toHaveLength(1); // uncertain caller result is not hidden
+    expect(await db.incident.findUnique({ where: { id: row.id } })).toBeNull();
+    // The independent journal read proves commit before the physical removal.
+    expect(await storage.exists('synthetic/file')).toBe(false);
+    expect((await new RetentionService(db, storage).run(now)).deletedFiles).toBe(0);
+  });
+
+  it('a lost competing claim ACK cannot release the owner even with identical claim timestamps', async () => {
+    const row = await db.inboundUpdate.create({ data: { externalUpdateKey: 'same-clock', updateType: 'bot_started', payload: {} } });
+    let entered!: () => void; let release!: () => void;
+    const started = new Promise<void>(r => { entered = r; });
+    const blocked = new Promise<void>(r => { release = r; });
+    const read = db.inboundUpdate.findUniqueOrThrow.bind(db.inboundUpdate);
+    vi.spyOn(db.inboundUpdate, 'findUniqueOrThrow').mockImplementationOnce((async (args: any) => { entered(); await blocked; return read(args); }) as never);
+    const max = { dispatch: vi.fn(async () => undefined) };
+    const first = new UpdateDispatcher(db, max as never); const second = new UpdateDispatcher(db, max as never);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date());
+    const active = first.kick();
+    try {
+      await started;
+      const claimed = await read({ where: { id: row.id } });
+      const update = db.inboundUpdate.updateMany.bind(db.inboundUpdate);
+      vi.spyOn(db.inboundUpdate, 'updateMany').mockImplementationOnce((async (args: any) => {
+        expect(args.data.lockedAt.getTime()).toBe(claimed.lockedAt!.getTime());
+        expect((await update(args)).count).toBe(0);
+        throw Error('competing claim ACK lost');
+      }) as never);
+      await (second as any).processById(row.id);
+      expect((await read({ where: { id: row.id } })).processingToken).toBe(claimed.processingToken);
+      expect((await read({ where: { id: row.id } })).status).toBe('PROCESSING');
+    } finally {
+      release(); await active; first.stop(); second.stop();
+      await Promise.all([first.waitForIdle(), second.waitForIdle()]); vi.useRealTimers();
+    }
+    expect(max.dispatch).toHaveBeenCalledTimes(1);
+  });
+
 });
+

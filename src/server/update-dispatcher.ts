@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { latency, withDeliveryTrace } from '../utils/latency';
 import { AsyncActivity } from '../utils/async-activity';
 import { minimiseInbound } from '../privacy/inbound-privacy';
@@ -31,7 +32,7 @@ export class UpdateDispatcher {
   private timer?: NodeJS.Timeout;
   private drainPromise?: Promise<void>;
   // Failed state writes are retried by the existing sweep, never by replaying business work.
-  private readonly settlements = new Map<string, { lockedAt: Date; beforeDispatch: boolean; contact: boolean; detail: string }>();
+  private readonly settlements = new Map<string, { lockedAt: Date; token: string; beforeDispatch: boolean; contact: boolean; detail: string }>();
   private readonly reservations = new Map<string, Promise<Reservation>>();
 
   constructor(
@@ -99,6 +100,7 @@ export class UpdateDispatcher {
         payload: {},
         lastError: CONTACT_FAILURE,
         lockedAt: null,
+        processingToken: null,
       },
     });
     const interrupted = await this.prisma.inboundUpdate.updateMany({
@@ -107,6 +109,7 @@ export class UpdateDispatcher {
         status: InboxStatus.FAILED,
         lastError: 'Обработка была прервана перезапуском; требуется безопасная ручная проверка.',
         lockedAt: null,
+        processingToken: null,
       },
     });
     if (interrupted.count > 0) {
@@ -183,16 +186,27 @@ export class UpdateDispatcher {
   private async processClaimed(id: string): Promise<void> {
     const processingStartedAt = Date.now();
     const lockedAt = new Date();
-    const claimed = await this.prisma.inboundUpdate.updateMany({
-      where: { id, status: InboxStatus.PENDING },
-      data: { status: InboxStatus.PROCESSING, lockedAt, attempts: { increment: 1 } },
-    });
-    if (claimed.count !== 1) return;
+    const token = randomUUID();
+    try {
+      const claimed = await this.prisma.inboundUpdate.updateMany({
+        where: { id, status: InboxStatus.PENDING },
+        data: { status: InboxStatus.PROCESSING, lockedAt, processingToken: token, attempts: { increment: 1 } },
+      });
+      if (claimed.count !== 1) return;
+    } catch {
+      // Even a lost claim ACK cannot imply that business work started. The CAS
+      // below touches only the lease written by this attempt, if it exists.
+      this.settlements.set(id, { lockedAt, token, beforeDispatch: true, contact: false,
+        detail: 'PRE_DISPATCH_CLAIM_UNCERTAIN: бизнес-обработка не начиналась.' });
+      await this.settleFailures();
+      return;
+    }
 
     let row: Awaited<ReturnType<typeof this.prisma.inboundUpdate.findUniqueOrThrow>> | undefined;
     let businessStarted = false;
     try {
       row = await this.prisma.inboundUpdate.findUniqueOrThrow({ where: { id } });
+      if (row.status !== InboxStatus.PROCESSING || row.processingToken !== token || row.lockedAt?.getTime() !== lockedAt.getTime()) return;
       const claimedRow = row;
       // Inbox rows admitted before draft-screen binding was introduced have no
       // reliable destination for private text. Do not reinterpret them against
@@ -212,11 +226,12 @@ export class UpdateDispatcher {
         await this.max.dispatch(payload as unknown as Update);
       });
       await this.prisma.inboundUpdate.updateMany({
-        where: { id, status: InboxStatus.PROCESSING, lockedAt },
+        where: { id, status: InboxStatus.PROCESSING, lockedAt, processingToken: token },
         data: {
           status: InboxStatus.PROCESSED,
           processedAt: new Date(),
           lockedAt: null,
+          processingToken: null,
           lastError: null,
           payload: {},
         },
@@ -226,7 +241,7 @@ export class UpdateDispatcher {
       const contact = !!(payload?.verifiedDraftContact || payload?.draftPhoneInput);
       const detail = !businessStarted ? 'PRE_DISPATCH_READ_FAILED: бизнес-обработка не начиналась.'
         : contact ? CONTACT_FAILURE : error instanceof Error ? error.message : String(error);
-      this.settlements.set(id, { lockedAt, beforeDispatch: !businessStarted, contact, detail: detail.slice(0, 4_000) });
+      this.settlements.set(id, { lockedAt, token, beforeDispatch: !businessStarted, contact, detail: detail.slice(0, 4_000) });
       await this.settleFailures();
       log.error({ inboxId: id, phase: businessStarted ? 'business-uncertain' : 'before-dispatch' }, 'inbox failure recorded; no blind business replay');
     }
@@ -234,15 +249,23 @@ export class UpdateDispatcher {
 
   private async settleFailures(): Promise<void> {
     for (const [id, failure] of this.settlements) {
-      const where = { id, status: InboxStatus.PROCESSING, lockedAt: failure.lockedAt };
+      const where = { id, status: InboxStatus.PROCESSING, lockedAt: failure.lockedAt, processingToken: failure.token };
       // A confirmed pre-dispatch read failure is safe to retry, bounded and delayed.
       // If this write fails, the next existing sweep retries only this CAS.
       if (failure.beforeDispatch) {
         await this.prisma.inboundUpdate.updateMany({ where: { ...where, attempts: { lt: 3 } },
-          data: { status: InboxStatus.PENDING, lockedAt: null, nextAttemptAt: new Date(Date.now() + 5_000), lastError: failure.detail } });
+          data: { status: InboxStatus.PENDING, lockedAt: null, processingToken: null, nextAttemptAt: new Date(Date.now() + 5_000), lastError: failure.detail } });
       }
+      if (failure.beforeDispatch) await this.prisma.inboundUpdate.updateMany({
+        where: { ...where, attempts: { gte: 3 }, OR: [
+          { payload: { path: ['verifiedDraftContact'], not: Prisma.AnyNull } },
+          { payload: { path: ['draftPhoneInput'], not: Prisma.AnyNull } },
+        ] },
+        data: { status: InboxStatus.FAILED, lockedAt: null, processingToken: null, payload: {},
+          lastError: failure.detail + ' ' + CONTACT_FAILURE },
+      });
       await this.prisma.inboundUpdate.updateMany({ where,
-        data: { status: InboxStatus.FAILED, lockedAt: null, lastError: failure.detail,
+        data: { status: InboxStatus.FAILED, lockedAt: null, processingToken: null, lastError: failure.detail,
           ...(failure.contact ? { payload: {} } : {}) } });
       this.settlements.delete(id);
     }

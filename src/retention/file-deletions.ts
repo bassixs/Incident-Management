@@ -16,7 +16,7 @@ export async function queueFileDeletion(tx: Prisma.TransactionClient, file: Omit
  */
 export async function drainFileDeletions(db: PrismaClient, storage: MediaStorage) {
   const result = { deletedFiles: 0, deletedBytes: 0, failures: [] as Array<{ publicCode: string; error: string }> };
-  const jobs = await db.systemSetting.findMany({ where: { key: { startsWith: FILE_DELETION_PREFIX } }, take: 100 });
+  const jobs = await db.systemSetting.findMany({ where: { key: { startsWith: FILE_DELETION_PREFIX } }, orderBy: { updatedAt: 'asc' }, take: 100 });
   for (const job of jobs) {
     let file: Deletion | undefined;
     try {
@@ -43,7 +43,11 @@ export async function drainFileDeletions(db: PrismaClient, storage: MediaStorage
             UNION ALL SELECT 1 FROM "PrivateWorkItem" WHERE jsonb_path_exists("data", '$.**.storageKey ? (@ == $key)', jsonb_build_object('key', ${candidate.storageKey}::text))
             UNION ALL SELECT 1 FROM "InboundUpdate" WHERE jsonb_path_exists("payload", '$.**.storageKey ? (@ == $key)', jsonb_build_object('key', ${candidate.storageKey}::text))
           ) AS present`;
-        if (refs[0]?.present !== false) return false; // unknown is not absence
+        if (refs[0]?.present !== false) {
+          // Rotate shared objects so they do not starve later unreferenced intents.
+          await tx.systemSetting.updateMany({ where: { key: job.key, value: job.value }, data: { updatedAt: new Date() } });
+          return false; // unknown is not absence
+        }
         await storage.remove(candidate.storageKey); // idempotent; intent survives failure/rollback
         await tx.systemSetting.deleteMany({ where: { key: job.key, value: job.value } });
         return true;
