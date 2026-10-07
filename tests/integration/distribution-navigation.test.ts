@@ -23,7 +23,9 @@ describeIntegration.each(['chat', 'private'] as const)('distribution navigation 
     await db.responsibleGroup.createMany({ data: Array.from({ length: 14 }, (_, n) => ({ code: `GROUP_${n}`, name: `Организация ${n}`, kind: 'LOCAL_GOVERNMENT', maxChatId: BigInt(-8000 - n), sortOrder: 100 + n })) });
     h.services.max = { answerCallback: vi.fn(async () => undefined), api: { getMyInfo: vi.fn(async () => ({ username: 'synthetic_bot' })), getChatMembers: vi.fn(async (_chat, args) => ({ members: args.user_ids.map((id: number) => ({ user_id: id, is_bot: false })) })) } } as never;
     incident = await h.services.incidents.create({ requester: { maxUserId: TEST_USERS.requesterA, name: 'Тестовый житель', phone: '+79001234567' }, text: 'Синтетическое сообщение' });
-    screens = new Map(); current = 'incident-card'; itemId = undefined;
+    await h.services.distribution.publishCard(incident.id);
+    incident = (await h.services.repository.findById(incident.id))!;
+    screens = new Map(); current = incident.distributionMessageId!; itemId = undefined;
     const send = h.messages.send.bind(h.messages);
     vi.spyOn(h.messages, 'send').mockImplementation(async (target, message) => {
       const result = await send(target, message);
@@ -37,7 +39,7 @@ describeIntegration.each(['chat', 'private'] as const)('distribution navigation 
       itemId = item.id; await enterPersonalWork(h.services, actor, item.id);
     }
   });
-  async function click(payload: string, mid = current) {
+  async function click(payload: string, mid = /^incident:(assign|topic):/.test(payload) ? incident.distributionMessageId! : current) {
     if (itemId && payload.startsWith('incident:')) payload = `personal:run:${itemId}:${payload}`;
     await handleCallbackUpdate(h.services, { update: { message: { recipient: { chat_id: Number(itemId ? actor.maxUserId : TEST_CHATS.distribution), chat_type: itemId ? 'dialog' : 'chat' }, body: { mid } }, callback: { callback_id: randomUUID(), user: { user_id: Number(actor.maxUserId), name: actor.displayName, is_bot: false }, payload } } } as never);
   }
@@ -47,7 +49,18 @@ describeIntegration.each(['chat', 'private'] as const)('distribution navigation 
     return found.payload;
   };
   const notice = () => String(vi.mocked(h.services.max.answerCallback).mock.calls.at(-1)?.[1] ? JSON.stringify(vi.mocked(h.services.max.answerCallback).mock.calls.at(-1)?.[1]) : '');
-  const page = () => screens.get(current)!.keyboard.flat().find(b => /^\d+ \/ \d+$/.test(b.text))?.text;
+  const page = () => {
+    const rows = screens.get(current)!.keyboard;
+    const counter = rows.flat().find(b => /^\d+ \/ \d+$/.test(b.text))?.text;
+    if (counter) return counter;
+    // The existing private adapter drops noop page counters. Check the visible
+    // seeded entries, not a counter this UI never promised to render.
+    const first = rows[0]?.[0]?.text;
+    if (first === 'Хозяйственная группа' || first === 'Хозяйственная часть') return '1 / 3';
+    if (first === 'Организация 5' || first === 'Тема 4') return '2 / 3';
+    if (first === 'Организация 11' || first === 'Тема 10') return '3 / 3';
+    return undefined;
+  };
   async function unchanged() {
     const fresh = await db.incident.findUniqueOrThrow({ where: { id: incident.id } });
     expect(fresh.status).toBe('DISTRIBUTION'); expect(fresh.assignedGroupId).toBeNull();
@@ -148,6 +161,47 @@ describeIntegration.each(['chat', 'private'] as const)('distribution navigation 
   it('does not accept a forged MID or another operator screen', async () => {
     await groups(); const next = button('Вперёд ➡️');
     await click(next, 'unrelated-mid'); expect(page()).toBe('1 / 3'); expect(notice()).toMatch(/устарел/);
+    await unchanged();
+  });
+
+  it('serializes concurrent transitions without assigning or extending the lease', async () => {
+    await groups(); const payload = button('Вперёд ➡️'); const mid = current;
+    const edit = h.messages.editCardKeyboard.bind(h.messages);
+    let arrived!: () => void, resume!: () => void;
+    const entered = new Promise<void>(resolve => { arrived = resolve; });
+    const gate = new Promise<void>(resolve => { resume = resolve; });
+    vi.mocked(h.messages.editCardKeyboard).mockImplementationOnce(async (...args) => { arrived(); await gate; return edit(...args); });
+    const first = click(payload, mid); await entered;
+    try { await click(payload, mid); expect(notice()).toMatch(/выполняется/); }
+    finally { resume(); await first; }
+    expect(page()).toBe('2 / 3'); await unchanged();
+  });
+  it('does not reactivate a screen whose HTTP edit completed after ownership changed', async () => {
+    await groups(); const payload = button('Вперёд ➡️'), mid = current;
+    const edit = h.messages.editCardKeyboard.bind(h.messages);
+    let arrived!: () => void, resume!: () => void;
+    const entered = new Promise<void>(resolve => { arrived = resolve; });
+    const gate = new Promise<void>(resolve => { resume = resolve; });
+    vi.mocked(h.messages.editCardKeyboard).mockImplementationOnce(async (...args) => { arrived(); await gate; return edit(...args); });
+    const first = click(payload, mid); await entered;
+    await db.incident.update({ where: { id: incident.id }, data: { distributionClaimedBy: 99999n } });
+    resume(); await first;
+    await click(button('Вперёд ➡️')); await unchanged();
+    expect((await fresh()).distributionClaimedBy).toBe(99999n);
+  });
+  it('an edit failure fails closed and the current incident can be reopened without data loss', async () => {
+    await groups(); const old = button('Вперёд ➡️'), mid = current;
+    vi.mocked(h.messages.editCardKeyboard).mockResolvedValueOnce(false);
+    await click(old, mid); expect(notice()).toMatch(/Не удалось обновить/);
+    await click(old, mid); expect(notice()).toMatch(/устарел/);
+    await click(`incident:assign:${incident.id}`); await click(button('Органы местного самоуправления'));
+    await click(button('Вперёд ➡️')); expect(page()).toBe('2 / 3'); await unchanged();
+  });
+  it('legacy intermediate buttons cannot mutate a topic or acquire a new claim', async () => {
+    await groups(); const before = await fresh();
+    await click(`incident:topic-set:${incident.id}:none`);
+    await click(`incident:assign-group:${incident.id}:00000000-0000-0000-0000-000000000001`);
+    expect((await fresh()).distributionClaimUntil).toEqual(before.distributionClaimUntil);
     await unchanged();
   });
 

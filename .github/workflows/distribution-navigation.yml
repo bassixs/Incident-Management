@@ -9,7 +9,6 @@ defaults:
     shell: bash
 jobs:
   baseline:
-    if: github.sha == '73b7d0c' # baseline evidence preserved in run 37652952888
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -53,7 +52,12 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          npx vitest run tests/integration/distribution-navigation.test.ts --reporter=default --reporter=json --outputFile=evidence/baseline.json 2>&1 | tee evidence/baseline.txt
+          set +e
+          npx vitest run tests/integration/distribution-navigation.test.ts -t 'topic: last page|organization: last page|organization: return to' --reporter=default --reporter=json --outputFile=evidence/baseline.json 2>&1 | tee evidence/baseline.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          test "$code" -eq 1
+          node -e 'const r=require("./evidence/baseline.json"); const f=r.testResults.flatMap(x=>x.assertionResults).filter(x=>x.status==="failed"); if(f.length!==3 || f.some(x=>!x.fullName.includes("(chat)")) || r.numPassedTests!==3) process.exit(1);'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

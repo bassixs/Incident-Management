@@ -90,6 +90,8 @@ export type CompositeMessage = {
 
 export type MessageSendResult = {
   firstMessageId?: string | undefined;
+  /** Confirmed part carrying buttons; may differ from the first text part. */
+  keyboardMessageId?: string | undefined;
   state: 'sent' | 'queued' | 'cancelled';
   trackingApplied: boolean;
 };
@@ -244,8 +246,8 @@ export class MaxMessageService {
       while (this.activeTargets.has(key)) await this.activeTargets.get(key)!.done.catch(() => undefined);
       return this.withTarget(destination, async () => {
         await message.beforeImmediateSend?.();
-        const { firstMessageId } = await this.deliverLogical(target, message);
-        return { firstMessageId, state: 'sent' as const, trackingApplied: false };
+        const result = await this.deliverLogical(target, message);
+        return { ...result, state: 'sent' as const, trackingApplied: false };
       });
     }
 

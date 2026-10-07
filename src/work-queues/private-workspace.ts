@@ -101,7 +101,15 @@ async function select(services: AppServices, item: PrivateWorkItem) {
 }
 async function snapshot(services: AppServices, item: PrivateWorkItem) {
   const current = await services.sessions.find(item.maxUserId, item.originChatId);
-  if (!current || current.incidentId !== item.incidentId) return;
+  if (!current) {
+    const fresh = await services.prisma.privateWorkItem.findUniqueOrThrow({ where: { id: item.id } });
+    const data = dataOf(fresh);
+    if ((data.session?.data.confirmation as { action?: string } | undefined)?.action === 'assign-group') {
+      delete data.session; await save(services, fresh, data);
+    }
+    return;
+  }
+  if (current.incidentId !== item.incidentId) return;
   const fresh = await services.prisma.privateWorkItem.findUniqueOrThrow({ where: { id: item.id } });
   await save(services, fresh, { ...dataOf(fresh), session: { type: current.type, data: (current.data ?? {}) as Record<string, unknown> } });
 }

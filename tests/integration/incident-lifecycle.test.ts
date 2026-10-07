@@ -431,14 +431,16 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     const dispatcher = await actorFor(prisma, TEST_USERS.dispatcher, 'Диспетчер', [UserRole.DISPATCHER]);
     const category = await facility();
 
-    await handleIncidentCallback({ services: harness.services, actor: dispatcher, chatId: TEST_CHATS.distribution },
+    await harness.services.distribution.publishCard(incident.id);
+    const cardMid = (await harness.services.repository.findById(incident.id))!.distributionMessageId!;
+    await handleIncidentCallback({ services: harness.services, actor: dispatcher, chatId: TEST_CHATS.distribution, messageId: cardMid },
       { kind: 'incident', action: 'assign', incidentId: incident.id });
     await clickDistributionPicker(harness.services, dispatcher, TEST_CHATS.distribution, 'assign-branch', 'local');
     const pickerMid = await clickDistributionPicker(harness.services, dispatcher, TEST_CHATS.distribution, 'assign-group', category.id);
 
     expect(harness.messages.deleted).not.toContain(pickerMid);
     const pending = (await harness.services.sessions.find(dispatcher.maxUserId, TEST_CHATS.distribution))!.data as any;
-    await handleIncidentCallback({ services: harness.services, actor: dispatcher, chatId: TEST_CHATS.distribution },
+    await handleIncidentCallback({ services: harness.services, actor: dispatcher, chatId: TEST_CHATS.distribution, messageId: incident.distributionMessageId! },
       { kind: 'incident', action: 'action-confirm', incidentId: incident.id, argument: pending.confirmation.token });
     expect(harness.messages.deleted).toContain(pickerMid);
   });
@@ -450,7 +452,9 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     });
     const dispatcher = await actorFor(prisma, TEST_USERS.dispatcher, 'Диспетчер', [UserRole.DISPATCHER]);
 
-    await handleIncidentCallback({ services: harness.services, actor: dispatcher, chatId: TEST_CHATS.distribution },
+    await harness.services.distribution.publishCard(incident.id);
+    const cardMid = (await harness.services.repository.findById(incident.id))!.distributionMessageId!;
+    await handleIncidentCallback({ services: harness.services, actor: dispatcher, chatId: TEST_CHATS.distribution, messageId: cardMid },
       { kind: 'incident', action: 'assign', incidentId: incident.id });
     const pickerMid = await clickDistributionPicker(harness.services, dispatcher, TEST_CHATS.distribution, 'assign-branch', 'local');
 

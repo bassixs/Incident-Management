@@ -54,6 +54,14 @@ export async function handleDistributionNavigation(context: IncidentCallbackCont
       // Only the two explicit entry buttons may acquire a claim. Old picker payloads
       // have no screen identity and must be reopened, never used to renew a lease.
       if (!['assign', 'topic'].includes(incoming.action)) throw stale();
+      if (!context.privateExecution && (!context.messageId || (context.messageId !== incident.distributionMessageId &&
+          !await services.prisma.outboundMessage.findFirst({ where: {
+            incidentId: incident.id, targetType: 'chat', targetId: chatId, status: 'SENT',
+            AND: [
+              { OR: [{ trackingType: 'DISTRIBUTION_CARD' }, { dedupeKey: { startsWith: `distribution-claim:${incident.id}:` } }, { dedupeKey: { startsWith: `redistribution-notice:${incident.id}:` } }] },
+              { OR: [{ firstMessageId: context.messageId }, { payload: { path: ['keyboardMessageId'], equals: context.messageId } }] },
+            ],
+          }, select: { id: true } })))) throw stale();
       if (!await ensureFreeSession(services, actor, chatId)) return;
       await services.distributionQueue.claim(actor, chatId, incident.id);
       incident = await services.prisma.incident.findUniqueOrThrow({ where: { id: incident.id } });
@@ -112,7 +120,7 @@ export async function handleDistributionNavigation(context: IncidentCallbackCont
         const next = await prepare(message.keyboard);
         const sent = await original.send(destination, { ...message, immediatePreview: true, beforeImmediateSend: guard, keyboard: next.rows });
         if (sent.state !== 'sent') throw stale();
-        await save(next.screen, sent.firstMessageId);
+        await save(next.screen, sent.keyboardMessageId ?? sent.firstMessageId);
         return sent;
       };
       if (property === 'editCardKeyboard') return async (mid: string, text: string, rows: Button[][]) => {
