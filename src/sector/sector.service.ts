@@ -69,7 +69,10 @@ export class SectorService {
       },
     );
 
-    if (result.state === 'sent' && !result.trackingApplied) {
+    // A durable publication can be SENT but deliberately untracked when its
+    // assignment changed during the MAX request. Only the outbox transaction
+    // may set its pointer/history; false is not permission to restore an old MID.
+    if (!this.messages.persistsDelivery && result.state === 'sent' && !result.trackingApplied) {
       await this.incidents.setSectorMessageId(incident.id, result.firstMessageId);
       await this.history.record({
         incidentId: incident.id,
