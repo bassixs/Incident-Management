@@ -1,3 +1,4 @@
+import { recordPolicyDelivery, isWorkingPolicy } from '../sla/policy';
 import type { PrismaClient } from '@prisma/client';
 
 import { codeLabel } from '../bot/views/cards';
@@ -114,23 +115,19 @@ export class RequesterDeliveryService {
     );
 
     if (result.state === 'sent' && !result.trackingApplied && !this.messages.persistsDelivery) {
-      await this.prisma.incidentAnswer.update({
-        where: { id: answer.id },
-        data: { deliveredAt: new Date() },
-      });
-      await this.history.record({
-        incidentId,
-        action: HistoryAction.ANSWER_SENT,
-        metadata: {
-          answerId: answer.id,
-          version: answer.version,
-          recipientMaxUserId: userId.toString(),
-          attachments: attachments.length,
-        },
-      });
+      const deliveredAt = new Date();
+      const persist = async (tx?: import('../database/prisma').Tx) => {
+        await (tx ?? this.prisma).incidentAnswer.update({ where: { id: answer.id }, data: { deliveredAt } });
+        if (tx && isWorkingPolicy(incident)) await recordPolicyDelivery(tx, incidentId, deliveredAt);
+        await this.history.record({ incidentId, action: HistoryAction.ANSWER_SENT,
+          metadata: { answerId: answer.id, version: answer.version, recipientMaxUserId: userId.toString(), attachments: attachments.length } }, tx);
+      };
+      if (isWorkingPolicy(incident)) await this.prisma.$transaction(tx => persist(tx));
+      else await persist();
     }
 
-    let outcome: DeliveryOutcome = result.state;
+    // Cancellation is reserved for service reminders, never a successful answer.
+    let outcome: DeliveryOutcome = result.state === 'cancelled' ? 'failed' : result.state;
     if (this.messages.persistsDelivery) {
       const job = await this.prisma.outboundMessage.findUnique({ where: { dedupeKey: `answer:${answerId}` } });
       if (job?.status === 'FAILED' || (job?.status === 'SENT' && !job.trackingApplied)) outcome = 'failed';

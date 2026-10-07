@@ -1,3 +1,4 @@
+import { recordPreparation } from '../sla/policy';
 import { assertSectorReservation, SECTOR_LEASE_ACTION } from '../work-queues/leases';
 import { queueDeliveryStatus } from '../delivery/delivery-status';
 import { randomUUID } from 'node:crypto';
@@ -222,6 +223,7 @@ export class AnswerService {
       await tx.actionLock.deleteMany({ where: { incidentId, action: SECTOR_LEASE_ACTION } });
       await this.attachMedia(tx, created.id, stored);
       await queueAnswer(tx, incidentId, created.id, direct);
+      await recordPreparation(tx, current, created.id, new Date());
       if (!direct) await queueSectorRefresh(tx, incidentId, `sector-status:${created.id}:review`, true);
       if (direct) await queueDeliveryStatus(tx, incidentId, created.id, false);
       transactionBodyCompleted = true;

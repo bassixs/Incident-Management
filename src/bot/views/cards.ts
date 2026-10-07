@@ -1,3 +1,4 @@
+import { isWorkingPolicy, policyCardLines } from '../../sla/policy';
 import { RESIDENT_PHOTO_LIMIT } from '../../incidents/resident-photo-limit';
 import { OPTIONAL_PHONE_ADDED, OPTIONAL_PHONE_OFFER } from '../../privacy/optional-contact';
 import type { Incident, IncidentAnswer, ResponsibleGroup } from '@prisma/client';
@@ -79,8 +80,7 @@ export function distributionCard(incident: IncidentWithRelations): string {
     ...(incident.requesterPhone ? [`Телефон для связи: ${incident.requesterPhone}`] : []),
     ...(photoCount > 0 ? ['', ...attachmentLine(photoCount)] : []),
     '',
-    '⏱ Срок:',
-    `до ${formatDateTime(incident.deadlineAt)}`,
+    ...(isWorkingPolicy(incident) ? policyCardLines(incident) : ['⏱ Срок:', `до ${formatDateTime(incident.deadlineAt)}`]),
   ].join('\n');
 }
 
@@ -100,6 +100,7 @@ export function distributionResolvedNotice(
     '',
     'Распределил:',
     dispatcherName,
+    ...policyCardLines(incident),
   ].join('\n');
 }
 
@@ -196,8 +197,7 @@ export function reviewCard(
     'Первоначальная дата:',
     formatDateTime(incident.createdAt),
     '',
-    'Срок ответа:',
-    formatDateTime(incident.deadlineAt),
+    ...(isWorkingPolicy(incident) ? policyCardLines(incident) : ['Срок ответа:', formatDateTime(incident.deadlineAt)]),
     ...(incident.isOverdue ? ['', '🚨 Срок ответа истёк.'] : []),
     '',
     'Версия ответа:',
@@ -269,7 +269,7 @@ export function incidentLookupCard(incident: IncidentWithRelations, lease?: Leas
     'Статус:',
     distribution ? distributionStatus(incident) : incident.slaPausedAt ? 'Ожидаем уточнение от жителя' : `${incident.status} — ${describeStatus(incident.status, showSla && incident.isOverdue)}`,
     ...(showSla ? ['', 'Создано:', formatDateTime(incident.createdAt)] : []),
-    ...(showSla ? ['', 'Срок ответа:', formatDateTime(incident.deadlineAt)] : []),
+    ...(showSla ? isWorkingPolicy(incident) ? policyCardLines(incident) : ['', 'Срок ответа:', formatDateTime(incident.deadlineAt)] : []),
     ...(incident.answeredAt ? ['', 'Отвечено:', formatDateTime(incident.answeredAt)] : []),
     '',
     'Ответственная группа:',

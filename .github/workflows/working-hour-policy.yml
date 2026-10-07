@@ -1,0 +1,123 @@
+name: Isolated working hour policy
+on:
+  push:
+    branches: [codex/working-hour-policy]
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: synthetic
+          POSTGRES_PASSWORD: synthetic-only
+          POSTGRES_DB: incident_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U synthetic -d incident_test"
+          --health-interval 5s --health-timeout 3s --health-retries 15
+    env:
+      TEST_DATABASE_URL: postgresql://synthetic:synthetic-only@127.0.0.1:5432/incident_test
+      DATABASE_URL: postgresql://synthetic:synthetic-only@127.0.0.1:5432/incident_test
+      BOT_TOKEN: synthetic-only
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: mkdir -p evidence
+      - run: npm ci && npx prisma generate
+      - name: Real migration over the previous schema
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/legacy-policy" 4980fb66d853528464510c989c3a63051b825d48
+          npx prisma migrate deploy --schema "$RUNNER_TEMP/legacy-policy/prisma/schema.prisma"
+          docker exec -i "${{ job.services.postgres.id }}" psql -U synthetic -d incident_test -v ON_ERROR_STOP=1 < tests/fixtures/working-policy-before.sql
+          npx prisma migrate deploy
+          docker exec -i "${{ job.services.postgres.id }}" psql -U synthetic -d incident_test -v ON_ERROR_STOP=1 < tests/fixtures/working-policy-after.sql
+      - name: Typecheck
+        run: npm run typecheck 2>&1 | tee evidence/typecheck.txt
+      - name: Build
+        if: success() || failure()
+        run: npm run build 2>&1 | tee evidence/build.txt
+      - name: Unit
+        if: success() || failure()
+        run: npx vitest run tests/unit --reporter=default --reporter=json --outputFile=evidence/unit.json 2>&1 | tee evidence/unit.txt
+      - name: Integration with mocked MAX
+        if: success() || failure()
+        run: >-
+          npx vitest run tests/integration/working-policy.test.ts tests/integration/sla-and-idempotency.test.ts
+          tests/integration/working-deadline-queue.test.ts
+          tests/integration/overdue-report.test.ts tests/integration/answer-signature.test.ts tests/integration/region-signature-outbox.test.ts
+          tests/integration/resident-draft-safety.test.ts
+          tests/integration/delivery-reliability.test.ts tests/integration/delivery-review-regressions.test.ts
+          tests/integration/transactional-workflow.test.ts tests/integration/parallel-outbox.test.ts
+          tests/integration/reliable-delivery.test.ts tests/integration/delivery-worker-lifecycle.test.ts
+          --reporter=default --reporter=json --outputFile=evidence/integration.json
+          2>&1 | tee evidence/integration.txt
+      - name: Related routing, reservations and retention
+        if: success() || failure()
+        run: >-
+          npx vitest run tests/integration/distribution-queue.test.ts tests/integration/incident-lifecycle.test.ts
+          tests/integration/private-workspace.test.ts tests/integration/work-queues.test.ts
+          tests/integration/review-and-delivery.test.ts tests/integration/staff-reservations.test.ts
+          tests/integration/retention.test.ts tests/integration/lease-timezone.test.ts
+          --reporter=default --reporter=json --outputFile=evidence/routing.json
+          2>&1 | tee evidence/routing.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: working-hour-policy-${{ github.sha }}
+          path: evidence/
+          retention-days: 14
+  unchanged-base-routing:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: synthetic
+          POSTGRES_PASSWORD: synthetic-only
+          POSTGRES_DB: incident_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U synthetic -d incident_test"
+          --health-interval 5s --health-timeout 3s --health-retries 15
+    env:
+      TEST_DATABASE_URL: postgresql://synthetic:synthetic-only@127.0.0.1:5432/incident_test
+      DATABASE_URL: postgresql://synthetic:synthetic-only@127.0.0.1:5432/incident_test
+      BOT_TOKEN: synthetic-only
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 4980fb66d853528464510c989c3a63051b825d48
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: mkdir -p evidence && git rev-parse HEAD > evidence/base-sha.txt
+      - run: npm ci && npx prisma generate
+      - run: npx prisma migrate deploy && npm run build
+      - name: Identical related tests on unchanged main
+        run: >-
+          npx vitest run tests/integration/distribution-queue.test.ts tests/integration/incident-lifecycle.test.ts
+          tests/integration/private-workspace.test.ts tests/integration/work-queues.test.ts
+          tests/integration/review-and-delivery.test.ts tests/integration/staff-reservations.test.ts
+          tests/integration/retention.test.ts tests/integration/lease-timezone.test.ts
+          --reporter=default --reporter=json --outputFile=evidence/routing.json
+          2>&1 | tee evidence/routing.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: unchanged-main-routing-${{ github.sha }}
+          path: evidence/
+          retention-days: 14

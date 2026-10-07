@@ -1,3 +1,4 @@
+import { finishAssignment } from '../sla/policy';
 import { randomUUID } from 'node:crypto';
 import { leaseView, SECTOR_LEASE_ACTION, LEASE_MS, assertSectorReservation } from '../work-queues/leases';
 import { acquireAdvisoryLock } from '../database/prisma';
@@ -155,6 +156,7 @@ export class SectorService {
       assertResponder(actor, incident, chatId);
       if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status) || (expectedGroupId && expectedGroupId !== incident.assignedGroupId)) throw new ConflictError('Сообщение уже перешло на другой этап или в другую организацию.');
       this.state.assertTransition(incident.status, 'DISTRIBUTION');
+      await finishAssignment(tx, incidentId, new Date(), 'RETURNED', reason.trim());
       const event = await tx.incidentHistory.create({ data: { incidentId, action: 'REDISTRIBUTION_REQUESTED', fromStatus: incident.status,
         toStatus: 'DISTRIBUTION', actorMaxUserId: actor.maxUserId, actorRole: actor.role,
         metadata: { reason: reason.trim(), groupId: incident.assignedGroupId, groupName: incident.assignedGroup!.name, operator: actor.displayName } } });

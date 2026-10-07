@@ -91,6 +91,7 @@ const envSchema = z
 
     DAILY_INCIDENT_LIMIT: int(3),
     INCIDENT_MAX_LENGTH: int(150),
+    INCIDENT_SLA_POLICY: z.enum(['LEGACY', 'WORKING_HOURS_V1']).default('LEGACY'),
     INCIDENT_SLA_WORKDAYS: int(3).pipe(z.number().min(1).max(30)),
     SLA_CHECK_INTERVAL_MINUTES: int(10),
     SLA_ENABLED: boolean(true),
