@@ -1,7 +1,7 @@
 import { startAssignment, finishAssignment } from '../sla/policy';
 import { acquireAdvisoryLock, TRANSACTION_OPTIONS } from '../database/prisma';
 import { randomUUID } from 'node:crypto';
-import { assertClaimOwner, CLAIM_LOCK } from './queue-state';
+import { assertClaimOwner, assertNavigationClaim, CLAIM_LOCK } from './queue-state';
 import { queueSector, queueRejection, queueDistributionRefresh } from '../delivery/workflow-outbox';
 import {
   IncidentStatus,
@@ -124,13 +124,14 @@ export class DistributionService {
     return group?.isActive && group.maxChatId !== null ? group : null;
   }
 
-  async changeTopic(incidentId: string, categoryId: string | null, actor: Actor): Promise<IncidentWithRelations> {
+  async changeTopic(incidentId: string, categoryId: string | null, actor: Actor, navigation?: { lease: string; topicId: string | null }): Promise<IncidentWithRelations> {
     await this.prisma.$transaction(async tx => {
       await acquireAdvisoryLock(tx, ...CLAIM_LOCK);
       const incident = await this.repository.findById(incidentId, tx);
       if (!incident) throw new NotFoundError('Сообщение не найдено.');
       if (incident.status !== 'DISTRIBUTION') throw new ConflictError('Тему можно изменить только до распределения сообщения.');
       assertClaimOwner(incident, actor.maxUserId);
+      if (navigation) assertNavigationClaim(incident, actor.maxUserId, navigation);
       const category = categoryId ? await tx.category.findFirst({ where: { id: categoryId, isActive: true } }) : null;
       if (categoryId && !category) throw new NotFoundError('Выбранная тема больше недоступна. Откройте список заново.');
       if (incident.userSelectedCategoryId === categoryId) return;
@@ -150,7 +151,7 @@ export class DistributionService {
    * press the button at the same moment exactly one UPDATE matches a row and
    * the loser is told who won. One incident can never reach two sectors.
    */
-  async assign(incidentId: string, groupId: string, actor: Actor): Promise<IncidentWithRelations> {
+  async assign(incidentId: string, groupId: string, actor: Actor, navigation?: { lease: string; topicId: string | null }): Promise<IncidentWithRelations> {
     const incident = await this.repository.findById(incidentId);
     if (!incident) throw new NotFoundError(`Incident ${incidentId} not found`);
 
@@ -165,7 +166,9 @@ export class DistributionService {
     await this.prisma.$transaction(async (tx) => {
       await acquireAdvisoryLock(tx, ...CLAIM_LOCK);
       const now = new Date();
-      assertClaimOwner(await tx.incident.findUniqueOrThrow({ where: { id: incidentId } }), actor.maxUserId);
+      const current = await tx.incident.findUniqueOrThrow({ where: { id: incidentId } });
+      assertClaimOwner(current, actor.maxUserId);
+      if (navigation) assertNavigationClaim(current, actor.maxUserId, navigation);
       const claimed = await this.repository.transition(tx, incidentId, IncidentStatus.DISTRIBUTION, {
         status: IncidentStatus.ASSIGNED,
         assignedGroupId: group.id,

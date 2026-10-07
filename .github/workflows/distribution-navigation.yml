@@ -4,8 +4,12 @@ on:
     branches: [codex/distribution-navigation]
 permissions:
   contents: read
+defaults:
+  run:
+    shell: bash
 jobs:
   baseline:
+    if: github.sha == '73b7d0c' # baseline evidence preserved in run 37652952888
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -54,5 +58,57 @@ jobs:
         if: always()
         with:
           name: navigation-baseline-${{ matrix.runtime }}
+          path: evidence/
+          retention-days: 30
+  regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: synthetic
+          POSTGRES_PASSWORD: synthetic-only
+          POSTGRES_DB: incident_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U synthetic -d incident_test"
+          --health-interval 5s --health-timeout 3s --health-retries 15
+    env:
+      TEST_DATABASE_URL: postgresql://synthetic:synthetic-only@127.0.0.1:5432/incident_test
+      DATABASE_URL: postgresql://synthetic:synthetic-only@127.0.0.1:5432/incident_test
+      BOT_TOKEN: synthetic-only
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: mkdir -p evidence && git rev-parse HEAD > evidence/sha.txt
+      - run: npm ci && npx prisma generate && npx prisma migrate deploy
+      - name: Typecheck
+        run: npm run typecheck 2>&1 | tee evidence/typecheck.txt
+      - name: Build
+        if: success() || failure()
+        run: npm run build 2>&1 | tee evidence/build.txt
+      - name: Navigation
+        if: success() || failure()
+        run: npx vitest run tests/integration/distribution-navigation.test.ts --reporter=default --reporter=json --outputFile=evidence/navigation.json 2>&1 | tee evidence/navigation.txt
+      - name: Related full integration files
+        if: success() || failure()
+        run: >-
+          npx vitest run tests/integration/distribution-queue.test.ts tests/integration/private-workspace.test.ts
+          tests/integration/incident-lifecycle.test.ts tests/integration/staff-reservations.test.ts
+          tests/integration/work-queues.test.ts tests/integration/transactional-workflow.test.ts
+          tests/integration/working-policy.test.ts tests/integration/working-deadline-queue.test.ts
+          --reporter=default --reporter=json --outputFile=evidence/related.json 2>&1 | tee evidence/related.txt
+      - name: Unit
+        if: success() || failure()
+        run: npx vitest run tests/unit --reporter=default --reporter=json --outputFile=evidence/unit.json 2>&1 | tee evidence/unit.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: navigation-${{ github.sha }}
           path: evidence/
           retention-days: 30

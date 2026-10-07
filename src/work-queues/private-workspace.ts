@@ -1,3 +1,4 @@
+import { isDistributionNavigation, navigationKey } from '../bot/callbacks/distribution-navigation';
 import { observeMembership } from '../utils/latency';
 import { randomUUID } from 'node:crypto';
 import { Prisma, SessionType, type PrivateWorkItem } from '@prisma/client';
@@ -303,6 +304,7 @@ export async function personalAction(services: AppServices, actor: ResolvedActor
   }
   if (action === 'resume') { await take(services, s); await showPersonalWork(services, actor, id); return; }
   if (action === 'cancel') {
+    await services.prisma.systemSetting.deleteMany({ where: { key: navigationKey(actor.maxUserId, s.item.originChatId) } });
     await withConfirmationLock(services, actor.maxUserId, s.item.originChatId, () => services.prisma.operatorSession.deleteMany({ where: { maxUserId: actor.maxUserId, chatId: s.item.originChatId, incidentId: s.item.incidentId } }));
     await save(services, s.item, { cycle: cycleOf(s.incident), leaseUntil: dataOf(s.item).leaseUntil });
     await showPersonalWork(services, actor, id); return;
@@ -343,10 +345,14 @@ export async function personalAction(services: AppServices, actor: ResolvedActor
   if (action === 'run' && argument) {
     const p = parseCallbackPayload(argument);
     if (p?.kind !== 'incident' || p.incidentId !== s.item.incidentId) throw new ForbiddenError('Кнопка другого сообщения.');
-    if (['assign-group', 'approve'].includes(p.action)) {
+    if (isDistributionNavigation(p.action)) {
+      if (data.pending || data.draft) throw new ConflictError('Сначала подтвердите или отмените подготовленное действие.');
+      await run(services, s, argument, messageId); return;
+    }
+    if (p.action === 'approve') {
       if (data.session?.data.reviewEdit) throw new ConflictError('Сначала сохраните или отмените правку ответа.');
-      const group = p.action === 'assign-group' && p.argument ? await services.prisma.responsibleGroup.findUnique({ where: { id: p.argument } }) : null;
-      const title = p.action === 'approve' ? `Согласовать этот ответ и отправить жителю?\n\n${s.incident.answers.at(-1)?.text ?? ''}\n\nВложений: ${s.incident.answers.at(-1)?.attachments.length ?? 0}.` : `Направить сообщение в организацию «${group?.name ?? 'не найдена'}»?`;
+
+      const title = `Согласовать этот ответ и отправить жителю?\n\n${s.incident.answers.at(-1)?.text ?? ''}\n\nВложений: ${s.incident.answers.at(-1)?.attachments.length ?? 0}.`;
       await save(services, s.item, { ...data, pending: { raw: argument, title, nonce: randomUUID() } });
       await showPersonalWork(services, actor, id); return;
     }

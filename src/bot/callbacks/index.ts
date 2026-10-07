@@ -24,6 +24,7 @@ import { cancelStaffSession, pendingConfirmation, showStaffConfirmation, withCon
 import { invitePersonalWork, personalAction, personalHome, exitPersonalWork, withPersonalWorkLock } from '../../work-queues/private-workspace';
 import { sendMainMenu } from '../handlers/requester.handler';
 import { workingChatFor } from '../../users/working-chat';
+import { isDistributionNavigation } from './distribution-navigation';
 
 const log = moduleLogger('bot-callbacks');
 
@@ -181,6 +182,9 @@ function actionLease(
   if (payload.kind === 'personal') return undefined;
 
   if (payload.kind === 'incident') {
+    // Navigation has a shared in-flight lock plus persisted screen tokens. A
+    // successful page visit must not debounce revisiting that page for 120s.
+    if (isDistributionNavigation(payload.action)) return undefined;
     const globallyExclusive = ['assign-category', 'assign-group', 'take', 'approve'].includes(payload.action);
     return {
       key: [

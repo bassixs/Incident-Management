@@ -37,7 +37,7 @@ export async function showStaffConfirmation(services: AppServices, session: Oper
   await services.messages.send({ chatId: session.chatId }, { text: `ПРОВЕРЬТЕ ДЕЙСТВИЕ\n${incident.publicCode}\n👤 ${pending.employee}\n\n${pending.title}\n\n${pending.text}\n\nБот ждёт подтверждения. До него действие не выполняется.`, keyboard });
 }
 
-export async function prepareButtonConfirmation(services: AppServices, actor: ResolvedActor, chatId: bigint, incident: IncidentWithRelations, action: 'approve' | 'assign-group', argument?: string, sourceMessageId?: string): Promise<string | undefined> {
+export async function prepareButtonConfirmation(services: AppServices, actor: ResolvedActor, chatId: bigint, incident: IncidentWithRelations, action: 'approve' | 'assign-group', argument?: string, sourceMessageId?: string, navigation?: { lease: string; topicId: string | null }): Promise<string | undefined> {
   await withConfirmationLock(services, actor.maxUserId, chatId, async () => {
     if (action === 'approve') assertApprover(services, actor, chatId); else assertDispatcher(services, actor, chatId);
     const existing = await services.sessions.find(actor.maxUserId, chatId);
@@ -57,7 +57,7 @@ export async function prepareButtonConfirmation(services: AppServices, actor: Re
       const group = argument ? await services.prisma.responsibleGroup.findUnique({ where: { id: argument } }) : null;
       const current = await services.repository.findById(incident.id);
       if (!group?.isActive || !current || current.status !== 'DISTRIBUTION' || current.distributionClaimedBy !== actor.maxUserId || !current.distributionClaimUntil || current.distributionClaimUntil <= new Date()) throw stale();
-      data = { distributionLeaseUntil: current.distributionClaimUntil.toISOString() };
+      data = { distributionLeaseUntil: current.distributionClaimUntil.toISOString(), ...(navigation ? { distributionNavigation: navigation } : {}) };
       title = 'Направить сообщение в выбранную организацию?'; text = `${group.name}\n\nСообщение:\n${incident.text}`;
     }
     const pending: Pending = { token: randomUUID(), action, argument, title, text, employee: actor.displayName, sourceMessageId };
@@ -129,7 +129,8 @@ export async function handleStaffConfirmation(services: AppServices, actor: Reso
       if (await services.sessions.find(actor.maxUserId, chatId)) return;
     } else {
       const { handleIncidentCallback } = await import('./incident.callbacks');
-      result = await handleIncidentCallback({ services, actor, chatId, confirmed: true, messageId: pending.sourceMessageId }, { kind: 'incident', action: pending.action, incidentId, argument: pending.argument });
+      const navigation = (session.data as { distributionNavigation?: { lease: string; topicId: string | null } } | null)?.distributionNavigation;
+      result = await handleIncidentCallback({ services, actor, chatId, confirmed: true, messageId: pending.sourceMessageId, navigationAuthorized: navigation }, { kind: 'incident', action: pending.action, incidentId, argument: pending.argument });
       await services.prisma.operatorSession.deleteMany({ where: { id: session.id } });
     }
     if (messageId) await services.messages.finalizeCard(messageId, result ?? `${code}: действие подтверждено и выполнено.`);
