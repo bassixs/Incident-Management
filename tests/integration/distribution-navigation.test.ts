@@ -237,4 +237,27 @@ describeIntegration.each(['chat', 'private'] as const)('distribution navigation 
     expect((await fresh()).distributionClaimUntil!.getTime()).toBeLessThanOrEqual(Date.now());
   });
 
+  if (mode === 'chat') {
+    it('accepts the current claim card but rejects the same copy after the claim changes', async () => {
+      await groups(); const before = await fresh();
+      await db.outboundMessage.create({ data: { incidentId: incident.id, targetType: 'chat', targetId: TEST_CHATS.distribution, status: 'SENT', firstMessageId: 'claim-copy', sentAt: new Date(), attachments: [], payload: {},
+        dedupeKey: `distribution-claim:${incident.id}:${actor.maxUserId}:${before.distributionClaimUntil!.getTime()}` } });
+      await click(`incident:assign:${incident.id}`, 'claim-copy'); expect(button('Органы местного самоуправления')).toBeTruthy();
+      const until = new Date(before.distributionClaimUntil!.getTime() + 1000);
+      await db.incident.update({ where: { id: incident.id }, data: { distributionClaimUntil: until } });
+      const count = h.messages.sent.length;
+      await click(`incident:assign:${incident.id}`, 'claim-copy'); expect(notice()).toMatch(/устарел/);
+      expect(h.messages.sent.length).toBe(count); expect((await fresh()).distributionClaimUntil).toEqual(until); await unchanged();
+    });
+    it('accepts the latest redistribution notice and rejects a notice from a previous cycle', async () => {
+      const old = await db.incidentHistory.create({ data: { incidentId: incident.id, action: 'REDISTRIBUTION_REQUESTED', createdAt: new Date(Date.now() - 1000) } });
+      const latest = await db.incidentHistory.create({ data: { incidentId: incident.id, action: 'REDISTRIBUTION_REQUESTED' } });
+      for (const event of [old, latest]) await db.outboundMessage.create({ data: { incidentId: incident.id, targetType: 'chat', targetId: TEST_CHATS.distribution, status: 'SENT', firstMessageId: `return-${event.id}`, sentAt: new Date(), attachments: [], payload: {}, dedupeKey: `redistribution-notice:${event.id}` } });
+      await click(`incident:assign:${incident.id}`, `return-${latest.id}`); expect(button('Органы местного самоуправления')).toBeTruthy();
+      const count = h.messages.sent.length;
+      await click(`incident:assign:${incident.id}`, `return-${old.id}`); expect(notice()).toMatch(/устарел/);
+      expect(h.messages.sent.length).toBe(count); await unchanged();
+    });
+  }
+
 });

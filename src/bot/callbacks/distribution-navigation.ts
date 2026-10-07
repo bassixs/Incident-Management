@@ -55,14 +55,22 @@ export async function handleDistributionNavigation(context: IncidentCallbackCont
       // Only the two explicit entry buttons may acquire a claim. Old picker payloads
       // have no screen identity and must be reopened, never used to renew a lease.
       if (!['assign', 'topic'].includes(incoming.action)) throw stale();
-      if (!context.privateExecution && (!context.messageId || (context.messageId !== incident.distributionMessageId &&
-          !await services.prisma.outboundMessage.findFirst({ where: {
+      if (!context.privateExecution) {
+        if (!context.messageId) throw stale();
+        if (context.messageId !== incident.distributionMessageId) {
+          const publication = await services.prisma.outboundMessage.findFirst({ where: {
             incidentId: incident.id, targetType: 'chat', targetId: chatId, status: 'SENT',
-            AND: [
-              { OR: [{ trackingType: 'DISTRIBUTION_CARD' }, { dedupeKey: { startsWith: `distribution-claim:${incident.id}:` } }, { dedupeKey: { startsWith: `redistribution-notice:${incident.id}:` } }] },
-              { OR: [{ firstMessageId: context.messageId }, { payload: { path: ['keyboardMessageId'], equals: context.messageId } }] },
-            ],
-          }, select: { id: true } })))) throw stale();
+            OR: [{ firstMessageId: context.messageId }, { payload: { path: ['keyboardMessageId'], equals: context.messageId } }],
+          }, select: { trackingType: true, dedupeKey: true } });
+          const activeClaim = incident.distributionClaimUntil && incident.distributionClaimUntil > new Date()
+            ? `distribution-claim:${incident.id}:${incident.distributionClaimedBy}:${incident.distributionClaimUntil.getTime()}` : null;
+          const returned = publication?.dedupeKey?.startsWith('redistribution-notice:')
+            ? await services.prisma.incidentHistory.findFirst({ where: { incidentId: incident.id, action: 'REDISTRIBUTION_REQUESTED' }, orderBy: { createdAt: 'desc' }, select: { id: true } }) : null;
+          if (!publication || !(publication.trackingType === 'DISTRIBUTION_CARD' ||
+              (activeClaim && publication.dedupeKey === activeClaim) ||
+              (returned && publication.dedupeKey === `redistribution-notice:${returned.id}`))) throw stale();
+        }
+      }
       if (!await ensureFreeSession(services, actor, chatId)) return;
       await services.distributionQueue.claim(actor, chatId, incident.id);
       incident = await services.prisma.incident.findUniqueOrThrow({ where: { id: incident.id } });
