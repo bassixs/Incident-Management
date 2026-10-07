@@ -13,6 +13,10 @@ VERSIONS={'old':'59149006a7b3d30d01218fad84360e7d71e6d79e',
  'main':'c41f2d532591ddeb2ce0ea3d217e8a1a2095f38a',
  'reserve':'3c5c38b0f6477d5124593406f09f3af4c2db0c12'}
 
+IMAGE_IDS={'old':'sha256:c8d257430cf3432f4f862863e223e32f07da4bba4a8571a220b53cec5240a65e',
+ 'main':'sha256:a3001d85f28e396c201b3ed09cb6acc9043c1c2cd1bbed3cbe70c46c067af5fb',
+ 'reserve':'sha256:2e4a8fbe1c97a51382f9f5c29c85643d234d269b7d0fcc233c008e9f2d56e7d5'}
+
 # Exact historical representations, verified against the pinned SQL sources.
 # Only actual checksum cells are compared through this allowlist. The reviewed
 # manifest, migration names/order/completion flags and every schema field remain
@@ -41,6 +45,7 @@ def schema_matches(actual,expected):
 
 def configuration(s):
     o.need(s.get('kit')=='pr14-18-v1','KIT_EDITION_MISMATCH')
+    o.need({k:v['id'] for k,v in s['images'].items()}==IMAGE_IDS,'PINNED_IMAGE_IDS_MISMATCH')
     o.need(s.get('policy') in ('LEGACY','WORKING_HOURS_V1'),'POLICY_SELECTION_REQUIRED')
     m=s.get('migration')
     o.need(isinstance(m,dict),'MIGRATION_CONFIGURATION_REQUIRED')

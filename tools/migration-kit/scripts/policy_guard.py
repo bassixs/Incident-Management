@@ -6,6 +6,7 @@ import unapplied_resume as u
 def path(s): return Path(s['prepared'])/'policy-activation.json'
 
 def ensure_policy(s):
+    o.need(not path(s).is_symlink() and not path(s).with_name(path(s).name+'.ops-next').exists(),'UNSAFE_POLICY_RECEIPT')
     if s['policy']=='LEGACY':
         o.need(not path(s).exists(),'UNEXPECTED_POLICY_RECEIPT')
         return

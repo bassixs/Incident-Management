@@ -5,7 +5,7 @@ ROOT=Path(__file__).resolve().parents[2];out=ROOT/'package-output';out.mkdir()
 kit=ROOT/'installation-kit-pr14-18';kit.mkdir()
 def digest(p):
  with p.open('rb') as f:return hashlib.file_digest(f,'sha256').hexdigest()
-for name in ['PLAN.md','LIMITATIONS.md']:
+for name in ['PLAN.md','LIMITATIONS.md','settings.example.json']:
  shutil.copyfile(ROOT/'tools/migration-kit'/name,kit/name)
 shutil.copytree(ROOT/'tools/migration-kit/scripts',kit/'scripts',ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
 shutil.copyfile(ROOT/'kit-results/schema-expectations.json',kit/'schema-expectations.json')

@@ -20,7 +20,7 @@ class Metadata(unittest.TestCase):
         manifest=root/'manifest.json'
         manifest.write_text(json.dumps({'versions':g.VERSIONS,'probe_sha256':o.sha((SCRIPTS/'schema-probe.cjs').read_bytes()),'old':{'state':'old','migrations':[]},'new':{'state':'new','migrations':[]}}))
         self.s={'kit':'pr14-18-v1','policy':'LEGACY','install':str(root),'prepared':str(root),'backup_script':str(root/'backup.py'),'releases':str(root/'releases'),
-          'images':{k:{'id':'sha256:'+str(n)*64,'revision':v} for n,(k,v) in enumerate(g.VERSIONS.items(),1)},
+          'images':{k:{'id':g.IMAGE_IDS[k],'revision':v} for n,(k,v) in enumerate(g.VERSIONS.items(),1)},
           'migration':{'network':'synthetic-net','container':'synthetic-migrate','manifest':str(manifest),'manifest_sha256':o.sha(manifest.read_bytes()),'identity':{'system':'1','database':'synthetic','oid':'1'}}}
         for rev in g.VERSIONS.values():(root/'releases'/rev/'project').mkdir(parents=True)
         self.backup=root/'backup.py'

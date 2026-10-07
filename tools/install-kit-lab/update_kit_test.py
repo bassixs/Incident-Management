@@ -1,5 +1,5 @@
 """Only the changed operational gates; exact prebuilt applications, local MAX mock."""
-import json,os,sys,unittest
+import json,os,sys,unittest,shutil
 from pathlib import Path
 import ops_test as lab
 from ops_test import o,g,run,sql,probe,ROOT,OUT,NET,PG
@@ -8,6 +8,22 @@ from data_check import compare
 
 class UpdateKit(lab.MigrationKit):
  target_policy='WORKING_HOURS_V1'
+ @classmethod
+ def setUpClass(cls):
+  super().setUpClass()
+  old=cls.root/'crlf-schema';shutil.copytree(cls.root/'old-schema',old)
+  for name in g.HISTORICAL_CRLF:
+   p=old/'prisma/migrations'/name/'migration.sql';p.write_bytes(p.read_bytes().replace(b'\n',b'\r\n'))
+  sql('postgres','CREATE DATABASE template_crlf;')
+  env=cls.root/'crlf.env';env.write_text('DATABASE_URL=postgresql://lab:synthetic-only@postgres:5432/template_crlf\n')
+  run('docker','run','--rm','--network',NET,'--env-file',env,'-v',f'{old}:/old:ro','--entrypoint','node',cls.images['main'],'node_modules/prisma/build/index.js','migrate','deploy','--schema','/old/prisma/schema.prisma')
+  actual=probe(env)['schema']
+  if not g.schema_matches(actual,json.loads(cls.manifest.read_text())['old']):raise RuntimeError('REAL_CRLF_HISTORY_REFUSED')
+  (OUT/'real-crlf-history.json').write_text(json.dumps(actual['migrations'],indent=2))
+ def setUp(self):
+  if self._testMethodName=='test_activation_and_complete_backup_restore_switch':self.database_template='template_crlf'
+  super().setUp()
+
  def snapshot(self):
   return json.loads(run('docker','run','--rm','-i','--network',NET,'--env-file',self.install/'private/runtime.env','-v',f'{lab.SCRIPTS}:/ops:ro','--entrypoint','node',self.images['main'],'/ops/data-snapshot.cjs').stdout)
  def activate(self,fd):self.cli(fd,'activate-policy.py','activate-WORKING_HOURS_V1-for-new-incidents')
@@ -61,7 +77,7 @@ INSERT INTO "OutboundMessage" (id,"targetType","targetId",payload,attachments,st
    sql(self.db,'ALTER TYPE "OutboxStatus" ADD VALUE \'SYNTHETIC_UNREVIEWED\';')
    self.cli(fd,'apply-config.py',self.images['old'],self.images['main'],self.s['baseline_config_sha256'],self.s['images']['main']['candidate'],'run',code=2,contains='DATABASE_SCHEMA_NOT_NEW')
   old=dict(self.s);old.pop('kit');self.settings.write_text(json.dumps(old))
-  self.cli(-1,'wait-ready.py',self.images['old'],code=2,contains='KIT_EDITION_MISMATCH')
+  with o.backup_lock(self.s) as fd:self.cli(fd,'wait-ready.py',self.images['old'],code=2,contains='KIT_EDITION_MISMATCH')
 
 if __name__=='__main__':
  # Changed schema/activation and affected R4 gates, not the full app regression.

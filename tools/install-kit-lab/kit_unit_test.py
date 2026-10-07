@@ -8,6 +8,18 @@ import policy_guard as p
 from data_check import compare,value_hash
 
 class Kit(unittest.TestCase):
+ def test_compose_allows_only_image_and_explicit_policy(self):
+  with tempfile.TemporaryDirectory() as d:
+   root=Path(d);base=root/'compose-before.yml';base.write_text('baseline');candidate=root/'candidate';candidate.write_text('candidate')
+   original={'services':{'app':{'image':'old','environment':{'BOT_TOKEN':'synthetic'},'logging':{'driver':'json-file','options':{'max-size':'20m','max-file':'5'}},'volumes':['same']}}}
+   approved=copy.deepcopy(original);approved['services']['app']['image']='new';approved['services']['app']['environment']['INCIDENT_SLA_POLICY']='WORKING_HOURS_V1'
+   s={'prepared':d,'policy':'WORKING_HOURS_V1','baseline_config_sha256':o.sha(base.read_bytes()),'images':{'main':{'id':'new'},'reserve':{'id':'reserve'}}}
+   current=approved
+   with patch.object(o,'runtime'),patch.object(o,'compose',side_effect=lambda s,p:copy.deepcopy(original if Path(p)==base else current)):
+    o.config(s,candidate,'new')
+    for edit in [lambda c:c['services']['app']['environment'].update(INCIDENT_SLA_POLICY='LEGACY'),lambda c:c['services']['app']['environment'].update(BOT_TOKEN='different'),lambda c:c['services']['app'].update(volumes=['changed']),lambda c:c['services']['app']['logging']['options'].update({'max-file':'9'})]:
+     current=copy.deepcopy(approved);edit(current)
+     with self.assertRaises(o.Refusal):o.config(s,candidate,'new')
  def test_data_comparison_exact_and_every_new_field(self):
   before={'format':'pr14-18-data-v1','tables':{'Incident':{'i':{'text':value_hash('Synthetic')}}}}
   after=copy.deepcopy(before)
@@ -33,6 +45,9 @@ class Kit(unittest.TestCase):
     p.activate(s,'activate-WORKING_HOURS_V1-for-new-incidents');p.ensure_policy(s)
     with self.assertRaises(o.Refusal):p.activate(s,'activate-WORKING_HOURS_V1-for-new-incidents')
     with self.assertRaises(o.Refusal):p.ensure_policy(dict(s,extra=True))
+    partial=Path(d,'policy-activation.json.ops-next');partial.write_text('{}')
+    with self.assertRaisesRegex(o.Refusal,'UNSAFE_POLICY_RECEIPT'):p.ensure_policy(s)
+    partial.unlink()
     Path(d,'policy-activation.json').write_text('{')
     with self.assertRaises(o.Refusal):p.ensure_policy(s)
  def test_real_flock_owner_foreign_unlocked_and_exception_release(self):
