@@ -333,7 +333,7 @@ export function assignmentGroupKeyboard(
 /** Buttons under the sector-chat card (§21). */
 export function sectorKeyboard(incidentId: string, options: { hasTemplate: boolean; status?: string; hasPhone?: boolean }): Button[][] {
   const status = options.status ?? 'ASSIGNED';
-  if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(status)) return executorContextKeyboard(incidentId);
+  if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(status)) return [];
   if (status === 'REVISION_REQUIRED') return revisionKeyboard(incidentId, options.hasPhone);
   const rows: Button[][] = executorContextKeyboard(incidentId);
   if (status === 'ASSIGNED') rows.push([button.callback('Взять в работу', incidentCallback('take', incidentId), { intent: 'positive' })]);

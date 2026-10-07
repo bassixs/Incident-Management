@@ -18,7 +18,7 @@ import { leaseView } from '../../work-queues/leases';
 type Route = { view: 'home' | 'original' | 'versions' | 'answer' | 'remarks' | 'files' | 'file' | 'draft' | 'back'; page?: number; answerId?: string; fileId?: string };
 type State = { token: string; mid: string; incidentId: string; groupId: string; cycle: string; itemId?: string; actions: Route[] };
 type Context = { services: AppServices; actor: ResolvedActor; chatId: bigint; incidentId: string; messageId?: string;
-  privateItemId?: string; checkPrivate?: () => Promise<void>; backPrivate?: () => Promise<void> };
+  privateItemId?: string; checkPrivate?: () => Promise<void>; backPrivate?: (guard: () => Promise<void>) => Promise<void> };
 const stale = () => new ConflictError('Этот экран больше не активен. Откройте «Обращение и доработки» в текущей карточке.');
 export const contextKey = (user: bigint, chat: bigint, item?: string) => `executor-context:${user}:${chat}:${item ?? 'chat'}`;
 export const isExecutorContext = (action: string) => action === 'context' || action === 'context-page';
@@ -66,7 +66,7 @@ export async function showExecutorContext(ctx: Context, argument?: string): Prom
     const target = ctx.privateItemId ? { userId: actor.maxUserId } : { chatId };
     if (route.view === 'back') {
       await guard();
-      if (ctx.backPrivate) await ctx.backPrivate();
+      if (ctx.backPrivate) await ctx.backPrivate(guard);
       else await services.messages.send(target, { text: sectorCard(incident, incident.assignedGroup!, await leaseView(services.prisma, incidentId, 'sector-queue')),
         keyboard: sectorKeyboard(incidentId, { status: incident.status, hasTemplate: !!incident.assignedGroup!.answerTemplate }),
         replyToMessageId: incident.sectorMessageId ?? undefined, immediatePreview: true, beforeImmediateSend: guard });

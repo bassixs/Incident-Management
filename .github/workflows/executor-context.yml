@@ -51,6 +51,7 @@ jobs:
           tests/integration/incident-lifecycle.test.ts tests/integration/staff-reservations.test.ts
           tests/integration/work-queues.test.ts tests/integration/transactional-workflow.test.ts
           tests/integration/working-policy.test.ts tests/integration/working-deadline-queue.test.ts
+          tests/integration/delivery-review-regressions.test.ts tests/integration/delivery-reliability.test.ts tests/integration/region-signature-outbox.test.ts tests/integration/answer-signature.test.ts
           --reporter=default --reporter=json --outputFile=evidence/related.json 2>&1 | tee evidence/related.txt
       - name: Unit
         if: success() || failure()

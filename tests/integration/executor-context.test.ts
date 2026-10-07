@@ -120,12 +120,41 @@ describeIntegration.each(['chat', 'private'] as const)('executor context (%s)', 
     const before = h.messages.sent.length; await click(btn('Файл')); expect(h.messages.sent).toHaveLength(before); expect(notice()).toMatch(/организац|доступ/);
   });
   it('rechecks chat activation on each request', async () => {
-    await open(); await db.responsibleGroup.update({ where: { id: group.id }, data: { isActive: false } }); const before = h.messages.sent.length; await click(btn('Исходный текст')); expect(h.messages.sent).toHaveLength(before); expect(notice()).not.toBe('""');
+    await open(); await db.responsibleGroup.update({ where: { id: group.id }, data: { isActive: false } }); const before = h.messages.sent.length, acks = vi.mocked(h.services.max.answerCallback).mock.calls.length; await click(btn('Исходный текст')); expect(h.messages.sent).toHaveLength(before); if (mode === 'private') expect(notice()).not.toBe('""'); else expect(vi.mocked(h.services.max.answerCallback).mock.calls).toHaveLength(acks);
   });
   it('survives handler restart with the same saved screen', async () => {
     await open(); const next = btn('История версий'); const max = h.services.max;
     h.services = buildServices(db, { messages: h.messages as never, media: h.services.media }); h.services.max = max;
     await click(next); expect(text()).toContain('от новых версий');
+  });
+  it('explains an unavailable MAX photo and preserves all source attachments', async () => {
+    await open(); await click(btn('Исходные фотографии')); const before = await snapshot();
+    vi.mocked(h.messages.send).mockRejectedValueOnce(new MaxError(400, { code: 'attachment.invalid', message: 'Invalid photo token' }));
+    await click(btn('Фото 1')); expect(text()).toContain('Вложение недоступно'); expect(await snapshot()).toBe(before);
+  });
+  it('warns about unknown attachment outcome without automatically sending it again', async () => {
+    await open(); await click(btn('Исходные фотографии'));
+    const before = h.messages.sent.length;
+    vi.mocked(h.messages.send).mockRejectedValueOnce(new Error('synthetic lost acknowledgement'));
+    await click(btn('Фото 1')); expect(text()).toContain('результат может быть неизвестен'); expect(h.messages.sent).toHaveLength(before);
+  });
+  it('recovers after initial screen failure without modifying business state', async () => {
+    const before = await snapshot(); vi.mocked(h.messages.send).mockRejectedValueOnce(new Error('synthetic 503'));
+    await open(); await open(); expect(text()).toContain('Исходное сообщение'); expect(await snapshot()).toBe(before);
+  });
+  it('does not clear an expired pending session when returning to the working card', async () => {
+    await db.operatorSession.create({ data: { maxUserId: actor.maxUserId, chatId: group.maxChatId!, incidentId: incident.id, type: 'WAITING_FOR_ANSWER', data: { confirmation: { action: 'input', token: 'expired', body: { text: 'Сохранить этот текст' } } }, expiresAt: new Date(0) } });
+    if (itemId) { const item = await db.privateWorkItem.findUniqueOrThrow({ where: { id: itemId } }); await db.privateWorkItem.update({ where: { id: itemId }, data: { data: { ...(item.data as object), session: { type: 'WAITING_FOR_ANSWER', data: { confirmation: { action: 'input' } } } } } }); }
+    const before = await snapshot(); await open(); await click(btn('Мой незавершённый ввод')); expect(text()).toContain('Сохранить этот текст'); await click(btn('К текущей рабочей карточке')); expect(await snapshot()).toBe(before);
+  });
+  it('serializes concurrent page requests and refuses a late screen result after reassignment', async () => {
+    await open(); const payload = btn('Исходный текст');
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+    vi.mocked(h.messages.editCardKeyboard).mockImplementationOnce(async () => { entered(); await gate; return true; });
+    const first = click(payload); await started; await click(payload); expect(notice()).toMatch(/загружается|выполняется/);
+    const other = await db.responsibleGroup.findFirstOrThrow({ where: { code: GROUP_CODES.it } }); await db.incident.update({ where: { id: incident.id }, data: { assignedGroupId: other.id } }); release(); await first;
+    const record = await db.systemSetting.findUniqueOrThrow({ where: { key: contextKey(actor.maxUserId, group.maxChatId!, itemId) } }); expect(JSON.parse(record.value).actions).toBeUndefined();
   });
   if (mode === 'private') it('checks live membership again and does not change another selected incident', async () => {
     await open(); await db.privateWorkItem.update({ where: { id: itemId! }, data: { selected: false } }); const before = await snapshot(); await click(btn('История версий')); expect(await snapshot()).toBe(before);

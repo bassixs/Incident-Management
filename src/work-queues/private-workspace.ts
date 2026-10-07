@@ -211,8 +211,9 @@ function stage(data: WorkData): string {
   return 'Бот пока не ждёт текст. Выберите действие кнопкой.';
 }
 
-export async function showPersonalWork(services: AppServices, actor: ResolvedActor, id: string, details = false) {
+export async function showPersonalWork(services: AppServices, actor: ResolvedActor, id: string, details = false, readOnly = false) {
   const s = await scope(services, actor, id); const data = dataOf(s.item); const owned = await lease(services, s);
+  const sessionForView = () => readOnly ? services.prisma.operatorSession.findFirst({ where: { maxUserId: actor.maxUserId, chatId: s.item.originChatId, incidentId: s.item.incidentId, expiresAt: { gt: new Date() } } }) : services.sessions.find(actor.maxUserId, s.item.originChatId);
   if (!s.active) {
     await services.messages.send({ userId: actor.maxUserId }, { text: `${s.incident.publicCode}: работа на этом этапе завершена. Бот не ждёт от вас сообщения.`, keyboard: navigation() }); return;
   }
@@ -227,16 +228,16 @@ export async function showPersonalWork(services: AppServices, actor: ResolvedAct
     if (active) rows.push([button('Подтвердить', 'confirm', id, data.pending.nonce), button('Назад', 'back', id)]);
   } else if (active && data.session?.data.confirmation) {
     const { showStaffConfirmation } = await import('../bot/callbacks/staff-confirmation');
-    const live = await services.sessions.find(actor.maxUserId, s.item.originChatId);
+    const live = await sessionForView();
     if (live) { await showStaffConfirmation(personalServices(services, s.item, s.incident.publicCode), live); return; }
   } else if (active && data.session?.data.reviewEdit) {
     const { resumeReviewEdit } = await import('../bot/callbacks/review-edit-flow');
-    const live = await services.sessions.find(actor.maxUserId, s.item.originChatId);
+    const live = await sessionForView();
     if (live) { await resumeReviewEdit(personalServices(services, s.item, s.incident.publicCode), live); return; }
   } else if (active && data.session?.type === 'WAITING_REJECTION_REASON') {
     // Reuse the version-bound rejection buttons through the private UI adapter.
     const { resumeRejection } = await import('../bot/callbacks/rejection-flow');
-    const live = await services.sessions.find(actor.maxUserId, s.item.originChatId);
+    const live = await sessionForView();
     if (live) { await resumeRejection(personalServices(services, s.item, s.incident.publicCode), live); return; }
   } else if (active && !data.session) {
     rows = wrapButtons(s.kind === 'distribution' ? distributionKeyboard(s.incident.id, !!s.incident.requesterPhone) : s.kind === 'review'
@@ -314,7 +315,13 @@ export async function personalAction(services: AppServices, actor: ResolvedActor
     if (read.incidentId !== s.item.incidentId || s.kind !== 'sector') throw new ForbiddenError('Откройте контекст в профильной рабочей карточке.');
     await showExecutorContext({ services, actor, chatId: s.item.originChatId, incidentId: s.item.incidentId, messageId,
       privateItemId: id, checkPrivate: async () => { await scope(services, actor, id); },
-      backPrivate: () => showPersonalWork(services, actor, id) }, read.action === 'context-page' ? read.argument ?? '' : undefined);
+      backPrivate: guard => {
+        const messages = new Proxy(services.messages, { get(target, property) {
+          if (property === 'send') return (destination: Parameters<typeof target.send>[0], message: CompositeMessage) => target.send(destination, { ...message, immediatePreview: true, beforeImmediateSend: guard });
+          const value = Reflect.get(target, property); return typeof value === 'function' ? value.bind(target) : value;
+        } });
+        return showPersonalWork({ ...services, messages }, actor, id, false, true);
+      } }, read.action === 'context-page' ? read.argument ?? '' : undefined);
     return;
   }
   if (action === 'open') { await enterPersonalWork(services, actor, id); return; }

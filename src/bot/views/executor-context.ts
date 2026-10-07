@@ -22,7 +22,7 @@ export function executorSummary(incident: ContextIncident): string[] {
     ...(incident.attachments ? [`Исходных вложений: ${incident.attachments.length}`] : []),
     ...(incident.revisionReason ? ['', 'Последнее замечание согласующего:', excerpt(incident.revisionReason)] : []),
     '', latest ? `Последняя сохранённая версия ответа — ${latest.version}:` : 'Сохранённого проекта ответа пока нет.',
-    ...(latest ? [excerpt(latest.text)] : []),
+    ...(latest ? [excerpt(latest.text ?? 'Текст версии не сохранён.')] : []),
     '', 'Полный текст, фотографии и версии — по кнопке «Обращение и доработки».',
   ];
 }
