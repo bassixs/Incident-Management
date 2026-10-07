@@ -1,7 +1,9 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import type { PrismaClient } from '@prisma/client';
 import { MaxError } from '@maxhub/max-bot-api';
-import { resetConfigCache } from '../../src/config';
+import { getConfig, resetConfigCache } from '../../src/config';
+import { inspectBotHealth } from '../../src/monitoring/bot-status.service';
+import { SUBSCRIBED_UPDATE_TYPES } from '../../src/max/max-types';
 import { recordPolicyDelivery } from '../../src/sla/policy';
 import { MaxMessageService } from '../../src/max/max-message.service';
 import { DeliveryAlertService } from '../../src/delivery/delivery-alert.service';
@@ -76,6 +78,10 @@ describeIntegration('working deadline queue review regressions', () => {
     const held = await db.outboundMessage.findUniqueOrThrow({ where: { id: job.id } });
     expect(held.status).toBe('DEFERRED'); expect(held.attempts).toBe(error ? 1 : 0);
     expect(held.nextAttemptAt).toEqual(time(`${next}T08:00:00`));
+    const diagnostics = await inspectBotHealth(db, { getMe: vi.fn(), listWebhookSubscriptions: vi.fn().mockResolvedValue([
+      { url: getConfig().WEBHOOK_URL, update_types: SUBSCRIBED_UPDATE_TYPES },
+    ]) }, getConfig(), new Date());
+    expect(diagnostics.some(x => x.startsWith('Задания с повторными попытками:'))).toBe(error);
     const restarted = worker(async (_id, text) => { sends.push(text); return { body: { mid: `ack-${sends.length}` } }; });
     await restarted.send({ chatId: job.targetId }, { text: 'Ordinary card', delivery: { dedupeKey: 'ordinary' } });
     expect(sends).toEqual(['Ordinary card']);
@@ -155,11 +161,13 @@ describeIntegration('working deadline queue review regressions', () => {
       expect(await db.outboundMessage.findUnique({ where: { id: job.id } })).toMatchObject({ status: 'CANCELLED', cancelReason: reason, cancelledAt: new Date(), sentAt: null, firstMessageId: null, trackingApplied: false });
       const alert = vi.fn(); await new DeliveryAlertService(db, { sendToChat: alert } as never, 9999002n).checkNow();
       expect(alert).not.toHaveBeenCalled();
+      // Check the cancelled job's lane before a synthetic policy mutation lets
+      // the LEGACY sweep legitimately create its separate reminder.
+      await w.send({ chatId: job.targetId }, { text: 'Follower', delivery: { dedupeKey: 'after-cancel' } });
+      expect(send).toHaveBeenCalledTimes(1); send.mockClear();
       await Promise.all([h.services.sla.sweep(), h.services.sla.sweep()]);
       await worker(send).flush(); expect(send).not.toHaveBeenCalled();
       expect(await db.outboundMessage.count({ where: { dedupeKey: job.dedupeKey } })).toBe(1);
-      await w.send({ chatId: job.targetId }, { text: 'Follower', delivery: { dedupeKey: 'after-cancel' } });
-      expect(send).toHaveBeenCalledTimes(1);
     } finally { if (original === undefined) delete process.env.DISTRIBUTION_CHAT_ID; else process.env.DISTRIBUTION_CHAT_ID = original; resetConfigCache(); }
   });
 
