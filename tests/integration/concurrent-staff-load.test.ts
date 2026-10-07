@@ -109,7 +109,7 @@ describeIntegration('concurrent employee load with arriving incidents', () => {
           while (joined < lanes && !stop) { checkTime(); await delay(10); }
           if (stop) return;
         }
-        const id = incident.id, n = Number(incident.text.split(' ').at(-1)), branch = n % 8;
+        const id = incident.id, n = Number(incident.requesterMaxUserId - 100000n), branch = n % 8;
         await expect(services.distribution.assign(id, group(GROUP_CODES.facility).id, outsider)).rejects.toThrow();
         if (branch === 0) {
           await services.distribution.reject(id, `Причина отказа ${n}`, dispatcher);
@@ -183,7 +183,10 @@ describeIntegration('concurrent employee load with arriving incidents', () => {
     const incidents = await prisma.incident.findMany({ include: { answers: { orderBy: { version: 'asc' } } } });
     expect(new Set(incidents.map(i => i.publicCode)).size).toBe(total);
     for (const i of incidents) {
-      const n = Number(i.text.split(' ').at(-1));
+      // Rejection intentionally erases incident.text. The synthetic requester ID
+      // is the immutable fixture index, not content which the workflow changes.
+      const n = Number(i.requesterMaxUserId - 100000n);
+      expect(Number.isInteger(n) && n >= 0 && n < total).toBe(true);
       const delivered = [...sent.values()].filter(s => s.target === i.requesterMaxUserId && s.text.includes('Получен ответ по вашему сообщению'));
       if (n % 8 === 0) { expect(i.status).toBe('REJECTED'); expect(delivered).toHaveLength(0); }
       else {
