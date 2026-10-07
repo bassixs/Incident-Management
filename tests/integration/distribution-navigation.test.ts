@@ -224,4 +224,16 @@ describeIntegration.each(['chat', 'private'] as const)('distribution navigation 
     await click(next); expect(page()).toBe('1 / 3'); await unchanged();
   });
 
+  it('rechecks the exact claim inside the assignment transaction after an asynchronous lookup', async () => {
+    await groups(); await click(button('Хозяйственная группа'));
+    const requireGroup = h.services.responsibleGroups.requireActiveById.bind(h.services.responsibleGroups);
+    vi.spyOn(h.services.responsibleGroups, 'requireActiveById').mockImplementationOnce(async id => {
+      const group = await requireGroup(id);
+      await db.incident.update({ where: { id: incident.id }, data: { distributionClaimUntil: new Date(Date.now() - 1) } });
+      return group;
+    });
+    await click(button('Подтвердить')); await unchanged();
+    expect((await fresh()).distributionClaimUntil!.getTime()).toBeLessThanOrEqual(Date.now());
+  });
+
 });
