@@ -13,6 +13,32 @@ VERSIONS={'old':'8dcfa330183e47551446d10cabbd3b493a42ea0b',
  'main':'59149006a7b3d30d01218fad84360e7d71e6d79e',
  'reserve':'1a7a0f54217ef33bf4d7fac92f69e8ddfe46ec66'}
 
+# Exact historical representations, verified against the pinned SQL sources.
+# Only actual checksum cells are compared through this allowlist. The reviewed
+# manifest, migration names/order/completion flags and every schema field remain
+# unchanged. No database history or SQL file is rewritten.
+HISTORICAL_CRLF={
+ '20260906000000_sla_day_one_reminder':(
+  'ae937553357266f941dc9ede8264cf5b12ac80f2410f70abc7684b2a1aecf39c',
+  'dee2d4053518eeb04d4ea71e0489329d223e4a7c50cb67bc5ffb9db54497efbb'),
+ '20260906120000_clarifications':(
+  'a1cde4275a0d5190435a23fbc831bc5b187f999c9ff97580b2683117b31c0322',
+  '053d0542c57a3459f3bade7c1e5301cc1d4088f5cd3e7797a5f6787ba1002429'),
+}
+
+def schema_matches(actual,expected):
+    if not isinstance(actual,dict) or not isinstance(actual.get('migrations'),list):
+        return False
+    rows=[]
+    for row in actual['migrations']:
+        if not isinstance(row,list) or len(row)!=4:
+            return False
+        copy=list(row)
+        variants=HISTORICAL_CRLF.get(copy[0]) if isinstance(copy[0],str) else None
+        if variants and copy[1]==variants[1]:copy[1]=variants[0]
+        rows.append(copy)
+    return dict(actual,migrations=rows)==expected
+
 def configuration(s):
     m=s.get('migration')
     o.need(isinstance(m,dict),'MIGRATION_CONFIGURATION_REQUIRED')
@@ -45,7 +71,7 @@ def probe(s):
 
 def assert_schema(s,kind):
     _,expected=configuration(s)
-    o.need(probe(s)==expected[kind], 'DATABASE_SCHEMA_NOT_'+kind.upper())
+    o.need(schema_matches(probe(s),expected[kind]), 'DATABASE_SCHEMA_NOT_'+kind.upper())
 
 def no_migrator(s,absent=False):
     # A failed daemon query never establishes absence. Stopped old records stay.

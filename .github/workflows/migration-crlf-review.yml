@@ -1,0 +1,89 @@
+name: Historical migration checksums isolated review
+on:
+  push:
+    branches: [codex/migration-crlf-review]
+    paths:
+      - .github/workflows/migration-crlf-review.yml
+      - tools/install-kit-lab/historical_*.py
+      - tools/install-kit-lab/ops_test.py
+      - tools/migration-kit/**
+permissions:
+  contents: read
+  actions: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  historical-checksums:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Source bytes and narrow policy, normal and optimized Python
+        run: |
+          python3 tools/install-kit-lab/historical_checksums_test.py 2>&1 | tee checksum-unit.log
+          python3 -O tools/install-kit-lab/historical_checksums_test.py 2>&1 | tee checksum-unit-optimized.log
+      - name: Download exact previously verified images, no application build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/bassixs/Incident-Management/actions/artifacts/11447884920/zip > original-kit.zip
+          echo '94a93869d2ee19830168da4c275b8ce98fcfc802be30dc7bc8572d0a0c46ebf9  original-kit.zip' | sha256sum -c -
+          mkdir installation-kit
+          unzip -q original-kit.zip -d installation-kit
+          (cd installation-kit && sha256sum -c SHA256SUMS)
+          test -z "$(docker ps -aq)"
+          docker load -i installation-kit/main-and-compatible-reserve.tar.gz
+          python3 - <<'PY'
+          import json,subprocess
+          from pathlib import Path
+          meta=json.load(open('installation-kit/IMAGES.json'))
+          for role,expected in meta['images'].items():
+              actual=json.loads(subprocess.check_output(['docker','image','inspect','incident-lab:'+role]))[0]
+              if actual['Id']!=expected['id'] or actual['Config']['Labels']['org.opencontainers.image.revision']!=expected['sha']:
+                  raise SystemExit('Pinned image mismatch')
+          Path('environment.json').write_text(json.dumps({'docker':subprocess.check_output(['docker','version'],text=True),'compose':subprocess.check_output(['docker','compose','version'],text=True),'python':subprocess.check_output(['python3','--version'],text=True),'images':meta['images']},indent=2))
+          PY
+      - name: Real historical Prisma apply, migration guard and container switching
+        run: python3 tools/install-kit-lab/historical_docker_test.py 2>&1 | tee historical-docker.log
+      - name: Package review edition separately, preserve original manifest and images
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os,shutil
+          from pathlib import Path
+          original=Path('installation-kit');new=Path('installation-kit-crlf-review')
+          shutil.copytree(original,new)
+          source=Path('tools/migration-kit/scripts/migration_guard.py')
+          shutil.copyfile(source,new/'scripts/migration_guard.py')
+          changed=[]
+          for p in original.rglob('*'):
+              if p.is_file() and p.read_bytes()!=(new/p.relative_to(original)).read_bytes():changed.append(p.relative_to(original).as_posix())
+          if changed!=['scripts/migration_guard.py']:raise SystemExit('Unexpected kit changes: '+str(changed))
+          (new/'CRLF-REVIEW.json').write_text(json.dumps({'sourceCommit':os.environ['GITHUB_SHA'],'originalOpsCommit':'6cd29e6614892684a516e3213c4cb107f5af665c','originalArtifactId':11447884920,'originalZipSha256':'94a93869d2ee19830168da4c275b8ce98fcfc802be30dc7bc8572d0a0c46ebf9','changedOperationalFiles':changed,'runtimeImagesAndManifestUnchanged':True,'tests':json.load(open('kit-results/historical-result.json'))},indent=2))
+          shutil.copyfile('tools/migration-kit/CRLF-REVIEW.md',new/'CRLF-REVIEW.md')
+          sums=[]
+          for p in sorted(new.rglob('*')):
+              if p.is_file() and p.name!='SHA256SUMS':
+                  with p.open('rb') as f:h=hashlib.file_digest(f,'sha256').hexdigest()
+                  sums.append(h+'  '+p.relative_to(new).as_posix())
+          (new/'SHA256SUMS').write_text('\n'.join(sums)+'\n')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: historical-checksum-evidence
+          path: |
+            kit-results/
+            checksum-unit*.log
+            historical-docker.log
+            environment.json
+          retention-days: 14
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: installation-kit-crlf-review
+          path: installation-kit-crlf-review/
+          compression-level: 0
+          retention-days: 14

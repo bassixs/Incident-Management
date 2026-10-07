@@ -101,7 +101,8 @@ class MigrationKit(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         suffix=self.rootcase.name.replace('-','').replace('_','')
         self.db='test_'+suffix;self.name='kit-app-'+suffix;self.migrator='kit-migrate-'+suffix
-        sql('postgres',f'CREATE DATABASE "{self.db}" TEMPLATE template_old;')
+        template=getattr(self,'database_template','template_old')
+        sql('postgres',f'CREATE DATABASE "{self.db}" TEMPLATE "{template}";')
         sql(self.db,"""INSERT INTO "OutboundMessage" (id,"targetType","targetId",payload,attachments,status,"lastError","updatedAt")
 SELECT 'preserved-failed-'||n,'user',n,'{}','[]','FAILED',CASE WHEN n<6 THEN 'MANUALLY_RETIRED_FOREIGN_BOT_ADDED' ELSE 'MAX_HTTP_403' END,now() FROM generate_series(0,7) n;
 INSERT INTO "OperatorSession" (id,"maxUserId","chatId",type,data,"expiresAt") VALUES ('preserved-draft',999,999,'WAITING_INCIDENT_CONFIRMATION','{"draftText":"Synthetic","draftMedia":[{"storageKey":"preserved.txt"}]}','2099-01-01');""")
@@ -234,7 +235,7 @@ CREATE EVENT TRIGGER synthetic_failure ON ddl_command_start EXECUTE FUNCTION syn
                 holder.stdin.write('ROLLBACK;\n');holder.stdin.close();holder.wait(timeout=30)
             wait(lambda:not o.inspect(self.migrator)['State']['Running'])
             self.assertEqual(o.inspect(self.migrator)['State']['ExitCode'],0)
-            self.assertEqual(probe(self.install/'private/runtime.env')['schema'],json.loads(self.manifest.read_text())['new'])
+            self.assertTrue(g.schema_matches(probe(self.install/'private/runtime.env')['schema'],json.loads(self.manifest.read_text())['new']))
             # Late successful DDL is evidence for review, not implicit permission.
             self.assertEqual(json.loads(g.ledger(self.s).read_text())['state'],'started')
             self.cli(fd,'apply-config.py',self.images['old'],self.images['main'],self.s['baseline_config_sha256'],self.s['images']['main']['candidate'],'run',code=2,contains='MIGRATION_RESULT_UNKNOWN')
