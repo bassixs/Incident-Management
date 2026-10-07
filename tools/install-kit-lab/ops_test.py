@@ -1,6 +1,6 @@
 """Migration kit: real Docker/Postgres/flock and controlled lifecycle failures.
 
-Old app is a synthetic SIGTERM HTTP fixture, main/reserve are exact real images.
+All three app versions use exact previously built images; no builds.
 No live MAX: only local mock. Independent empty databases per test.
 """
 import contextlib
@@ -79,10 +79,7 @@ class MigrationKit(unittest.TestCase):
         after=probe(envnew)['schema']
         cls.manifest=OUT/'schema-expectations.json'
         cls.manifest.write_text(json.dumps({'versions':g.VERSIONS,'probe_sha256':o.sha((SCRIPTS/'schema-probe.cjs').read_bytes()),'old':before,'new':after},indent=2))
-        oldsrc=cls.root/'old-http';oldsrc.mkdir();(oldsrc/'server.py').write_text(HTTP)
-        (oldsrc/'Dockerfile').write_text('FROM python:3.12-slim\nCOPY server.py /server.py\nENTRYPOINT ["python","-u","/server.py"]\n')
-        run('docker','build','--label','org.opencontainers.image.revision='+g.VERSIONS['old'],'-t','incident-kit:synthetic-old',oldsrc)
-        cls.images={role:run('docker','image','inspect','--format','{{.Id}}',tag).stdout.strip() for role,tag in [('old','incident-kit:synthetic-old'),('main','incident-lab:main'),('reserve','incident-lab:reserve')]}
+        cls.images={role:run('docker','image','inspect','--format','{{.Id}}',tag).stdout.strip() for role,tag in [('old','incident-kit:old'),('main','incident-lab:main'),('reserve','incident-lab:reserve')]}
         run('docker','run','-d','--init','--name',MOCK,'--network',NET,'--network-alias','mock','-v',f'{ROOT}/tools/reserve-container-lab:/lab:ro','--entrypoint','node','incident-lab:main','/lab/mock.cjs')
         wait(lambda:run('docker','exec',MOCK,'node','-e',"fetch('http://localhost:8080/control').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",check=False).returncode==0)
 
@@ -118,15 +115,17 @@ INSERT INTO "OperatorSession" (id,"maxUserId","chatId",type,data,"expiresAt") VA
         values={'BOT_TOKEN':'synthetic-container-token','DATABASE_URL':f'postgresql://lab:synthetic-only@postgres:5432/{self.db}',
           'NODE_ENV':'production','MAX_API_BASE_URL':'http://mock:8080','BOT_MODE':'webhook','WEBHOOK_URL':'https://synthetic.invalid/webhook/max','WEBHOOK_SECRET':'synthetic-only','WEBHOOK_AUTO_REGISTER':'false','LOG_PRETTY':'false','SLA_ENABLED':'false','DISTRIBUTION_QUEUE_ENABLED':'false','MEDIA_STORAGE':'local','MEDIA_LOCAL_PATH':'/app/data/uploads','ADMINS':'9001','BOT_STATUS_USER_IDS':''}
         runtime.write_text(''.join(k+'='+v+'\n' for k,v in values.items()))
-        self.s={'install':str(self.install),'prepared':str(self.prepared),'backup_script':str(self.rootcase/'backup.py'),'backup_lock':str(self.lock),'releases':str(self.rootcase/'releases'),'app':self.name,'project':self.name,'health_base':'http://127.0.0.1:'+str(port),'runtime_sha256':o.sha(runtime.read_bytes()),'images':{}}
+        self.s={'kit':'pr14-18-v1','policy':getattr(self,'target_policy','LEGACY'),'install':str(self.install),'prepared':str(self.prepared),'backup_script':str(self.rootcase/'backup.py'),'backup_lock':str(self.lock),'releases':str(self.rootcase/'releases'),'app':self.name,'project':self.name,'health_base':'http://127.0.0.1:'+str(port),'runtime_sha256':o.sha(runtime.read_bytes()),'images':{}}
         for role,iid in self.images.items():
             cfg={'services':{'app':{'image':iid,'container_name':self.name,'restart':'no','mem_limit':'768m','cpus':'1','env_file':[str(runtime)],'ports':['127.0.0.1:'+str(port)+':3000'],'volumes':[str(self.uploads)+':/app/data/uploads'],'logging':{'driver':'json-file','options':{'max-size':'20m','max-file':'5'}},'networks':['lab']}},'networks':{'lab':{'external':True,'name':NET}}}
+            if role!='old':cfg['services']['app']['environment']={'INCIDENT_SLA_POLICY':self.s['policy']}
             path=self.prepared/('compose-'+role+'.yml');path.write_text(json.dumps(cfg))
             self.s['images'][role]={'id':iid,'revision':g.VERSIONS[role],'candidate':str(path),'compose_sha256':o.sha(path.read_bytes())}
         oldbytes=Path(self.s['images']['old']['candidate']).read_bytes()
         (self.prepared/'compose-before.yml').write_bytes(oldbytes);(self.install/'compose.yml').write_bytes(oldbytes)
         self.s['baseline_config_sha256']=o.sha(oldbytes)
         self.s['migration']={'network':NET,'container':self.migrator,'manifest':str(self.manifest),'manifest_sha256':o.sha(self.manifest.read_bytes()),'identity':probe(runtime)['identity']}
+        self.s['backup']={'postgres':PG,'postgres_id':o.inspect(PG)['Id'],'user':'lab','database':self.db,'uploads':str(self.uploads),'restore_image':o.inspect('postgres:16-alpine')['Id']}
         self.settings=self.rootcase/'settings.json';self.settings.write_text(json.dumps(self.s))
         self.addCleanup(self.clean_case)
         run('docker','compose','-p',self.name,'-f',self.install/'compose.yml','up','-d','--no-build','--pull','never','app')
@@ -193,10 +192,10 @@ INSERT INTO "OperatorSession" (id,"maxUserId","chatId",type,data,"expiresAt") VA
             self.stop(fd)
             # A synthetic PostgreSQL DDL fault interrupts the actual Prisma CLI
             # after migration 1. No application migration is edited for the test.
-            sql(self.db,"""CREATE FUNCTION synthetic_ddl_failure() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_TAG='CREATE FUNCTION' THEN RAISE EXCEPTION 'SYNTHETIC_DDL_FAILURE'; END IF; END; $$;
+            sql(self.db,"""CREATE FUNCTION synthetic_ddl_failure() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN IF TG_TAG='ALTER TYPE' THEN RAISE EXCEPTION 'SYNTHETIC_DDL_FAILURE'; END IF; END; $$;
 CREATE EVENT TRIGGER synthetic_failure ON ddl_command_start EXECUTE FUNCTION synthetic_ddl_failure();""")
             self.cli(fd,'migrate-app.py','run',code=2,contains='MIGRATION_FAILED_OR_UNKNOWN')
-            self.assertEqual(sql(self.db,"SELECT count(*) FROM information_schema.columns WHERE table_name='InboundUpdate' AND column_name='processingToken';").strip(),'1')
+            self.assertEqual(sql(self.db,"SELECT count(*) FROM information_schema.columns WHERE table_name='Incident' AND column_name='slaPolicy';").strip(),'1')
             self.assertEqual(sql(self.db,"SELECT count(*) FROM _prisma_migrations WHERE finished_at IS NULL AND rolled_back_at IS NULL;").strip(),'1')
             self.cli(fd,'resume-unapplied.py',self.images['old'],'run',code=2,contains='MIGRATION_ALREADY_STARTED')
             self.cli(fd,'apply-config.py',self.images['old'],self.images['main'],self.s['baseline_config_sha256'],self.s['images']['main']['candidate'],'run',code=2,contains='MIGRATION_RESULT_UNKNOWN')
@@ -218,7 +217,7 @@ CREATE EVENT TRIGGER synthetic_failure ON ddl_command_start EXECUTE FUNCTION syn
                     if args[:2]==['docker','run'] and '--name' in args and self.migrator in args:
                         # Acquire only after read-only preflight, immediately
                         # before the real CLI starts its first DDL statement.
-                        holder.stdin.write('BEGIN; LOCK TABLE "InboundUpdate" IN ACCESS EXCLUSIVE MODE; SELECT \'LOCK_READY\';\n');holder.stdin.flush()
+                        holder.stdin.write('BEGIN; LOCK TABLE "Incident" IN ACCESS EXCLUSIVE MODE; SELECT \'LOCK_READY\';\n');holder.stdin.flush()
                         import select
                         self.assertTrue(select.select([holder.stdout],[],[],30)[0],'lock holder timeout')
                         self.assertEqual(holder.stdout.readline().strip(),'LOCK_READY')
@@ -252,7 +251,7 @@ CREATE EVENT TRIGGER synthetic_failure ON ddl_command_start EXECUTE FUNCTION syn
     def test_missing_receipt_cannot_hide_changed_schema(self):
         with o.backup_lock(self.s) as fd:
             self.stop(fd)
-            sql(self.db,'ALTER TABLE "InboundUpdate" ADD COLUMN "processingToken" TEXT;')
+            sql(self.db,'ALTER TABLE "Incident" ADD COLUMN "slaPolicy" TEXT;')
             self.cli(fd,'resume-unapplied.py',self.images['old'],'run',code=2,contains='DATABASE_SCHEMA_NOT_OLD')
 
     def test_main_reserve_main_same_database(self):
@@ -270,7 +269,7 @@ CREATE EVENT TRIGGER synthetic_failure ON ddl_command_start EXECUTE FUNCTION syn
             self.cli(fd,'migrate-app.py','run',code=2,contains='UNCLEAN_OR_RUNNING_APP')
         self.assertFalse(g.ledger(self.s).exists())
         cfg=o.compose(self.s,o.live_path(self.s))['services']['app']
-        run('docker','run','-d','--name',self.name+'-second','--env-file',self.install/'private/runtime.env',self.images['old'])
+        run('docker','run','-d','--name',self.name+'-second','--network',NET,'--env-file',self.install/'private/runtime.env',self.images['old'])
         with o.backup_lock(self.s) as fd:
             self.cli(fd,'stop-app.py',self.images['old'],'run',code=2,contains='SECOND_OR_RUNNING_APP')
         self.assertTrue(o.app(self.s)['State']['Running'])

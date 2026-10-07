@@ -9,9 +9,9 @@ import ops_common as o
 import unapplied_resume as u
 
 ROOT=Path(__file__).resolve().parent
-VERSIONS={'old':'8dcfa330183e47551446d10cabbd3b493a42ea0b',
- 'main':'59149006a7b3d30d01218fad84360e7d71e6d79e',
- 'reserve':'1a7a0f54217ef33bf4d7fac92f69e8ddfe46ec66'}
+VERSIONS={'old':'59149006a7b3d30d01218fad84360e7d71e6d79e',
+ 'main':'c41f2d532591ddeb2ce0ea3d217e8a1a2095f38a',
+ 'reserve':'3c5c38b0f6477d5124593406f09f3af4c2db0c12'}
 
 # Exact historical representations, verified against the pinned SQL sources.
 # Only actual checksum cells are compared through this allowlist. The reviewed
@@ -40,6 +40,8 @@ def schema_matches(actual,expected):
     return dict(actual,migrations=rows)==expected
 
 def configuration(s):
+    o.need(s.get('kit')=='pr14-18-v1','KIT_EDITION_MISMATCH')
+    o.need(s.get('policy') in ('LEGACY','WORKING_HOURS_V1'),'POLICY_SELECTION_REQUIRED')
     m=s.get('migration')
     o.need(isinstance(m,dict),'MIGRATION_CONFIGURATION_REQUIRED')
     o.need({k:v['revision'] for k,v in s['images'].items()}==VERSIONS,'MIGRATION_VERSION_MISMATCH')

@@ -76,6 +76,13 @@ def config(s,p,expected_image,expected_hash=None):
  need(set(c['services'])==set(base['services'])=={'app'},'UNEXPECTED_SERVICES')
  need(c['services']['app']['image']==expected_image,'WRONG_COMPOSE_IMAGE')
  need(c['services']['app'].get('logging')=={'driver':'json-file','options':{'max-size':'20m','max-file':'5'}},'LOG_POLICY_CHANGED')
+ # Only the pinned new candidates may override this one explicit policy key.
+ if expected_image in [s['images'][k]['id'] for k in ('main','reserve')]:
+  env=c['services']['app'].get('environment',{});before=base['services']['app'].get('environment',{})
+  need(env.get('INCIDENT_SLA_POLICY','LEGACY')==s['policy'],'POLICY_CONFIG_MISMATCH')
+  need(before.get('INCIDENT_SLA_POLICY','LEGACY')=='LEGACY','UNEXPECTED_BASELINE_POLICY')
+  if 'INCIDENT_SLA_POLICY' in before:env['INCIDENT_SLA_POLICY']=before['INCIDENT_SLA_POLICY']
+  else:env.pop('INCIDENT_SLA_POLICY',None)
  c['services']['app'].pop('image');base['services']['app'].pop('image')
  need(c==base,'NON_IMAGE_CONFIG_CHANGED')
  return b,c
@@ -176,6 +183,8 @@ def stop(s,expected,name):
 def apply(s,old,new,expected_sha,candidate,name):
  from migration_guard import ensure_new
  ensure_new(s)
+ from policy_guard import ensure_policy
+ ensure_policy(s)
  require_lock(s);role=image(s,new);need(role!='old','INCOMPATIBLE_ROLLBACK_FORBIDDEN');image(s,old)
  r=run_dir(s,name);need(not (r/'applied.json').exists(),'ALREADY_APPLIED')
  c=app(s);clean(c);need(c['Image']==old,'WRONG_INSTALLED_IMAGE');v=receipt(s,r,c)
@@ -219,6 +228,8 @@ def wait_ready_inner(s,expected,deadline):
 def start(s,target,name):
  from migration_guard import ensure_new
  ensure_new(s)
+ from policy_guard import ensure_policy
+ ensure_policy(s)
  require_lock(s);role=image(s,target);need(role!='old','INCOMPATIBLE_ROLLBACK_FORBIDDEN')
  r=run_dir(s,name);v=read_json(r/'applied.json')
  need(v['image']==target and v['compose']==sha(live_path(s).read_bytes()),'APPLIED_CONFIG_MISMATCH')
@@ -240,6 +251,8 @@ def start(s,target,name):
 def recover(s,old,new,expected_sha,name,ack):
  from migration_guard import ensure_new
  ensure_new(s)
+ from policy_guard import ensure_policy
+ ensure_policy(s)
  require_lock(s);need(ack=='reviewed-start-failure','REVIEW_REQUIRED')
  oldrole=image(s,old);newrole=image(s,new)
  need(oldrole in ['main','reserve'] and newrole in ['main','reserve'] and old!=new,'COMPATIBLE_RESERVE_REQUIRED')
@@ -264,6 +277,8 @@ def recover(s,old,new,expected_sha,name,ack):
 def metadata(s,oldrev,oldimage,newrev,newimage):
  from migration_guard import ensure_new
  ensure_new(s)
+ from policy_guard import ensure_policy
+ ensure_policy(s)
  require_lock(s);role=image(s,newimage);need(role in ['main','reserve'],'COMPATIBLE_IMAGE_REQUIRED')
  oldroles=[v for v in s['images'].values() if v['id']==oldimage and v['revision']==oldrev]
  need(len(oldroles)==1 and s['images'][role]['revision']==newrev,'METADATA_VERSION_MISMATCH')
@@ -281,7 +296,10 @@ def cli(name):
  try:
   need(len(sys.argv)>=3 and sys.argv[1]=='--settings','SETTINGS_REQUIRED');s=settings(sys.argv[2]);args=sys.argv[3:]
   functions={'stop-app.py':(stop,2),'apply-config.py':(apply,5),'recover-config.py':(recover,5),'wait-ready.py':(wait_ready,1),'update-backup-metadata.py':(metadata,4),'start-app.py':(start,2)}
-  if name=='migrate':
+  if name=='activate-policy.py':
+   from policy_guard import activate
+   need(len(args)==1,'ARGUMENT_COUNT');activate(s,*args)
+  elif name=='migrate':
    from migration_guard import migrate
    need(len(args)==1,'ARGUMENT_COUNT');migrate(s,*args)
   elif name=='resume-unapplied.py':

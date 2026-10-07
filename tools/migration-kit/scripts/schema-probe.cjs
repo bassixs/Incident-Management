@@ -10,6 +10,7 @@ const p=new PrismaClient();
    'identity',jsonb_build_object('system', (SELECT system_identifier::text FROM pg_control_system()),'database',current_database(),'oid',(SELECT oid::text FROM pg_database WHERE datname=current_database())),
    'schema',jsonb_build_object(
     'migrations',(SELECT jsonb_agg(jsonb_build_array(migration_name,checksum,finished_at IS NOT NULL,rolled_back_at IS NOT NULL) ORDER BY migration_name,id) FROM _prisma_migrations),
+    'enums',(SELECT jsonb_agg(jsonb_build_array(t.typname,e.enumlabel) ORDER BY t.typname,e.enumsortorder) FROM pg_enum e JOIN pg_type t ON t.oid=e.enumtypid JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname='public'),
     'columns',(SELECT jsonb_agg(jsonb_build_array(table_name,column_name,data_type,udt_name,is_nullable,column_default) ORDER BY table_name,ordinal_position) FROM information_schema.columns WHERE table_schema='public'),
     'indexes',(SELECT jsonb_agg(indexdef ORDER BY tablename,indexname) FROM pg_indexes WHERE schemaname='public'),
     'constraints',(SELECT jsonb_agg(jsonb_build_array(c.relname,k.conname,pg_get_constraintdef(k.oid)) ORDER BY c.relname,k.conname) FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public'),

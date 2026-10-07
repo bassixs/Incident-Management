@@ -18,15 +18,15 @@ class Metadata(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         root=Path(self.tmp.name);self.root=root
         manifest=root/'manifest.json'
-        manifest.write_text(json.dumps({'versions':g.VERSIONS,'probe_sha256':o.sha((SCRIPTS/'schema-probe.cjs').read_bytes()),'old':{'state':'old'},'new':{'state':'new'}}))
-        self.s={'install':str(root),'prepared':str(root),'backup_script':str(root/'backup.py'),'releases':str(root/'releases'),
+        manifest.write_text(json.dumps({'versions':g.VERSIONS,'probe_sha256':o.sha((SCRIPTS/'schema-probe.cjs').read_bytes()),'old':{'state':'old','migrations':[]},'new':{'state':'new','migrations':[]}}))
+        self.s={'kit':'pr14-18-v1','policy':'LEGACY','install':str(root),'prepared':str(root),'backup_script':str(root/'backup.py'),'releases':str(root/'releases'),
           'images':{k:{'id':'sha256:'+str(n)*64,'revision':v} for n,(k,v) in enumerate(g.VERSIONS.items(),1)},
           'migration':{'network':'synthetic-net','container':'synthetic-migrate','manifest':str(manifest),'manifest_sha256':o.sha(manifest.read_bytes()),'identity':{'system':'1','database':'synthetic','oid':'1'}}}
         for rev in g.VERSIONS.values():(root/'releases'/rev/'project').mkdir(parents=True)
         self.backup=root/'backup.py'
         self.before=("REV = '"+g.VERSIONS['old']+"'\nIMAGE = '"+self.s['images']['old']['id']+"'\ndef copy_snapshot():\n copy_tree(Path('"+(root/'releases'/g.VERSIONS['old']/'project').as_posix()+"'), stage / 'project')\n")
         self.backup.write_text(self.before)
-        self.schema={'state':'new'}
+        self.schema={'state':'new','migrations':[]}
         self.stack=contextlib.ExitStack();self.addCleanup(self.stack.close)
         self.stack.enter_context(patch.object(o,'require_lock'))
         self.stack.enter_context(patch.object(o,'output',return_value=''))
