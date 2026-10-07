@@ -78,6 +78,15 @@ describeIntegration.each(['chat', 'private'] as const)('executor context (%s)', 
     const readPages = async () => { const out = []; do { out.push(text().split('\n\n').slice(1).join('\n\n')); const next = rows().find(b => b.text === 'Следующая страница →'); if (!next || next.type !== 'callback') break; await click(next.payload); } while (true); expect(out.join('')).toBe(content); await click(btn('← Предыдущая страница')); expect(text()).toContain(`${out.length - 1}/${out.length}`); };
     await open(); await click(btn('Исходный текст')); await readPages(); await open(); await version(7); await readPages(); await click(btn('Замечание к этой версии')); await readPages();
   });
+  it('keeps the complete legacy latest remark separate and restores the version page on Back', async () => {
+    const remark = 'Замечание без подтверждённой привязки '.repeat(210);
+    await db.incident.update({ where: { id: incident.id }, data: { revisionReason: remark } });
+    await open(); await click(btn('Последнее замечание полностью'));
+    const parts: string[] = []; do { parts.push(text().split('\n\n').slice(1).join('\n\n')); const next = rows().find(b => b.text === 'Следующая страница →'); if (!next || next.type !== 'callback') break; await click(next.payload); } while (true);
+    expect(parts.join('')).toBe(remark); expect(text()).toContain('без привязки к версии');
+    const answer = await db.incidentAnswer.findFirstOrThrow({ where: { version: 1 } }); await db.incidentAnswer.update({ where: { id: answer.id }, data: { text: 'длинный ответ '.repeat(600) } });
+    await open(); await version(1); await click(btn('Следующая страница')); const second = text(); await click(btn('Замечание')); expect(text()).toContain('Замечание версии 1'); await click(btn('Назад')); expect(text()).toBe(second); await click(btn('Назад')); expect(rows()[0]!.text).toContain('Версия 2');
+  });
   it('offers every original photo including old sets over four and binds answer files to their own version', async () => {
     const before = await snapshot(); await open(); await click(btn('Исходные фотографии')); expect(text()).toContain(': 9');
     const first = btn('Фото 1'); await click(first); expect(h.messages.sent.at(-1)!.message.attachments).toHaveLength(1);

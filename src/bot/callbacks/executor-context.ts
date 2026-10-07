@@ -15,7 +15,7 @@ import { sectorCard } from '../views/cards';
 import { sectorKeyboard } from '../keyboards';
 import { leaseView } from '../../work-queues/leases';
 
-type Route = { view: 'home' | 'original' | 'versions' | 'answer' | 'remarks' | 'files' | 'file' | 'draft' | 'back'; page?: number; answerId?: string; fileId?: string };
+type Route = { view: 'home' | 'original' | 'versions' | 'answer' | 'remarks' | 'files' | 'file' | 'draft' | 'latest-remarks' | 'back'; page?: number; fromPage?: number; answerId?: string; fileId?: string };
 type State = { token: string; mid: string; incidentId: string; groupId: string; cycle: string; itemId?: string; actions: Route[] };
 type Context = { services: AppServices; actor: ResolvedActor; chatId: bigint; incidentId: string; messageId?: string;
   privateItemId?: string; checkPrivate?: () => Promise<void>; backPrivate?: (guard: () => Promise<void>) => Promise<void> };
@@ -93,7 +93,7 @@ export async function showExecutorContext(ctx: Context, argument?: string): Prom
         fileNotice = missing ? 'Вложение недоступно: файл отсутствует или MAX больше не принимает фотографию. Остальные данные сохранены.'
           : 'Не удалось подтвердить отправку вложения. Проверьте сообщения перед повтором: результат может быть неизвестен.';
       }
-      route = { view: 'files', answerId: route.answerId, page: route.page };
+      route = { ...route, view: 'files', fileId: undefined };
     }
     await guard();
     const token = randomUUID(), actions: Route[] = [];
@@ -117,9 +117,11 @@ export async function showExecutorContext(ctx: Context, argument?: string): Prom
         rows.push([button('Исходный текст', { view: 'original' }), button('Исходные фотографии', { view: 'files' })]);
         const latest = incident.answers.at(-1);
         if (latest) rows.push([button(`Текущий ответ · версия ${latest.version}`, { view: 'answer', answerId: latest.id })]);
+        if (incident.revisionReason) rows.push([button('Последнее замечание полностью', { view: 'latest-remarks' })]);
         rows.push([button('Мой незавершённый ввод', { view: 'draft' })], [button('История версий и замечаний', { view: 'versions' })]);
         break;
       }
+      case 'latest-remarks': pages(incident.revisionReason ?? 'Последнее замечание не сохранено.', 'Последнее замечание — сводка обращения, без привязки к версии'); break;
       case 'original': pages(incident.text, 'Исходный текст обращения'); break;
       case 'versions': {
         const versions = [...incident.answers].sort((a, b) => b.version - a.version), page = Math.min(route.page ?? 0, Math.max(0, Math.ceil(versions.length / 6) - 1));
@@ -132,7 +134,7 @@ export async function showExecutorContext(ctx: Context, argument?: string): Prom
       }
       case 'answer':
         pages(answer!.text, `Версия ${answer!.version} · ${formatDateTime(answer!.createdAt)}${answer!.id === incident.answers.at(-1)?.id ? ' · последняя сохранённая' : ' · историческая'}`);
-        rows.push([button('Замечание к этой версии', { view: 'remarks', answerId: answer!.id }), button(`Вложения (${files.length})`, { view: 'files', answerId: answer!.id })]);
+        rows.push([button('Замечание к этой версии', { view: 'remarks', answerId: answer!.id, fromPage: route.page }), button(`Вложения (${files.length})`, { view: 'files', answerId: answer!.id, fromPage: route.page })]);
         break;
       case 'remarks': pages(answer!.revisionReason ?? 'Замечание к этой версии не сохранено. Это не подтверждает отсутствие замечаний в старой истории.', `Замечание к версии ${answer!.version}`); break;
       case 'files': {
@@ -154,7 +156,12 @@ export async function showExecutorContext(ctx: Context, argument?: string): Prom
         break;
       }
     }
-    if (route.view !== 'home') rows.push([button('Назад', { view: route.view === 'remarks' || (route.view === 'files' && route.answerId) ? 'answer' : route.view === 'answer' ? 'versions' : 'home', ...(route.view === 'remarks' || route.view === 'files' ? { answerId: route.answerId } : {}) })]);
+    if (route.view !== 'home') {
+      const toAnswer = route.view === 'remarks' || (route.view === 'files' && route.answerId);
+      const answerIndex = [...incident.answers].sort((a, b) => b.version - a.version).findIndex(a => a.id === route.answerId);
+      rows.push([button('Назад', toAnswer ? { view: 'answer', answerId: route.answerId, page: route.fromPage }
+        : route.view === 'answer' ? { view: 'versions', page: Math.max(0, Math.floor(answerIndex / 6)) } : { view: 'home' })]);
+    }
     rows.push([button('К текущей рабочей карточке', { view: 'back' })]);
     await guard();
     let mid = old?.mid;
