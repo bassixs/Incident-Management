@@ -10,6 +10,7 @@ def ensure_policy(s):
     if s['policy']=='LEGACY':
         o.need(not path(s).exists(),'UNEXPECTED_POLICY_RECEIPT')
         return
+    o.need(path(s).is_file(),'POLICY_ACTIVATION_REQUIRED')
     v=o.read_json(path(s))
     o.need(v=={'policy':'WORKING_HOURS_V1','settingsHash':u.digest(s),
                'migrationReceiptHash':o.sha((Path(s['prepared'])/'migration-intent.json').read_bytes())},

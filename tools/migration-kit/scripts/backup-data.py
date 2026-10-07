@@ -78,6 +78,7 @@ def capture(s,kind,dest,runname=None):
     print('BACKUP_CAPTURED_RESTORE_NOT_YET_VERIFIED')
 def verify(s,dest):
     o.require_lock(s);b=config(s)
+    g.probe(s) # re-confirm source identity, without changing or restoring it
     for name,h in o.read_json(dest/'checksums.json').items():
         o.need(Path(name).name==name and filehash(dest/name)==h,'BACKUP_CHECKSUM_MISMATCH')
     meta=o.read_json(dest/'backup.json');o.need(meta['kit']==s['kit'] and meta['identity']==s['migration']['identity'],'BACKUP_IDENTITY_MISMATCH')
@@ -89,13 +90,18 @@ def verify(s,dest):
         os.chmod(env,0o600);f.write('POSTGRES_USER=checker\nPOSTGRES_PASSWORD='+password+'\nPOSTGRES_DB=verify\nDATABASE_URL=postgresql://checker:'+password+'@127.0.0.1:5432/verify\n')
     cid=None
     try:
+        print('RESTORE_STEP:isolated-database-start',flush=True)
         cid=o.output(['docker','run','-d','--name',name,'--network','none','--cpus','0.5','--memory','768m','--pids-limit','128','--env-file',str(env),b['restore_image']]).strip()
         until=time.monotonic()+45
-        while o.command(['docker','exec',cid,'pg_isready','-U','checker'],allow_failure=True).returncode:
+        # initdb's temporary server accepts local sockets before initialization
+        # completes. The restore must wait for the final TCP listener.
+        while o.command(['docker','exec',cid,'pg_isready','-h','127.0.0.1','-U','checker'],allow_failure=True).returncode:
             o.need(time.monotonic()<until,'RESTORE_DB_NOT_READY');time.sleep(.25)
+        print('RESTORE_STEP:pg-restore',flush=True)
         with (dest/'database.dump').open('rb') as f:
             result=subprocess.run(['docker','exec','-i',cid,'pg_restore','-U','checker','-d','verify','--no-owner','--no-privileges','--single-transaction','--exit-on-error'],stdin=f,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=180)
             o.need(result.returncode==0,'ISOLATED_RESTORE_FAILED')
+        print('RESTORE_STEP:schema-and-data',flush=True)
         schema=json.loads(o.output(node(s,env,'container:'+cid,'schema-probe.cjs'),30))['schema']
         o.need(g.schema_matches(schema,manifest[meta['phase']]),'RESTORED_SCHEMA_MISMATCH')
         data=json.loads(o.output(node(s,env,'container:'+cid,'data-snapshot.cjs'),90))
@@ -110,7 +116,9 @@ def verify(s,dest):
         print('BACKUP_RESTORE_VERIFIED')
     finally:
         if cid:
-            o.command(['docker','stop','-t','30',cid]);o.command(['docker','rm','-v',cid])
+            print('RESTORE_STEP:isolated-database-cleanup',flush=True)
+            # The command budget must contain Docker's requested 30-second grace.
+            o.command(['docker','stop','-t','30',cid],timeout=35);o.command(['docker','rm','-v',cid])
         if env.exists():env.unlink() # only this function's random disposable credentials
 def main():
     a=argparse.ArgumentParser();a.add_argument('--settings',required=True);a.add_argument('action',choices=['capture','verify']);a.add_argument('--output',required=True);a.add_argument('--schema',choices=['old','new']);a.add_argument('--final-run')

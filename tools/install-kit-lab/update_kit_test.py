@@ -51,7 +51,7 @@ INSERT INTO "OutboundMessage" (id,"targetType","targetId",payload,attachments,st
    self.cli(fd,'backup-data.py','verify','--output',str(final))
    before=self.snapshot();lab.MigrationKit.migrate(self,fd)
    self.assertEqual(compare(before,self.snapshot(),migrated=True),[])
-   self.cli(fd,'apply-config.py',self.images['old'],self.images['main'],self.s['baseline_config_sha256'],self.s['images']['main']['candidate'],'run',code=2,contains='INVALID_JSON')
+   self.cli(fd,'apply-config.py',self.images['old'],self.images['main'],self.s['baseline_config_sha256'],self.s['images']['main']['candidate'],'run',code=2,contains='POLICY_ACTIVATION_REQUIRED')
    self.activate(fd)
    self.cli(fd,'activate-policy.py','activate-WORKING_HOURS_V1-for-new-incidents',code=2,contains='POLICY_ALREADY_ATTEMPTED')
    self.seed_new();protected=self.snapshot()
