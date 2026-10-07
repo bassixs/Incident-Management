@@ -223,13 +223,32 @@ describeIntegration('delivery reliability regressions', () => {
   });
 
   it('retries completion after all parts were acknowledged without sending again', async () => {
-    const sendToUser = vi.fn().mockResolvedValue({ body: { mid: 'acknowledged' } }); const w = worker({ sendToUser });
-    const broken = vi.spyOn(prisma, '$transaction').mockRejectedValueOnce(new Error('database temporarily unavailable'));
+    const broken = vi.spyOn(prisma, '$transaction');
+    const sendToUser = vi.fn(async () => {
+      // Inject at the completion boundary, not the earlier recipient-claim
+      // transaction. Confirmed progress is persisted before completion starts.
+      broken.mockRejectedValueOnce(new Error('database temporarily unavailable'));
+      return { body: { mid: 'acknowledged' } };
+    });
+    const w = worker({ sendToUser });
     await w.send({ userId: 1n }, { text: 'one', delivery: { dedupeKey: 'completion' } }); broken.mockRestore(); w.stop(); await w.waitForIdle();
     const row = await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: 'completion' } });
     expect(row.status).toBe('PENDING'); expect((row.payload as any).deliveryProgress.mids).toEqual(['acknowledged']);
     await prisma.outboundMessage.update({ where: { id: row.id }, data: { nextAttemptAt: new Date(0) } }); await worker({ sendToUser }).flush();
     expect(sendToUser).toHaveBeenCalledTimes(1); expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { id: row.id } })).status).toBe('SENT');
+  });
+
+  it('keeps the job pending when the recipient-claim transaction fails before any MAX request', async () => {
+    const sendToUser = vi.fn().mockResolvedValue({ body: { mid: 'after-restart' } }); const w = worker({ sendToUser });
+    const broken = vi.spyOn(prisma, '$transaction').mockRejectedValueOnce(new Error('claim database unavailable'));
+    try {
+      await expect(w.send({ userId: 1n }, { text: 'one', delivery: { dedupeKey: 'claim-failure' } })).rejects.toThrow('claim database unavailable');
+    } finally { broken.mockRestore(); w.stop(); await w.waitForIdle(); }
+    expect(sendToUser).not.toHaveBeenCalled();
+    expect(await prisma.outboundMessage.findUnique({ where: { dedupeKey: 'claim-failure' } })).toMatchObject({ status: 'PENDING', attempts: 0, lockedAt: null, sentAt: null });
+    await worker({ sendToUser }).flush();
+    expect(sendToUser).toHaveBeenCalledTimes(1);
+    expect((await prisma.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: 'claim-failure' } })).status).toBe('SENT');
   });
 
   it('fails closed if content differs from the saved part plan', async () => {
