@@ -1,0 +1,49 @@
+name: Draft and reassignment regressions
+on:
+  push:
+    branches: [codex/draft-reassignment-regressions]
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  baseline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: synthetic
+          POSTGRES_PASSWORD: synthetic-only
+          POSTGRES_DB: incident_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U synthetic -d incident_test"
+          --health-interval 5s --health-timeout 3s --health-retries 15
+    env:
+      TEST_DATABASE_URL: postgresql://synthetic:synthetic-only@127.0.0.1:5432/incident_test
+      DATABASE_URL: postgresql://synthetic:synthetic-only@127.0.0.1:5432/incident_test
+      BOT_TOKEN: synthetic-only
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: dedf2ea43c6bf358b4d780f2a9beee4796a7bcec
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: mkdir -p evidence && git rev-parse HEAD > evidence/runtime-sha.txt
+      - run: npm ci && npx prisma generate && npx prisma migrate deploy
+      - name: Unmodified tests on exact main
+        run: >-
+          npx vitest run tests/integration/incident-lifecycle.test.ts tests/integration/staff-reservations.test.ts
+          --reporter=default --reporter=json --outputFile=evidence/baseline.json
+          2>&1 | tee evidence/baseline.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: exact-main-baseline-${{ github.sha }}
+          path: evidence/
+          retention-days: 30
