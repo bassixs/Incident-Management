@@ -196,7 +196,7 @@ describeIntegration('concurrent employee load with arriving incidents', () => {
         expect(i.answers.filter(a => a.deliveredAt)).toHaveLength(1);
       }
     }
-    const unfinished = await prisma.outboundMessage.findMany({ where: { status: { not: 'SENT' } }, select: { status: true, attempts: true, lastError: true, nextAttemptAt: true, dedupeKey: true, trackingKind: true } });
+    const unfinished = await prisma.outboundMessage.findMany({ where: { status: { not: 'SENT' } }, select: { status: true, attempts: true, lastError: true, nextAttemptAt: true, dedupeKey: true, trackingType: true } });
     expect(unfinished, JSON.stringify(unfinished)).toHaveLength(0);
     expect(await prisma.operatorSession.count({ where: { maxUserId: { lt: 100000n } } })).toBe(0);
     expect(await prisma.actionLock.count({ where: { action: { in: ['review-queue', 'sector-queue'] } } })).toBe(0);
