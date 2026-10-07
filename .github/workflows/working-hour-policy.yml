@@ -77,3 +77,45 @@ jobs:
           name: working-hour-policy-${{ github.sha }}
           path: evidence/
           retention-days: 14
+  unchanged-base-routing:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: synthetic
+          POSTGRES_PASSWORD: synthetic-only
+          POSTGRES_DB: incident_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U synthetic -d incident_test"
+          --health-interval 5s --health-timeout 3s --health-retries 15
+    env:
+      TEST_DATABASE_URL: postgresql://synthetic:synthetic-only@127.0.0.1:5432/incident_test
+      DATABASE_URL: postgresql://synthetic:synthetic-only@127.0.0.1:5432/incident_test
+      BOT_TOKEN: synthetic-only
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 4980fb66d853528464510c989c3a63051b825d48
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: mkdir -p evidence && git rev-parse HEAD > evidence/base-sha.txt
+      - run: npm ci && npx prisma generate
+      - name: Identical related tests on unchanged main
+        run: >-
+          npx vitest run tests/integration/distribution-queue.test.ts tests/integration/incident-lifecycle.test.ts
+          tests/integration/private-workspace.test.ts tests/integration/work-queues.test.ts
+          tests/integration/review-and-delivery.test.ts tests/integration/staff-reservations.test.ts
+          tests/integration/retention.test.ts tests/integration/lease-timezone.test.ts
+          --reporter=default --reporter=json --outputFile=evidence/routing.json
+          2>&1 | tee evidence/routing.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: unchanged-main-routing-${{ github.sha }}
+          path: evidence/
+          retention-days: 14
