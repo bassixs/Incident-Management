@@ -55,6 +55,7 @@ jobs:
         if: success() || failure()
         run: >-
           npx vitest run tests/integration/working-policy.test.ts tests/integration/sla-and-idempotency.test.ts
+          tests/integration/working-deadline-queue.test.ts
           tests/integration/overdue-report.test.ts tests/integration/answer-signature.test.ts tests/integration/region-signature-outbox.test.ts
           tests/integration/resident-draft-safety.test.ts
           tests/integration/delivery-reliability.test.ts tests/integration/delivery-review-regressions.test.ts

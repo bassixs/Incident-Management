@@ -4,6 +4,9 @@ on:
     branches: [codex/working-hour-policy]
 permissions:
   contents: read
+defaults:
+  run:
+    shell: bash
 jobs:
   review:
     runs-on: ubuntu-24.04

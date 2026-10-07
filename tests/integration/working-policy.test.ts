@@ -246,7 +246,8 @@ describeIntegration('working hour policy and legacy coexistence', () => {
       expect((await db.outboundMessage.findUniqueOrThrow({ where: { id: jobs[0]!.id } })).nextAttemptAt).toEqual(time('2026-10-15T08:00:00'));
       const { actor } = await actors(); await h.services.distribution.reject(i.id, 'Synthetic rejection', actor);
       set('2026-10-15T09:00:00'); await h.services.sla.sweep();
-      expect(await db.outboundMessage.count({ where: { dedupeKey: { startsWith: `sla-working-v1:${i.id}:` } } })).toBe(0);
+      await worker().flush();
+      expect(await db.outboundMessage.count({ where: { dedupeKey: { startsWith: `sla-working-v1:${i.id}:` }, status: 'CANCELLED', cancelReason: 'INCIDENT_REJECTED' } })).toBe(1);
       expect(await db.outboundMessage.count({ where: { dedupeKey: `rejection:${i.id}` } })).toBe(1);
     } finally { if (previous === undefined) delete process.env.REVIEW_CHAT_ID; else process.env.REVIEW_CHAT_ID = previous; resetConfigCache(); }
   });

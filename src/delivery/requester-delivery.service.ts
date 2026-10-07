@@ -126,7 +126,8 @@ export class RequesterDeliveryService {
       else await persist();
     }
 
-    let outcome: DeliveryOutcome = result.state;
+    // Cancellation is reserved for service reminders, never a successful answer.
+    let outcome: DeliveryOutcome = result.state === 'cancelled' ? 'failed' : result.state;
     if (this.messages.persistsDelivery) {
       const job = await this.prisma.outboundMessage.findUnique({ where: { dedupeKey: `answer:${answerId}` } });
       if (job?.status === 'FAILED' || (job?.status === 'SENT' && !job.trackingApplied)) outcome = 'failed';

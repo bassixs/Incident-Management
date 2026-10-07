@@ -95,6 +95,8 @@ enum OutboxStatus {
   SENDING
   SENT
   FAILED
+  DEFERRED
+  CANCELLED
 }
 
 enum DeliveryTrackingType {
@@ -527,6 +529,8 @@ model OutboundMessage {
   createdAt         DateTime              @default(now())
   sentAt            DateTime?
   deliveryAlertedAt DateTime?
+  cancelledAt       DateTime?
+  cancelReason      String?
   updatedAt         DateTime              @updatedAt
 
   @@index([status, nextAttemptAt])

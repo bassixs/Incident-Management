@@ -287,7 +287,14 @@ export class DistributionService {
         const keyboardId = (row.payload as { keyboardMessageId?: unknown } | null)?.keyboardMessageId;
         return [row.firstMessageId!, ...(typeof keyboardId === 'string' ? [keyboardId] : [])];
       });
-      await tx.outboundMessage.deleteMany({ where: { incidentId } });
+      // Deadline reminders contain only the public code/deadline, not resident
+      // content. Preserve their dedupe/audit record; the worker records cancellation
+      // after revalidation (or a real ACK if a request was already in flight).
+      const reminders = await tx.outboundMessage.findMany({ where: { incidentId, trackingType: null,
+        dedupeKey: { startsWith: `sla-working-v1:${incidentId}:` },
+        payload: { path: ['operation', 'type'], equals: 'working-deadline' }, attachments: { equals: [] },
+      }, select: { id: true } });
+      await tx.outboundMessage.deleteMany({ where: { incidentId, id: { notIn: reminders.map(row => row.id) } } });
       await finishAssignment(tx, incidentId, new Date(), 'REJECTED');
       await queueRejection(tx, incidentId, reason);
       await queueDistributionRefresh(tx, incidentId, 'rejected', true,
