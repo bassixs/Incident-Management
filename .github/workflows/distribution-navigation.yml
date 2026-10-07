@@ -8,63 +8,6 @@ defaults:
   run:
     shell: bash
 jobs:
-  baseline:
-    if: github.event.head_commit.message == 'test: reproduce navigation baselines'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        runtime: [59149006a7b3d30d01218fad84360e7d71e6d79e, 70cac4c7bc31831f96719b17d31b9126d3d9ed65]
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: synthetic
-          POSTGRES_PASSWORD: synthetic-only
-          POSTGRES_DB: incident_test
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U synthetic -d incident_test"
-          --health-interval 5s --health-timeout 3s --health-retries 15
-    env:
-      TEST_DATABASE_URL: postgresql://synthetic:synthetic-only@127.0.0.1:5432/incident_test
-      DATABASE_URL: postgresql://synthetic:synthetic-only@127.0.0.1:5432/incident_test
-      BOT_TOKEN: synthetic-only
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Exact unchanged runtime and new regression expectations
-        shell: bash
-        run: |
-          git show 5f77951138256a95717e2d380ea4042d9953e2d4:tests/integration/distribution-navigation.test.ts > "$RUNNER_TEMP/navigation.test.ts"
-          git checkout --detach '${{ matrix.runtime }}'
-          cp "$RUNNER_TEMP/navigation.test.ts" tests/integration/distribution-navigation.test.ts
-          mkdir -p evidence
-          git rev-parse HEAD | tee evidence/runtime-sha.txt
-          git diff --exit-code -- src prisma
-      - run: npm ci && npx prisma generate && npx prisma migrate deploy
-      - name: Baseline reproduction
-        shell: bash
-        run: |
-          set -o pipefail
-          set +e
-          npx vitest run tests/integration/distribution-navigation.test.ts -t 'topic: last page|organization: last page|organization: return to' --reporter=default --reporter=json --outputFile=evidence/baseline.json 2>&1 | tee evidence/baseline.txt
-          code=${PIPESTATUS[0]}
-          set -e
-          test "$code" -eq 1
-          node -e 'const r=require("./evidence/baseline.json"); const f=r.testResults.flatMap(x=>x.assertionResults).filter(x=>x.status==="failed"); if(f.length!==3 || f.some(x=>!x.fullName.includes("(chat)")) || r.numPassedTests!==3) process.exit(1);'
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: navigation-baseline-${{ matrix.runtime }}
-          path: evidence/
-          retention-days: 30
   regression:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
