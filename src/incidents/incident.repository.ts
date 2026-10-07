@@ -1,3 +1,4 @@
+import { legacyOpen, workingOpen } from '../sla/policy';
 import { type Incident, IncidentStatus, Prisma, type PrismaClient } from '@prisma/client';
 
 import type { PrismaLike, Tx } from '../database/prisma';
@@ -5,6 +6,7 @@ import { dayBoundaries } from '../utils/datetime';
 import { ConflictError } from '../utils/errors';
 
 export const INCIDENT_INCLUDE = {
+  assignmentCycles: { orderBy: { sequence: 'asc' } },
   history: { where: { action: 'REDISTRIBUTION_REQUESTED' }, orderBy: { createdAt: 'desc' }, take: 1 },
   requester: true,
   userSelectedCategory: true,
@@ -84,7 +86,7 @@ export class IncidentRepository {
     return this.prisma.incident.findMany({
       where,
       orderBy: { createdAt: 'asc' },
-      include: { ...INCIDENT_INCLUDE, history: { where: { action: 'INCIDENT_REJECTED' }, orderBy: { createdAt: 'desc' }, take: 1 } },
+      include: { ...INCIDENT_INCLUDE, history: { where: { action: { in: ['INCIDENT_REJECTED', 'SLA_PROJECT_SUBMITTED'] } }, orderBy: { createdAt: 'desc' } } },
     });
   }
 
@@ -92,8 +94,7 @@ export class IncidentRepository {
   async listOverdueForReport(now: Date): Promise<IncidentWithRelations[]> {
     return this.prisma.incident.findMany({
       where: {
-        status: { notIn: [IncidentStatus.RESOLVED, IncidentStatus.REJECTED] },
-        slaPausedAt: null,
+        OR: [legacyOpen, workingOpen],
         deadlineAt: { lte: now },
       },
       orderBy: [{ deadlineAt: 'asc' }, { publicCode: 'asc' }],
@@ -131,6 +132,7 @@ export class IncidentRepository {
       where: {
         status: { notIn: [IncidentStatus.RESOLVED, IncidentStatus.REJECTED] },
         slaPausedAt: null,
+        slaPolicy: 'LEGACY',
         createdAt: { lte: firstReminder },
         slaReminder24SentAt: null, slaWarn24SentAt: null, slaWarn6SentAt: null, overdueNotifiedAt: null,
       },

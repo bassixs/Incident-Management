@@ -1,3 +1,4 @@
+import { startAssignment, finishAssignment } from '../sla/policy';
 import { acquireAdvisoryLock, TRANSACTION_OPTIONS } from '../database/prisma';
 import { randomUUID } from 'node:crypto';
 import { assertClaimOwner, CLAIM_LOCK } from './queue-state';
@@ -186,6 +187,7 @@ export class DistributionService {
         actorRole: actor.role,
         metadata: { groupId: group.id, groupCode: group.code, dispatcher: actor.displayName },
       }, tx);
+      await startAssignment(tx, incident, group, now);
       await queueSector(tx, incidentId);
       await queueDistributionRefresh(tx, incidentId, `assigned:${randomUUID()}`);
     }, TRANSACTION_OPTIONS);
@@ -204,7 +206,7 @@ export class DistributionService {
     if (incident.distributionMessageId) {
       await this.messages.finalizeCard(
         incident.distributionMessageId,
-        distributionResolvedNotice(incident, group, actor.displayName),
+        distributionResolvedNotice((await this.repository.findById(incidentId))!, group, actor.displayName),
       );
     }
 
@@ -286,6 +288,7 @@ export class DistributionService {
         return [row.firstMessageId!, ...(typeof keyboardId === 'string' ? [keyboardId] : [])];
       });
       await tx.outboundMessage.deleteMany({ where: { incidentId } });
+      await finishAssignment(tx, incidentId, new Date(), 'REJECTED');
       await queueRejection(tx, incidentId, reason);
       await queueDistributionRefresh(tx, incidentId, 'rejected', true,
         [...new Set(publishedIds)]);

@@ -1,3 +1,4 @@
+import { addWorkingHours } from '../sla/working-time';
 import { assertResidentPhotoLimit, RESIDENT_PHOTO_LIMIT } from './resident-photo-limit';
 import { assertNoPersonalData } from '../privacy/personal-data';
 import { randomUUID } from 'node:crypto';
@@ -216,7 +217,8 @@ export class IncidentService {
         problemLocality: input.problemLocality ?? null,
         status: IncidentStatus.DISTRIBUTION,
         createdAt: now,
-        deadlineAt: computeDeadline(now, config.INCIDENT_SLA_WORKDAYS),
+        slaPolicy: config.INCIDENT_SLA_POLICY,
+        deadlineAt: config.INCIDENT_SLA_POLICY === 'WORKING_HOURS_V1' ? addWorkingHours(now, 24) : computeDeadline(now, config.INCIDENT_SLA_WORKDAYS),
       });
 
       await this.history.record(

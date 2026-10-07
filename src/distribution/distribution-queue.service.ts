@@ -36,7 +36,7 @@ export class DistributionQueueService {
       if (own && incidentId && own.id !== incidentId) throw new ConflictError(`Сначала распределите ${own.publicCode} или освободите его кнопкой под выданной карточкой.`);
       const candidate = incidentId
         ? await tx.incident.findUnique({ where: { id: incidentId } })
-        : own ?? await tx.incident.findFirst({ where: { status: 'DISTRIBUTION', OR: [{ distributionClaimUntil: null }, { distributionClaimUntil: { lte: now } }] }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
+        : own ?? await tx.incident.findFirst({ where: { status: 'DISTRIBUTION', OR: [{ distributionClaimUntil: null }, { distributionClaimUntil: { lte: now } }] }, orderBy: [{ deadlineAt: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }] });
       if (!candidate) return null;
       if (candidate.status !== 'DISTRIBUTION') throw new ConflictError('Сообщение уже распределено или отклонено.');
       assertClaimOwner(candidate, actor.maxUserId, now);
@@ -83,7 +83,7 @@ export class DistributionQueueService {
     const now = new Date();
     const total = await this.prisma.incident.count({ where: { status: 'DISTRIBUTION' } });
     page = Math.min(page, Math.max(0, Math.ceil(total / 10) - 1));
-    const items = await this.prisma.incident.findMany({ where: { status: 'DISTRIBUTION' }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }], skip: page * 10, take: 10,
+    const items = await this.prisma.incident.findMany({ where: { status: 'DISTRIBUTION' }, orderBy: [{ deadlineAt: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }], skip: page * 10, take: 10,
       select: { id: true, publicCode: true, createdAt: true, distributionClaimUntil: true, distributionClaimedName: true,
         history: { where: { action: 'REDISTRIBUTION_REQUESTED' }, take: 1, select: { id: true } } } });
     await this.messages.send({ chatId }, {

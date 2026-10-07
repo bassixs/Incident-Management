@@ -1,3 +1,4 @@
+import { isWorkingPolicy } from './policy';
 import type { Incident, ResponsibleGroup, User } from '@prisma/client';
 
 import { getConfig } from '../config';
@@ -13,7 +14,7 @@ type SlaIncident = Incident & {
 };
 
 export function slaStage(incident: Incident, now: Date): 24 | undefined {
-  if (incident.slaPausedAt) return undefined;
+  if (isWorkingPolicy(incident) || incident.slaPausedAt) return undefined;
   if (incident.status === 'RESOLVED' || incident.status === 'REJECTED') return undefined;
   // Legacy marks count too: an upgrade must not remind previously notified staff again.
   if (incident.slaWarn24SentAt || incident.slaWarn6SentAt || incident.overdueNotifiedAt) return undefined;

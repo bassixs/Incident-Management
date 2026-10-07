@@ -223,6 +223,11 @@ model Incident {
   createdAt  DateTime  @default(now())
   deadlineAt DateTime
   answeredAt DateTime?
+  /// Set once at registration. Database default keeps historical and old-runtime inserts legacy.
+  slaPolicy String @default("LEGACY")
+  slaDeliveredAt DateTime?
+  workingDeadlineQueuedAt DateTime?
+  assignmentCycles IncidentAssignmentCycle[]
   /// Optional one-time requester score for the delivered final answer.
   responseRating Int?
   ratedAt       DateTime?
@@ -274,6 +279,29 @@ model Incident {
   @@index([assignedGroupId])
   @@index([problemMunicipalityCode])
   @@index([createdAt])
+}
+
+model IncidentAssignmentCycle {
+  id String @id @default(uuid())
+  incidentId String
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  sequence Int
+  // Immutable organization snapshot; not a mutable display-name identity.
+  groupId String
+  groupCode String
+  groupName String
+  assignedAt DateTime
+  preparationDueAt DateTime
+  returnDueAt DateTime
+  cardDeliveredAt DateTime?
+  firstPreparedAt DateTime?
+  firstPreparedAnswerId String?
+  returnedAt DateTime?
+  returnReason String?
+  endedAt DateTime?
+  outcome String @default("ACTIVE")
+  @@unique([incidentId, sequence])
+  @@index([incidentId, endedAt])
 }
 
 model IncidentAttachment {

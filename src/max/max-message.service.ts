@@ -1,3 +1,6 @@
+import { recordPolicyDelivery, WORKING_POLICY } from '../sla/policy';
+import { nextWorkingInstant, policyWorkingHours } from '../sla/working-time';
+import { workingDeadlineNotification, workingDeadlineTargets } from '../sla/working-notification';
 import { deliveryTrace, latency, withDeliveryTrace, type DeliveryTrace } from '../utils/latency';
 import { leaseView, leaseText, SECTOR_LEASE_ACTION } from '../work-queues/leases';
 import { AsyncActivity } from '../utils/async-activity';
@@ -60,6 +63,7 @@ export type CompositeMessage = {
   beforeImmediateSend?: () => Promise<void>;
   operation?: { type: 'delivery-card'; incidentId: string; answerId: string; card: 'review' | 'distribution' }
     | { type: 'superseded-answer' }
+    | { type: 'working-deadline'; incidentId: string }
     | { type: 'sla-reminder'; incidentId: string; stage: SlaStage }
     | { type: 'clarification-question' | 'clarification-reply'; incidentId: string; clarificationId: string }
     | { type: 'sector-refresh'; incidentId: string; textOnly?: boolean }
@@ -549,6 +553,11 @@ export class MaxMessageService {
         }
         payload.text = text;
       }
+      if (payload.operation?.type === 'working-deadline' && !policyWorkingHours(new Date())) {
+        await durable.prisma.outboundMessage.updateMany({ where: { id: row.id, status: 'SENDING', attempts: row.attempts, lockedAt: row.lockedAt },
+          data: { status: 'PENDING', lockedAt: null, attempts: { decrement: 1 }, nextAttemptAt: nextWorkingInstant(new Date()) } });
+        return { state: 'queued', trackingApplied: false };
+      }
       if (payload.operation?.type === 'sla-reminder') {
         // Retire notifications queued by the old multi-stage policy, retaining its marks.
         if (payload.operation.stage !== 24) {
@@ -624,6 +633,8 @@ export class MaxMessageService {
         ? await this.refreshDistributionCards(payload.operation.incidentId, payload.operation.refreshActive, payload.operation.messageIds)
         : payload.operation?.type === 'distribution-alert'
         ? await this.deliverDistributionAlert(row.targetId, payload.operation)
+        : payload.operation?.type === 'working-deadline'
+        ? await this.deliverWorkingDeadline(row, payload.operation.incidentId)
         : payload.operation?.type === 'sla-reminder'
         ? await this.deliverSlaReminder(payload.operation)
         : payload.operation?.type === 'sector-refresh'
@@ -743,6 +754,7 @@ export class MaxMessageService {
             },
           });
         }
+        await recordPolicyDelivery(tx, row.incidentId, deliveredAt);
         await queueDeliveryStatus(tx, row.incidentId, row.answerId, true);
         return;
       }
@@ -785,6 +797,7 @@ export class MaxMessageService {
           },
         });
       } else if (row.trackingType === DeliveryTrackingType.SECTOR_CARD) {
+        await tx.incidentAssignmentCycle.updateMany({ where: { incidentId: row.incidentId, endedAt: null, cardDeliveredAt: null }, data: { cardDeliveredAt: new Date() } });
         // A status can change while the original card is still being delivered.
         await queueSectorRefresh(tx, row.incidentId, `sector-status:${row.id}:published:${firstMessageId}:attempt:${row.attempts}`, true);
         await tx.incidentHistory.create({
@@ -820,6 +833,24 @@ export class MaxMessageService {
     const expected = current && `sector-card:${current.id}${current.history[0] ? ':return:' + current.history[0].id : ''}`;
     return !!current?.assignedGroup && current.assignedGroup.maxChatId === row.targetId
       && await this.sectorPublicationKey(row, db) === expected;
+  }
+
+  private async deliverWorkingDeadline(row: OutboundMessage, incidentId: string): Promise<{ firstMessageId?: string }> {
+    const read = async () => {
+      const incident = await this.durable!.prisma.incident.findUnique({ where: { id: incidentId } });
+      if (!incident || incident.slaPolicy !== WORKING_POLICY || incident.status === 'REJECTED' || incident.slaDeliveredAt
+        || incident.deadlineAt > new Date() || row.targetType !== 'chat' || !workingDeadlineTargets().includes(row.targetId)) {
+        throw new StaleDeliveryError('WORKING_DEADLINE_NO_LONGER_APPLICABLE');
+      }
+      return workingDeadlineNotification(incident);
+    };
+    const text = await read();
+    return this.deliverLogical({ chatId: row.targetId }, { text, beforeImmediateSend: async () => {
+      if (!policyWorkingHours(new Date())) throw new Error('WORKING_DEADLINE_OUTSIDE_WORKING_HOURS');
+      const lease = await this.durable!.prisma.outboundMessage.findFirst({ where: { id: row.id, status: 'SENDING', attempts: row.attempts, lockedAt: row.lockedAt } });
+      if (!lease) throw new StaleDeliveryError('DELIVERY_PROGRESS_OWNERSHIP_LOST');
+      if (await read() !== text) throw new Error('WORKING_DEADLINE_STATE_CHANGED_BEFORE_SEND');
+    } });
   }
 
   private async deliverSlaReminder(operation: Extract<CompositeMessage['operation'], { type: 'sla-reminder' }>): Promise<{ firstMessageId?: string }> {
