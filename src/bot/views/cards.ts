@@ -8,7 +8,7 @@ import { describeStatus } from '../../incidents/incident-state.service';
 import type { IncidentWithRelations } from '../../incidents/incident.repository';
 import type { LegalAccessStatus } from '../../legal/legal-acceptance.service';
 import { formatDate, formatDateTime } from '../../utils/datetime';
-import { answerSignature } from '../../responsible-groups/answer-signature';
+import { answerSignature, omitsRequesterSignature } from '../../responsible-groups/answer-signature';
 
 /** `№ INC-000001` — the label repeated on every fragment of a message. */
 export function codeLabel(incident: Pick<Incident, 'publicCode'>): string {
@@ -224,15 +224,17 @@ export function revisionCard(incident: Incident, answerVersion: number, reason: 
  * §31 — the final answer, delivered to the incident's own requester.
  *
  * The signature comes from the actual responsible group's authority, never
- * from the incident topic. Review and delivery use the same formatter.
+ * from the incident topic. The REGION_KALUGA exception affects residents only;
+ * internal cards retain the organization and authorship.
  */
 export function finalAnswerToRequester(
   incident: Incident,
   answer: IncidentAnswer,
   answeredAt: Date,
   authorityName?: string | null,
+  groupCode?: string | null,
 ): string {
-  const signature = answerSignature(authorityName);
+  const signature = omitsRequesterSignature(groupCode) ? null : answerSignature(authorityName);
   return [
     '✅ Получен ответ по вашему сообщению.',
     '',

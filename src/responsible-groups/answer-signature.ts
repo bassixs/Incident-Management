@@ -64,3 +64,8 @@ export function answerSignature(authorityName?: string | null): string | null {
   const instrumental = signaturesByName.get(name);
   return instrumental ? `Ответ подготовлен ${instrumental}.` : `Ответ подготовлен:\n${name}`;
 }
+
+/** Resident delivery only; names and review-free routing are not identities. */
+export function omitsRequesterSignature(groupCode?: string | null): boolean {
+  return groupCode === 'REGION_KALUGA';
+}

@@ -30,6 +30,27 @@ const SIGNATURE = 'Ответ подготовлен Министерством 
  * nonsensical like «Ответ подготовлен Дорогами».
  */
 describe('подпись ведомства в ответе жителю', () => {
+  it('omits the complete automatic block only for the stable REGION_KALUGA code', () => {
+    const text = finalAnswerToRequester(incident, answer, ANSWERED_AT, 'Произвольное новое название', 'REGION_KALUGA');
+    expect(text).toBe(finalAnswerToRequester(incident, answer, ANSWERED_AT, null));
+    expect(text).toContain(`${answer.text}\n\nДата ответа:`);
+    expect(text).not.toContain('Ответ подготовлен');
+  });
+
+  it('does not infer the exception from the display name or another regional code', () => {
+    for (const code of ['REGION_DEFENDERS', 'REGIONAL', undefined]) {
+      expect(finalAnswerToRequester(incident, answer, ANSWERED_AT, 'Администрация Губернатора', code))
+        .toContain('Ответ подготовлен Администрацией Губернатора Калужской области.');
+    }
+  });
+
+  it('preserves employee text verbatim, including signature-like phrases and links', () => {
+    const original = 'Кем подготовлен ответ\nОтвет подготовлен:\nСотрудником\nhttps://example.test/result\n\nЗавершено.';
+    const text = finalAnswerToRequester(incident, { ...answer, text: original }, ANSWERED_AT, AUTHORITY, 'REGION_KALUGA');
+    expect(text).toContain(`Ответ:\n${original}\n\nДата ответа:`);
+    expect(text).not.toContain(SIGNATURE);
+  });
+
   it('добавляет подпись, когда ведомство задано', () => {
     const text = finalAnswerToRequester(incident, answer, ANSWERED_AT, AUTHORITY);
     expect(text).toContain(SIGNATURE);
@@ -81,6 +102,14 @@ describe('подпись в карточке согласования', () => {
   it('предупреждает согласующего, если ведомство не задано', () => {
     const card = reviewCard(withGroup(null), answerWithAttachments, group(null));
     expect(card).toContain('Ведомство для подписи не задано');
+  });
+
+  it('retains internal organization attribution for REGION_KALUGA', () => {
+    const authority = 'Администрация Губернатора Калужской области';
+    const card = reviewCard(withGroup(authority), answerWithAttachments,
+      { ...group(authority), code: 'REGION_KALUGA', name: 'Внутренняя организация' });
+    expect(card).toContain('Внутренняя организация');
+    expect(card).toContain('Ответ подготовлен Администрацией Губернатора Калужской области.');
   });
 });
 
