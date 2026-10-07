@@ -38,7 +38,7 @@ INSERT INTO "IncidentHistory" (id,"incidentId",action,"fromStatus","toStatus","a
 INSERT INTO "SystemSetting" (key,value,"updatedAt") VALUES ('retention.file-fence.v1:synthetic','PERMANENT_STORAGE_KEY_RETIREMENT_V1',now());""")
  def seed_new(self):
   sql(self.db,"""INSERT INTO "IncidentAssignmentCycle" (id,"incidentId",sequence,"groupId","groupCode","groupName","assignedAt","preparationDueAt","returnDueAt") VALUES ('control-cycle','control-incident',1,'control-group','SYNTHETIC','Synthetic',now(),'2099-01-02','2099-01-01');
-INSERT INTO "OutboundMessage" (id,"targetType","targetId",payload,attachments,status,"nextAttemptAt","cancelledAt","cancelReason","deliveryProgress","updatedAt") VALUES ('control-deferred','chat',-88001,'{}','[]','DEFERRED','2099-01-01',NULL,NULL,NULL,now()),('control-cancelled','chat',-88001,'{}','[]','CANCELLED',now(),now(),'ANSWER_ALREADY_DELIVERED',NULL,now()),('control-progress','chat',-88002,'{}','[]','FAILED',now(),NULL,NULL,'{"version":1,"parts":[{"mid":"synthetic-confirmed"}]}',now());""")
+INSERT INTO "OutboundMessage" (id,"targetType","targetId",payload,attachments,status,"nextAttemptAt","cancelledAt","cancelReason","updatedAt") VALUES ('control-deferred','chat',-88001,'{}','[]','DEFERRED','2099-01-01',NULL,NULL,now()),('control-cancelled','chat',-88001,'{}','[]','CANCELLED',now(),now(),'ANSWER_ALREADY_DELIVERED',now()),('control-progress','chat',-88002,'{"deliveryProgress":{"version":1,"planHash":"0000000000000000000000000000000000000000000000000000000000000000","totalParts":2,"mids":["synthetic-confirmed"]}}','[]','FAILED',now(),NULL,NULL,now());""")
  def test_activation_and_complete_backup_restore_switch(self):
   self.seed()
   with o.backup_lock(self.s) as fd:

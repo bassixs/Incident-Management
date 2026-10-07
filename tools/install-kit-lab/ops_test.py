@@ -78,7 +78,7 @@ class MigrationKit(unittest.TestCase):
         run('docker','run','--rm','--network',NET,'--env-file',envnew,'--entrypoint','node','incident-lab:main','node_modules/prisma/build/index.js','migrate','deploy')
         after=probe(envnew)['schema']
         cls.manifest=OUT/'schema-expectations.json'
-        cls.manifest.write_text(json.dumps({'versions':g.VERSIONS,'probe_sha256':o.sha((SCRIPTS/'schema-probe.cjs').read_bytes()),'old':before,'new':after},indent=2))
+        cls.manifest.write_text(json.dumps({'versions':g.VERSIONS,'image_ids':json.loads((OUT/'image-bindings.json').read_text()),'probe_sha256':o.sha((SCRIPTS/'schema-probe.cjs').read_bytes()),'old':before,'new':after},indent=2))
         cls.images={role:run('docker','image','inspect','--format','{{.Id}}',tag).stdout.strip() for role,tag in [('old','incident-kit:old'),('main','incident-lab:main'),('reserve','incident-lab:reserve')]}
         run('docker','run','-d','--init','--name',MOCK,'--network',NET,'--network-alias','mock','-v',f'{ROOT}/tools/reserve-container-lab:/lab:ro','--entrypoint','node','incident-lab:main','/lab/mock.cjs')
         wait(lambda:run('docker','exec',MOCK,'node','-e',"fetch('http://localhost:8080/control').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",check=False).returncode==0)
@@ -146,7 +146,13 @@ INSERT INTO "OperatorSession" (id,"maxUserId","chatId",type,data,"expiresAt") VA
         # The lock must be available after every success/refusal/exception.
         with o.backup_lock(self.s): pass
         self.assertEqual((self.uploads/'preserved.txt').read_text(),'synthetic attachment')
-        self.assertEqual(sql(self.db,self.protected_sql),self.protected)
+        actual=json.loads(sql(self.db,self.protected_sql));expected=json.loads(self.protected)
+        for row in actual['failed']:
+            for field in ('cancelledAt','cancelReason'):
+                if field in row:
+                    self.assertIsNone(row[field], 'Migration default must remain NULL on preserved FAILED')
+                    row.pop(field)
+        self.assertEqual(actual,expected)
         sql('postgres',f'DROP DATABASE "{self.db}";')
 
     def cli(self,fd,script,*args,code=0,contains=None):

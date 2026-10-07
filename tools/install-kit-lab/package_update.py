@@ -10,6 +10,7 @@ for name in ['PLAN.md','LIMITATIONS.md','settings.example.json']:
 shutil.copytree(ROOT/'tools/migration-kit/scripts',kit/'scripts',ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
 shutil.copyfile(ROOT/'kit-results/schema-expectations.json',kit/'schema-expectations.json')
 shutil.copyfile(ROOT/'kit-results/images.json',kit/'IMAGES.json')
+shutil.copyfile(ROOT/'kit-results/image-bindings.json',kit/'IMAGE-BINDINGS.json')
 shutil.copyfile(ROOT/'verified-images/main-and-reserve.tar.gz',kit/'main-and-reserve.tar.gz')
 shutil.copyfile(ROOT/'verified-images/main-and-reserve.tar.gz.sha256',kit/'main-and-reserve.tar.gz.sha256')
 (kit/'sources').mkdir()

@@ -34,6 +34,8 @@ def config(s):
     return b
 def capture(s,kind,dest,runname=None):
     o.require_lock(s);b=config(s);g.assert_schema(s,kind)
+    current=o.app(s);o.need(current is not None,'APP_CONTAINER_REQUIRED')
+    o.image(s,current['Image']);o.config(s,o.live_path(s),current['Image'])
     if runname:
         c=o.app(s);o.clean(c);o.receipt(s,o.run_dir(s,runname),c);o.no_other_app(s)
     o.need(dest.is_absolute() and not dest.exists(),'NEW_PRIVATE_BACKUP_DIRECTORY_REQUIRED')
@@ -70,7 +72,7 @@ def capture(s,kind,dest,runname=None):
     o.runtime(s)
     private_json(dest/'data.json',fingerprints)
     private_json(dest/'files.json',before)
-    private_json(dest/'backup.json',{'kit':s['kit'],'phase':kind,'identity':s['migration']['identity'],'createdAt':o.stamp(),'finalRun':runname,'schema':g.probe(s)})
+    private_json(dest/'backup.json',{'kit':s['kit'],'phase':kind,'identity':s['migration']['identity'],'application':o.identity(current),'composeSha256':filehash(o.live_path(s)),'createdAt':o.stamp(),'finalRun':runname,'schema':g.probe(s)})
     for p in dest.iterdir():os.chmod(p,0o600)
     private_json(dest/'checksums.json',{p.name:filehash(p) for p in dest.iterdir() if p.is_file()})
     print('BACKUP_CAPTURED_RESTORE_NOT_YET_VERIFIED')
@@ -81,7 +83,10 @@ def verify(s,dest):
     meta=o.read_json(dest/'backup.json');o.need(meta['kit']==s['kit'] and meta['identity']==s['migration']['identity'],'BACKUP_IDENTITY_MISMATCH')
     _,manifest=g.configuration(s);o.need(g.schema_matches(meta['schema'],manifest[meta['phase']]),'BACKUP_SCHEMA_MISMATCH')
     name='incident-restore-'+os.urandom(8).hex();password=os.urandom(24).hex()
-    env=dest/'restore.env';env.write_text('POSTGRES_USER=checker\nPOSTGRES_PASSWORD='+password+'\nPOSTGRES_DB=verify\nDATABASE_URL=postgresql://checker:'+password+'@127.0.0.1:5432/verify\n');os.chmod(env,0o600)
+    env=dest/'restore.env'
+    o.need(not env.exists() and not env.is_symlink() and not (dest/'restore-result.json').exists(),'RESTORE_ALREADY_ATTEMPTED_OR_REVIEW_REQUIRED')
+    with env.open('x') as f:
+        os.chmod(env,0o600);f.write('POSTGRES_USER=checker\nPOSTGRES_PASSWORD='+password+'\nPOSTGRES_DB=verify\nDATABASE_URL=postgresql://checker:'+password+'@127.0.0.1:5432/verify\n')
     cid=None
     try:
         cid=o.output(['docker','run','-d','--name',name,'--network','none','--cpus','0.5','--memory','768m','--pids-limit','128','--env-file',str(env),b['restore_image']]).strip()
@@ -101,7 +106,7 @@ def verify(s,dest):
                 o.need(m.isfile() and m.name in expected and m.name not in seen,'ARCHIVE_MEMBER_INVALID')
                 with tar.extractfile(m) as f:seen[m.name]=hashlib.file_digest(f,'sha256').hexdigest()
         o.need(seen==expected,'RESTORED_FILES_MISMATCH')
-        private_json(dest/'restore-result.json',{'verifiedAt':o.stamp(),'databaseRows':'exact','schema':'exact','files':'exact','applicationStarted':False,'sourceDatabaseWritten':False})
+        private_json(dest/'restore-result.json',{'verifiedAt':o.stamp(),'backupChecksumsSha256':filehash(dest/'checksums.json'),'kit':s['kit'],'restoreImage':b['restore_image'],'databaseRows':'exact','schema':'exact','files':'exact','applicationStarted':False,'sourceDatabaseWritten':False})
         print('BACKUP_RESTORE_VERIFIED')
     finally:
         if cid:

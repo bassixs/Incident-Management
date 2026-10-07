@@ -45,7 +45,6 @@ def schema_matches(actual,expected):
 
 def configuration(s):
     o.need(s.get('kit')=='pr14-18-v1','KIT_EDITION_MISMATCH')
-    o.need({k:v['id'] for k,v in s['images'].items()}==IMAGE_IDS,'PINNED_IMAGE_IDS_MISMATCH')
     o.need(s.get('policy') in ('LEGACY','WORKING_HOURS_V1'),'POLICY_SELECTION_REQUIRED')
     m=s.get('migration')
     o.need(isinstance(m,dict),'MIGRATION_CONFIGURATION_REQUIRED')
@@ -57,6 +56,11 @@ def configuration(s):
     o.need(o.sha(manifest.read_bytes())==m.get('manifest_sha256'),'MIGRATION_MANIFEST_CHANGED')
     expected=o.read_json(manifest)
     o.need(expected.get('versions')==VERSIONS,'MIGRATION_MANIFEST_VERSIONS')
+    bindings=expected.get('image_ids')
+    o.need(isinstance(bindings,dict) and set(bindings)==set(IMAGE_IDS),'IMAGE_BINDINGS_REQUIRED')
+    for role,iid in IMAGE_IDS.items():
+        allowed=bindings[role]
+        o.need(isinstance(allowed,list) and iid in allowed and s['images'][role]['id'] in allowed,'PINNED_IMAGE_IDS_MISMATCH')
     o.need(expected.get('probe_sha256')==o.sha((ROOT/'schema-probe.cjs').read_bytes()),'SCHEMA_PROBE_CHANGED')
     o.need(isinstance(m.get('identity'),dict) and set(m['identity'])=={'system','database','oid'},'DATABASE_IDENTITY_REQUIRED')
     return m,expected
