@@ -1,0 +1,108 @@
+name: Isolated failure boundaries
+on:
+  push:
+    branches: [codex/durable-failure-boundaries]
+defaults:
+  run:
+    shell: bash
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: synthetic
+          POSTGRES_PASSWORD: synthetic-only
+          POSTGRES_DB: incident_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U synthetic -d incident_test"
+          --health-interval 5s --health-timeout 3s --health-retries 15
+    env:
+      TEST_DATABASE_URL: postgresql://synthetic:synthetic-only@127.0.0.1:5432/incident_test
+      DATABASE_URL: postgresql://synthetic:synthetic-only@127.0.0.1:5432/incident_test
+      BOT_TOKEN: synthetic-only
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci && npx prisma generate
+      - run: npx prisma migrate deploy
+      - run: mkdir -p evidence
+      - name: Typecheck
+        if: always()
+        run: npm run typecheck 2>&1 | tee evidence/typecheck.txt
+      - name: Build
+        if: always()
+        run: npm run build 2>&1 | tee evidence/build.txt
+      - name: Unit
+        if: always()
+        run: npx vitest run tests/unit --reporter=default --reporter=json --outputFile=evidence/unit.json 2>&1 | tee evidence/unit.txt
+      - name: Compare existing drain race on unchanged main
+        if: always()
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/boundaries-baseline" bbfa7b91c3a149d8951d36a28aefbe9b8e3ffa6c
+          ln -s "$GITHUB_WORKSPACE/node_modules" "$RUNNER_TEMP/boundaries-baseline/node_modules"
+          cp tests/integration/outbox-drain-snapshot.test.ts "$RUNNER_TEMP/boundaries-baseline/tests/integration/"
+          cd "$RUNNER_TEMP/boundaries-baseline"
+          npx vitest run tests/integration/outbox-drain-snapshot.test.ts --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/evidence/drain-baseline.json" 2>&1 | tee "$GITHUB_WORKSPACE/evidence/drain-baseline.txt"
+      - name: Integration
+        if: always()
+        run: >-
+          npx vitest run tests/integration/failure-boundaries.test.ts tests/integration/failure-boundaries-review.test.ts
+          tests/integration/transactional-workflow.test.ts tests/integration/retention.test.ts
+          tests/integration/reliable-delivery.test.ts tests/integration/delivery-reliability.test.ts
+          tests/integration/delivery-review-regressions.test.ts tests/integration/delivery-worker-lifecycle.test.ts
+          tests/integration/parallel-outbox.test.ts tests/integration/outbox-drain-snapshot.test.ts
+          tests/integration/parallel-inbox.test.ts tests/integration/draft-screen-recovery.test.ts
+          --reporter=default --reporter=json --outputFile=evidence/integration.json
+          2>&1 | tee evidence/integration.txt
+      - name: Extended regression (report every failure)
+        if: always()
+        run: >-
+          npx vitest run tests/integration/parallel-photo-flow.test.ts tests/integration/optional-contact.test.ts
+          tests/integration/resident-draft-safety.test.ts tests/integration/manual-cleanup.test.ts
+          --reporter=default --reporter=json --outputFile=evidence/extended.json
+          2>&1 | tee evidence/extended.txt
+      - name: Same extended checks on unchanged PR review head
+        if: always()
+        run: |
+          docker exec "${{ job.services.postgres.id }}" createdb -U synthetic review_baseline
+          git worktree add --detach "$RUNNER_TEMP/review-baseline" 97a30be381e935c241006b74852e05c11650a269
+          ln -s "$GITHUB_WORKSPACE/node_modules" "$RUNNER_TEMP/review-baseline/node_modules"
+          cp tests/integration/resident-draft-safety.test.ts "$RUNNER_TEMP/review-baseline/tests/integration/"
+          cd "$RUNNER_TEMP/review-baseline"
+          export DATABASE_URL=postgresql://synthetic:synthetic-only@127.0.0.1:5432/review_baseline
+          export TEST_DATABASE_URL="$DATABASE_URL"
+          npx vitest run tests/integration/parallel-photo-flow.test.ts tests/integration/optional-contact.test.ts tests/integration/resident-draft-safety.test.ts tests/integration/manual-cleanup.test.ts --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/evidence/extended-baseline.json" 2>&1 | tee "$GITHUB_WORKSPACE/evidence/extended-baseline.txt"
+      - name: Compare all extended outcomes without suppressing failed steps
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          def outcomes(name):
+              data = json.loads(Path('evidence', name).read_text())
+              assert data['numTotalTests'] == 105, data['numTotalTests']
+              assert data['numPendingTests'] == 0
+              return {t['fullName']: t['status'] for f in data['testResults'] for t in f['assertionResults']}
+          base, current = outcomes('extended-baseline.json'), outcomes('extended.json')
+          assert base == current, [(k, base.get(k), current.get(k)) for k in base.keys() | current.keys() if base.get(k) != current.get(k)]
+          failures = [k for k, v in base.items() if v == 'failed']
+          Path('evidence/extended-comparison.json').write_text(json.dumps({'identical': True, 'tests': len(base), 'unchangedFailures': failures}, indent=2))
+          print('Identical outcomes:', len(base), 'Unchanged failures:', len(failures))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: failure-boundaries-${{ github.sha }}
+          path: evidence/
+          retention-days: 14

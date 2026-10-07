@@ -30,9 +30,11 @@ function fakePrisma(options: { locked?: boolean } = {}) {
     deletedActionLocks: 0,
     releasedLocks: 0,
   };
+  const journal = new Map<string, string>();
   const prisma = {
     incident: {
       findMany: vi.fn(async () => [candidate()]),
+      findFirst: vi.fn(async () => (await prisma.incident.findMany())[0]),
       count: vi.fn(async () => 0),
       deleteMany: vi.fn(async () => {
         calls.deletedIncidents += 1;
@@ -60,9 +62,17 @@ function fakePrisma(options: { locked?: boolean } = {}) {
       findMany: vi.fn(async () => []),
       deleteMany: vi.fn(async () => ({ count: 0 })),
     },
+    $queryRaw: vi.fn(async () => [{ present: false, count: 7n }]),
+    $executeRawUnsafe: vi.fn(async () => 0),
+    $executeRaw: vi.fn(async () => 1),
     systemSetting: {
-      deleteMany: vi.fn(async () => {
-        calls.releasedLocks += 1;
+      upsert: vi.fn(async ({ create }: any) => { journal.set(create.key, create.value); return create; }),
+      findMany: vi.fn(async () => [...journal].filter(([key]) => key.startsWith('retention.file-delete.v1:')).map(([key, value]) => ({ key, value }))),
+      findUnique: vi.fn(async ({ where }: any) => journal.has(where.key) ? ({ key: where.key, value: journal.get(where.key) }) : null),
+      updateMany: vi.fn(async () => ({ count: 1 })),
+      deleteMany: vi.fn(async ({ where }: any) => {
+        if (where.key.startsWith('retention.file-')) journal.delete(where.key);
+        else calls.releasedLocks += 1;
         return { count: 1 };
       }),
     },
@@ -91,10 +101,10 @@ describe('RetentionService', () => {
     expect(preview).toMatchObject({ incidents: 1, files: 2, bytes: 500, outboundMessages: 2 });
   });
 
-  it('removes requester and answer files before cascading the database row', async () => {
+  it('removes requester and answer files after committing the database deletion', async () => {
     const removed: string[] = [];
     const { prisma, calls } = fakePrisma();
-    const service = new RetentionService(prisma, fakeStorage(async (key) => void removed.push(key)));
+    const service = new RetentionService(prisma, fakeStorage(async (key) => { expect(calls.deletedIncidents).toBe(1); removed.push(key); }));
 
     const result = await service.run(NOW);
 
@@ -114,7 +124,7 @@ describe('RetentionService', () => {
     expect(result).toMatchObject({ deletedIncidents: 1, deletedFiles: 1, deletedBytes: 350, failures: [] });
   });
 
-  it('keeps the database row when a physical file cannot be removed', async () => {
+  it('keeps a durable file deletion intent when post-commit removal fails', async () => {
     const { prisma, calls } = fakePrisma();
     const service = new RetentionService(
       prisma,
@@ -125,9 +135,10 @@ describe('RetentionService', () => {
 
     const result = await service.run(NOW);
 
-    expect(calls.deletedIncidents).toBe(0);
-    expect(result.deletedIncidents).toBe(0);
-    expect(result.failures).toEqual([{ publicCode: 'INC-20260501-0001', error: 'storage unavailable' }]);
+    expect(calls.deletedIncidents).toBe(1);
+    expect(result.deletedIncidents).toBe(1);
+    expect(result.failures).toEqual([{ publicCode: 'INC-20260501-0001', error: expect.stringContaining('FILE_DELETION_PENDING') }]);
+    expect(await prisma.systemSetting.findMany()).toHaveLength(1);
   });
 
   it('does not start a second cleanup while the maintenance lock is held', async () => {
