@@ -22,6 +22,15 @@ export function assertClaimOwner(incident: Incident, userId: bigint, now = new D
   }
 }
 
+export function assertNavigationClaim(incident: Incident, userId: bigint, expected?: { lease: string; topicId: string | null }) {
+  if (incident.status !== 'DISTRIBUTION') throw new ConflictError('Распределение уже завершено. Откройте актуальную карточку сообщения.');
+  if (incident.distributionClaimedBy !== userId || !incident.distributionClaimUntil || incident.distributionClaimUntil <= new Date()) {
+    throw new ConflictError('Закрепление завершено или сообщение взял другой сотрудник. Заново откройте сообщение из очереди.');
+  }
+  if (expected && (incident.distributionClaimUntil.toISOString() !== expected.lease || incident.userSelectedCategoryId !== expected.topicId)) throw new ConflictError('Этот экран устарел. Откройте актуальную карточку сообщения.');
+}
+
+
 export async function queueSnapshot(db: PrismaClient | Tx, now: Date) {
   const where = { status: 'DISTRIBUTION' as const };
   const [total, reserved, delayed30, delayed60, delayed120, oldest] = await Promise.all([

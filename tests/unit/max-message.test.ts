@@ -56,6 +56,15 @@ const KEYBOARD = [[{ type: 'callback' as const, text: 'Кнопка', payload: '
  * both the image and the keyboard in place.
  */
 describe('composing one message', () => {
+  it('reports the confirmed keyboard MID of a split immediate staff screen', async () => {
+    const { client, sent } = fakeMax();
+    const service = new MaxMessageService(client as never);
+    const result = await service.send({ chatId: -1n }, { text: 'Д'.repeat(5000), keyboard: KEYBOARD, immediatePreview: true });
+    expect(sent).toHaveLength(2);
+    expect(result.firstMessageId).toBe('mid-1'); expect(result.keyboardMessageId).toBe('mid-2');
+    expect(sent[0]!.attachments?.some(a => a.type === 'inline_keyboard') ?? false).toBe(false);
+    expect(sent[1]!.attachments?.some(a => a.type === 'inline_keyboard')).toBe(true);
+  });
   it('puts text, photo and buttons into a single message', async () => {
     const { client, sent } = fakeMax();
     const service = new MaxMessageService(client as never);

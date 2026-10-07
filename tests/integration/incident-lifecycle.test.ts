@@ -1,3 +1,4 @@
+import { clickDistributionPicker } from '../helpers/distribution-picker';
 import { incidentWorkday } from '../../src/utils/work-calendar';
 import { AnswerStatus, IncidentStatus, UserRole, type PrismaClient } from '@prisma/client';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
@@ -430,21 +431,18 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     const dispatcher = await actorFor(prisma, TEST_USERS.dispatcher, 'Диспетчер', [UserRole.DISPATCHER]);
     const category = await facility();
 
-    await handleIncidentCallback(
-      {
-        services: harness.services,
-        actor: dispatcher,
-        chatId: TEST_CHATS.distribution,
-        messageId: 'assignment-picker-mid',
-      },
-      { kind: 'incident', action: 'assign-group', incidentId: incident.id, argument: category.id },
-    );
+    await harness.services.distribution.publishCard(incident.id);
+    const cardMid = (await harness.services.repository.findById(incident.id))!.distributionMessageId!;
+    await handleIncidentCallback({ services: harness.services, actor: dispatcher, chatId: TEST_CHATS.distribution, messageId: cardMid },
+      { kind: 'incident', action: 'assign', incidentId: incident.id });
+    await clickDistributionPicker(harness.services, dispatcher, TEST_CHATS.distribution, 'assign-branch', 'local');
+    const pickerMid = await clickDistributionPicker(harness.services, dispatcher, TEST_CHATS.distribution, 'assign-group', category.id);
 
-    expect(harness.messages.deleted).not.toContain('assignment-picker-mid');
+    expect(harness.messages.deleted).not.toContain(pickerMid);
     const pending = (await harness.services.sessions.find(dispatcher.maxUserId, TEST_CHATS.distribution))!.data as any;
-    await handleIncidentCallback({ services: harness.services, actor: dispatcher, chatId: TEST_CHATS.distribution },
+    await handleIncidentCallback({ services: harness.services, actor: dispatcher, chatId: TEST_CHATS.distribution, messageId: incident.distributionMessageId! },
       { kind: 'incident', action: 'action-confirm', incidentId: incident.id, argument: pending.confirmation.token });
-    expect(harness.messages.deleted).toContain('assignment-picker-mid');
+    expect(harness.messages.deleted).toContain(pickerMid);
   });
 
   it('reuses the same picker message when a distribution branch is opened', async () => {
@@ -454,18 +452,14 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     });
     const dispatcher = await actorFor(prisma, TEST_USERS.dispatcher, 'Диспетчер', [UserRole.DISPATCHER]);
 
-    await handleIncidentCallback(
-      {
-        services: harness.services,
-        actor: dispatcher,
-        chatId: TEST_CHATS.distribution,
-        messageId: 'assignment-picker-mid',
-      },
-      { kind: 'incident', action: 'assign-branch', incidentId: incident.id, argument: 'local' },
-    );
+    await harness.services.distribution.publishCard(incident.id);
+    const cardMid = (await harness.services.repository.findById(incident.id))!.distributionMessageId!;
+    await handleIncidentCallback({ services: harness.services, actor: dispatcher, chatId: TEST_CHATS.distribution, messageId: cardMid },
+      { kind: 'incident', action: 'assign', incidentId: incident.id });
+    const pickerMid = await clickDistributionPicker(harness.services, dispatcher, TEST_CHATS.distribution, 'assign-branch', 'local');
 
     expect(harness.messages.edits).toContainEqual({
-      messageId: 'assignment-picker-mid',
+      messageId: pickerMid,
       text: expect.stringContaining('🔴 НЕ РАСПРЕДЕЛЕНО'),
       mode: 'keyboard',
     });

@@ -1,3 +1,4 @@
+import { clickDistributionPicker } from '../helpers/distribution-picker';
 import { randomUUID } from 'node:crypto';
 import { UserRole, type PrismaClient, type PrivateWorkItem } from '@prisma/client';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
@@ -164,10 +165,11 @@ describeIntegration('private employee workspace', () => {
     const { incident, item, chat } = await open('distribution');
     await run(item, 'assign');
     const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: GROUP_CODES.facility } });
-    await run(item, 'assign-group', group.id);
+    await clickDistributionPicker(h.services, actor, chat, 'assign-branch', 'local', item.id);
+    await clickDistributionPicker(h.services, actor, chat, 'assign-group', group.id, item.id);
     expect((await h.services.repository.findById(incident.id))!.status).toBe('DISTRIBUTION');
     expect(h.messages.toUser(actor.maxUserId).at(-1)!.message.text).toContain(group.name);
-    await confirm(item); expect((await h.services.repository.findById(incident.id))!.status).toBe('ASSIGNED');
+    await clickDistributionPicker(h.services, actor, chat, 'action-confirm', undefined, item.id); expect((await h.services.repository.findById(incident.id))!.status).toBe('ASSIGNED');
     expect(h.messages.toChat(chat).some(m => m.message.text.includes('Подтвердить'))).toBe(false);
     await h.services.answers.submit(incident.id, actor, 'Ответ', []);
     await invitePersonalWork(h.services, actor, TEST_CHATS.review, incident.id);

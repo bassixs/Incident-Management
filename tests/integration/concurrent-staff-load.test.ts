@@ -1,8 +1,9 @@
+import { prepareDistributionChoice } from '../helpers/distribution-picker';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { UserRole, type PrismaClient } from '@prisma/client';
-import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { buildServices } from '../../src/app/container';
 import { handleIncidentCallback } from '../../src/bot/callbacks/incident.callbacks';
 import { pendingConfirmation } from '../../src/bot/callbacks/staff-confirmation';
@@ -21,19 +22,27 @@ describeIntegration('concurrent employee load with arriving incidents', () => {
 
   it('96 arrivals, 24 employees, confirmations, revisions, redistribution, reports and delivery', async () => {
     const total = 96, lanes = 8;
-    const sent = new Map<string, { target: bigint; text: string; attachments: any[] }>();
+    const sent = new Map<string, { target: bigint; text: string; attachments: any[]; timestamp: number }>();
     const pins = new Map<bigint, string>(); let seq = 0;
     const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
     const send = async (target: bigint, text: string, extra: any = {}) => {
       await delay(2); const mid = `load-${++seq}`;
-      sent.set(mid, { target, text, attachments: extra.attachments ?? [] }); return { body: { mid } };
+      sent.set(mid, { target, text, attachments: extra.attachments ?? [], timestamp: Date.now() }); return { body: { mid } };
+    };
+    const asMessage = (mid: string) => {
+      const m = sent.get(mid)!;
+      return { sender: { user_id: 777, is_bot: true }, timestamp: m.timestamp, recipient: { chat_id: Number(m.target) }, body: { mid, text: m.text, attachments: m.attachments } };
     };
     const max = {
+      getMe: async () => ({ user_id: 777, is_bot: true }),
+      getChatMessages: async (chat: bigint, before: number) => ({ messages: [...sent.entries()].filter(([, m]) => m.target === chat && m.timestamp <= before).sort((a, b) => b[1].timestamp - a[1].timestamp).slice(0, 100).map(([mid]) => asMessage(mid)) }),
+      sendPanelOnce: send,
+      deleteMessage: async (mid: string) => { sent.delete(mid); return { success: true }; },
       sendToChat: send, sendToUser: send,
-      getMessage: async (mid: string) => { const m = sent.get(mid)!; return { recipient: { chat_id: Number(m.target) }, body: { mid, text: m.text, attachments: m.attachments } }; },
+      getMessage: async (mid: string) => asMessage(mid),
       editMessage: async (mid: string, text: string, attachments: any[]) => { const m = sent.get(mid)!; m.text = text; m.attachments = attachments; return { success: true }; },
       editCardWithKeyboard: async (mid: string, text: string, buttons: any[]) => { const m = sent.get(mid)!; m.text = text; m.attachments = buttons.length ? [{ type: 'inline_keyboard', payload: { buttons } }] : []; },
-      getPinnedMessage: async (chat: bigint) => ({ message: pins.has(chat) ? { body: { mid: pins.get(chat) } } : null }),
+      getPinnedMessage: async (chat: bigint) => ({ message: pins.has(chat) ? asMessage(pins.get(chat)!) : null }),
       pinMessage: async (chat: bigint, mid: string) => { pins.set(chat, mid); return { success: true }; },
     };
     const storage = { load: async () => Buffer.alloc(0), remove: async () => undefined };
@@ -100,20 +109,29 @@ describeIntegration('concurrent employee load with arriving incidents', () => {
           while (joined < lanes && !stop) { checkTime(); await delay(10); }
           if (stop) return;
         }
-        const id = incident.id, n = Number(incident.text.split(' ').at(-1)), branch = n % 8;
+        const id = incident.id, n = Number(incident.requesterMaxUserId - 100000n), branch = n % 8;
         await expect(services.distribution.assign(id, group(GROUP_CODES.facility).id, outsider)).rejects.toThrow();
         if (branch === 0) {
           await services.distribution.reject(id, `Причина отказа ${n}`, dispatcher);
         } else {
           const destination = group(branch === 7 ? GROUP_CODES.regional : redistributed.has(id) ? GROUP_CODES.it : GROUP_CODES.facility);
-          await click(dispatcher, TEST_CHATS.distribution, id, 'assign-group', destination.id);
+          await prepareDistributionChoice(services, dispatcher, TEST_CHATS.distribution, id, destination.id);
           if (branch === 1) {
             const draft = (await services.sessions.find(dispatcher.maxUserId, TEST_CHATS.distribution))!;
             await click(dispatcher, TEST_CHATS.distribution, id, 'action-cancel', pendingConfirmation(draft)!.token);
             expect((await services.repository.findById(id))!.status).toBe('DISTRIBUTION');
-            await click(dispatcher, TEST_CHATS.distribution, id, 'assign-group', destination.id);
+            await prepareDistributionChoice(services, dispatcher, TEST_CHATS.distribution, id, destination.id);
           }
           await confirm(dispatcher, TEST_CHATS.distribution, id, branch === 2);
+          // An employee can act on the chat card only after its publication ACK.
+          // Returning before this point fabricates a click on an unseen card and
+          // correctly retires the obsolete queued publication during redistribution.
+          await vi.waitFor(async () => {
+            await messages.flush();
+            const published = await services.repository.findById(id);
+            expect(published!.sectorMessageId).toBeTruthy();
+            expect(sent.get(published!.sectorMessageId!)?.target).toBe(destination.maxChatId);
+          }, { timeout: 10_000, interval: 20 });
           if (branch === 3 && !redistributed.has(id)) {
             await services.sector.takeInWork(id, executor);
             redistributed.add(id);
@@ -174,7 +192,10 @@ describeIntegration('concurrent employee load with arriving incidents', () => {
     const incidents = await prisma.incident.findMany({ include: { answers: { orderBy: { version: 'asc' } } } });
     expect(new Set(incidents.map(i => i.publicCode)).size).toBe(total);
     for (const i of incidents) {
-      const n = Number(i.text.split(' ').at(-1));
+      // Rejection intentionally erases incident.text. The synthetic requester ID
+      // is the immutable fixture index, not content which the workflow changes.
+      const n = Number(i.requesterMaxUserId - 100000n);
+      expect(Number.isInteger(n) && n >= 0 && n < total).toBe(true);
       const delivered = [...sent.values()].filter(s => s.target === i.requesterMaxUserId && s.text.includes('Получен ответ по вашему сообщению'));
       if (n % 8 === 0) { expect(i.status).toBe('REJECTED'); expect(delivered).toHaveLength(0); }
       else {
@@ -184,7 +205,8 @@ describeIntegration('concurrent employee load with arriving incidents', () => {
         expect(i.answers.filter(a => a.deliveredAt)).toHaveLength(1);
       }
     }
-    expect(await prisma.outboundMessage.count({ where: { status: { not: 'SENT' } } })).toBe(0);
+    const unfinished = await prisma.outboundMessage.findMany({ where: { status: { not: 'SENT' } }, select: { status: true, attempts: true, lastError: true, nextAttemptAt: true, dedupeKey: true, trackingType: true } });
+    expect(unfinished, JSON.stringify(unfinished)).toHaveLength(0);
     expect(await prisma.operatorSession.count({ where: { maxUserId: { lt: 100000n } } })).toBe(0);
     expect(await prisma.actionLock.count({ where: { action: { in: ['review-queue', 'sector-queue'] } } })).toBe(0);
     durations.sort((a, b) => a - b);

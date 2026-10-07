@@ -8,6 +8,8 @@
  */
 
 export const INCIDENT_ACTIONS = [
+  'distribution-nav',
+  'assignment-back',
   'contact',
   'privacy-pass',
   'personal',

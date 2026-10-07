@@ -20,6 +20,7 @@ import { startRejectionFlow, handleRejectionAction } from './rejection-flow';
 import { startReviewEdit, handleReviewEditAction } from './review-edit-flow';
 import { prepareButtonConfirmation, handleStaffConfirmation, cancelStaffSession } from './staff-confirmation';
 import { invitePersonalWork, withPersonalWorkLock } from '../../work-queues/private-workspace';
+import { handleDistributionNavigation, isDistributionNavigation } from './distribution-navigation';
 
 const log = moduleLogger('bot-incident');
 
@@ -31,6 +32,8 @@ export type IncidentCallbackContext = {
   /** Set only by trusted internal confirmation handlers, never from callback JSON. */
   confirmed?: boolean;
   privateExecution?: boolean;
+  /** Trusted navigation snapshot, never read from a callback. */
+  navigationAuthorized?: { lease: string; topicId: string | null };
 };
 
 /**
@@ -44,11 +47,15 @@ export async function handleIncidentCallback(
 ): Promise<string | undefined> {
   const { services, actor, chatId } = context;
 
+  if (!context.navigationAuthorized && !context.confirmed && isDistributionNavigation(payload.action)) {
+    return handleDistributionNavigation(context, payload);
+  }
+
   const incident = await services.repository.findById(payload.incidentId);
   if (!incident) throw new NotFoundError('Сообщение не найдено.');
   if (chatId === undefined) throw new ForbiddenError('Действие недоступно в этом чате.');
 
-  if (incident.status === 'DISTRIBUTION' && ['assign', 'assign-branch', 'assign-page', 'assign-group', 'reject', 'topic', 'topic-page', 'topic-set'].includes(payload.action)) {
+  if (incident.status === 'DISTRIBUTION' && payload.action === 'reject') {
     await services.distributionQueue.claim(actor, chatId, incident.id);
   }
 
@@ -102,7 +109,7 @@ export async function handleIncidentCallback(
     case 'topic-set': {
       assertDispatcher(services, actor, chatId);
       if (payload.argument !== 'none' && (!payload.argument || !isUuid(payload.argument))) throw new AppError('Тема не указана.', 'BAD_PAYLOAD');
-      const updated = await services.distribution.changeTopic(incident.id, payload.argument === 'none' ? null : payload.argument, actor);
+      const updated = await services.distribution.changeTopic(incident.id, payload.argument === 'none' ? null : payload.argument, actor, context.navigationAuthorized);
       const notice = `${updated.publicCode}: тема сообщения — ${updated.userSelectedCategory?.name ?? 'Иное'}.`;
       if (context.messageId && context.messageId !== incident.distributionMessageId) await services.messages.finalizeCard(context.messageId, notice);
       return notice;
@@ -127,8 +134,8 @@ export async function handleIncidentCallback(
       return pageAssignmentBranch(services, actor, chatId, context.messageId, incident, payload.argument);
 
     case 'assign-group':
-      if (!context.confirmed) return prepareButtonConfirmation(services, actor, chatId, incident, 'assign-group', payload.argument, context.messageId);
-      return completeAssignment(services, actor, chatId, context.messageId, incident, payload.argument);
+      if (!context.confirmed) return prepareButtonConfirmation(services, actor, chatId, incident, 'assign-group', payload.argument, context.messageId, context.navigationAuthorized);
+      return completeAssignment(services, actor, chatId, context.messageId, incident, payload.argument, context.navigationAuthorized);
 
     case 'assign-category':
       return 'Этот список устарел. Нажмите «Распределить» в карточке сообщения ещё раз.';
@@ -263,13 +270,13 @@ async function sendAssignmentPage(
       ? services.distribution.recommendedGroup(incident.problemMunicipalityCode)
       : Promise.resolve(null),
   ]);
-  if (groups.length === 0) return 'В этом разделе пока нет доступных профильных чатов.';
   const recommendedGroup = recommendation?.kind === kind ? recommendation : null;
   const title = branch === 'regional' ? 'Калужская область' : branch === 'local' ? 'Органы местного самоуправления' : 'Органы исполнительной власти';
   const text = [
     '🔴 НЕ РАСПРЕДЕЛЕНО',
     '',
     `${title}: куда направить ${incident.publicCode}?`,
+    ...(groups.length === 0 ? ['', 'В этом разделе пока нет доступных профильных чатов.'] : []),
     ...(recommendedGroup ? ['', `⭐ Рекомендация: ${recommendedGroup.name}.`] : []),
     ...(hiddenCount > 0 ? ['', `⚠️ Скрыто групп без рабочего чата: ${hiddenCount}.`] : []),
   ].join('\n');
@@ -294,10 +301,11 @@ async function completeAssignment(
   messageId: string | undefined,
   incident: IncidentWithRelations,
   groupId: string | undefined,
+  navigation?: { lease: string; topicId: string | null },
 ): Promise<string> {
   assertDispatcher(services, actor, chatId);
   if (!groupId) throw new AppError('Ответственная группа не указана.', 'BAD_PAYLOAD');
-  const updated = await services.distribution.assign(incident.id, groupId, actor);
+  const updated = await services.distribution.assign(incident.id, groupId, actor, navigation);
 
   // The picker is a separate MAX message from the original incident card.
   // Remove it: the original card already shows the final distribution state.
