@@ -22,19 +22,27 @@ describeIntegration('concurrent employee load with arriving incidents', () => {
 
   it('96 arrivals, 24 employees, confirmations, revisions, redistribution, reports and delivery', async () => {
     const total = 96, lanes = 8;
-    const sent = new Map<string, { target: bigint; text: string; attachments: any[] }>();
+    const sent = new Map<string, { target: bigint; text: string; attachments: any[]; timestamp: number }>();
     const pins = new Map<bigint, string>(); let seq = 0;
     const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
     const send = async (target: bigint, text: string, extra: any = {}) => {
       await delay(2); const mid = `load-${++seq}`;
-      sent.set(mid, { target, text, attachments: extra.attachments ?? [] }); return { body: { mid } };
+      sent.set(mid, { target, text, attachments: extra.attachments ?? [], timestamp: Date.now() }); return { body: { mid } };
+    };
+    const asMessage = (mid: string) => {
+      const m = sent.get(mid)!;
+      return { sender: { user_id: 777, is_bot: true }, timestamp: m.timestamp, recipient: { chat_id: Number(m.target) }, body: { mid, text: m.text, attachments: m.attachments } };
     };
     const max = {
+      getMe: async () => ({ user_id: 777, is_bot: true }),
+      getChatMessages: async (chat: bigint, before: number) => ({ messages: [...sent.entries()].filter(([, m]) => m.target === chat && m.timestamp <= before).sort((a, b) => b[1].timestamp - a[1].timestamp).slice(0, 100).map(([mid]) => asMessage(mid)) }),
+      sendPanelOnce: send,
+      deleteMessage: async (mid: string) => { sent.delete(mid); return { success: true }; },
       sendToChat: send, sendToUser: send,
-      getMessage: async (mid: string) => { const m = sent.get(mid)!; return { recipient: { chat_id: Number(m.target) }, body: { mid, text: m.text, attachments: m.attachments } }; },
+      getMessage: async (mid: string) => asMessage(mid),
       editMessage: async (mid: string, text: string, attachments: any[]) => { const m = sent.get(mid)!; m.text = text; m.attachments = attachments; return { success: true }; },
       editCardWithKeyboard: async (mid: string, text: string, buttons: any[]) => { const m = sent.get(mid)!; m.text = text; m.attachments = buttons.length ? [{ type: 'inline_keyboard', payload: { buttons } }] : []; },
-      getPinnedMessage: async (chat: bigint) => ({ message: pins.has(chat) ? { body: { mid: pins.get(chat) } } : null }),
+      getPinnedMessage: async (chat: bigint) => ({ message: pins.has(chat) ? asMessage(pins.get(chat)!) : null }),
       pinMessage: async (chat: bigint, mid: string) => { pins.set(chat, mid); return { success: true }; },
     };
     const storage = { load: async () => Buffer.alloc(0), remove: async () => undefined };
