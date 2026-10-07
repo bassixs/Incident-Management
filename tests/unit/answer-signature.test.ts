@@ -142,6 +142,9 @@ describe('полные названия всех исполнителей', () =
     expect(signature).toMatch(/^Ответ подготовлен (Администрацией|Министерством|Государственной жилищной инспекцией|Управлением|Комитетом|Инспекцией|Фондом|Социальным фондом)( .+)?\.$/);
     expect(signature).not.toMatch(/ГЖИ|УАТК|ЗАГС|ЖКХ|Госстройнадзор/);
     expect(finalAnswerToRequester(incident, answer, ANSWERED_AT, authorityName)).toContain(signature);
+    const current = finalAnswerToRequester(incident, answer, ANSWERED_AT, authorityName, group.code);
+    if (group.code === 'REGION_KALUGA') expect(current).not.toContain(signature);
+    else expect(current).toContain(signature);
     expect(reviewCard({ ...incident, attachments: [], answers: [] } as unknown as IncidentWithRelations,
       { ...answer, attachments: [] }, { ...group, authorityName } as ResponsibleGroup)).toContain(signature);
   });

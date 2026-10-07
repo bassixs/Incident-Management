@@ -85,7 +85,8 @@ describeIntegration('regional signature at durable delivery boundaries', () => {
 
   it('does not send when another writer changes the job before the guarded update', async () => {
     const f = await fixture(); const original = prisma.outboundMessage.updateMany.bind(prisma.outboundMessage);
-    vi.spyOn(prisma.outboundMessage, 'updateMany').mockImplementation(async (args: any) => {
+    // Fault injection returns a native Promise rather than Prisma's lazy promise.
+    vi.spyOn(prisma.outboundMessage as any, 'updateMany').mockImplementation(async (args: any) => {
       if (args.data.payload?.text === f.current) {
         await prisma.outboundMessage.update({ where: { id: f.job.id }, data: { lockedAt: new Date(0), attempts: { increment: 1 } } });
       }
