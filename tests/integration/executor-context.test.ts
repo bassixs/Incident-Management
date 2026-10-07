@@ -67,6 +67,26 @@ describeIntegration.each(['chat', 'private'] as const)('executor context (%s)', 
     await click(btn('Версия 1 ·')); expect(text()).toContain('Ответ версии 1'); await click(btn('Замечание к этой версии')); expect(text()).toContain('Замечание версии 1'); expect(text()).not.toContain('Замечание версии 7');
     await click(btn('Назад')); expect(text()).toContain('Ответ версии 1'); expect(await snapshot()).toBe(before);
   });
+  it('reads seven revisions produced by the actual submit/review services, with no changes during viewing', async () => {
+    await db.incidentAnswer.deleteMany({ where: { incidentId: incident.id } });
+    await db.incident.update({ where: { id: incident.id }, data: { status: 'IN_PROGRESS', revisionReason: null, revisionCount: 0 } });
+    const reviewer = await actorFor(db, TEST_USERS.approver, 'Тестовый согласующий', [UserRole.APPROVER]);
+    for (let n = 1; n <= 7; n++) {
+      await h.services.sector.takeInWork(incident.id, actor);
+      const result = await h.services.answers.submit(incident.id, actor, `Настоящий цикл ${n}`, []);
+      await h.services.workQueues.claimReview(reviewer, TEST_CHATS.review, incident.id);
+      await h.services.review.requestRevision(incident.id, `Замечание цикла ${n}`, reviewer, result.answer.id);
+    }
+    expect((await db.incident.findUniqueOrThrow({ where: { id: incident.id } })).revisionCount).toBe(7);
+    expect(await db.incidentHistory.count({ where: { incidentId: incident.id, action: 'REVISION_REQUESTED' } })).toBe(7);
+    const before = await snapshot(), residentSends = h.messages.toUser(TEST_USERS.requesterA).length;
+    for (let n = 7; n >= 1; n--) {
+      await open(); await click(btn('История версий')); if (n === 1) await click(btn('Старше'));
+      await click(btn(`Версия ${n} ·`)); expect(text()).toContain(`Настоящий цикл ${n}`);
+      await click(btn('Замечание к этой версии')); expect(text()).toContain(`Замечание цикла ${n}`);
+    }
+    expect(await snapshot()).toBe(before); expect(h.messages.toUser(TEST_USERS.requesterA)).toHaveLength(residentSends);
+  });
   it('works without any saved answer or revision', async () => {
     await db.incidentAnswer.deleteMany(); await db.incident.update({ where: { id: incident.id }, data: { revisionCount: 0, revisionReason: null } });
     await open(); expect(text()).toContain('Сохранённого проекта ответа пока нет'); await click(btn('История версий')); expect(text()).toContain('Сохранённых версий ответа нет');
@@ -144,12 +164,13 @@ describeIntegration.each(['chat', 'private'] as const)('executor context (%s)', 
   it('warns about unknown attachment outcome without automatically sending it again', async () => {
     await open(); await click(btn('Исходные фотографии'));
     const before = h.messages.sent.length;
-    vi.mocked(h.messages.send).mockRejectedValueOnce(new Error('synthetic lost acknowledgement'));
-    await click(btn('Фото 1')); expect(text()).toContain('результат может быть неизвестен'); expect(h.messages.sent).toHaveLength(before);
+    const transport = vi.mocked(h.messages.send).getMockImplementation()!;
+    vi.mocked(h.messages.send).mockImplementationOnce(async (target, message) => { await transport(target, message); throw new Error('synthetic lost acknowledgement'); });
+    await click(btn('Фото 1')); expect(text()).toContain('результат может быть неизвестен'); expect(h.messages.sent).toHaveLength(before + 1);
   });
   it('recovers after initial screen failure without modifying business state', async () => {
     const before = await snapshot(); vi.mocked(h.messages.send).mockRejectedValueOnce(new Error('synthetic 503'));
-    await open(); await open(); expect(text()).toContain('Исходное сообщение'); expect(await snapshot()).toBe(before);
+    await expect(open()).rejects.toThrow('synthetic 503'); await open(); expect(text()).toContain('Исходное сообщение'); expect(await snapshot()).toBe(before);
   });
   it('does not clear an expired pending session when returning to the working card', async () => {
     await db.operatorSession.create({ data: { maxUserId: actor.maxUserId, chatId: group.maxChatId!, incidentId: incident.id, type: 'WAITING_FOR_ANSWER', data: { confirmation: { action: 'input', token: 'expired', body: { text: 'Сохранить этот текст' } } }, expiresAt: new Date(0) } });
