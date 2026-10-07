@@ -56,8 +56,8 @@ Node 22.23.3, Prisma 6.19.3, PostgreSQL 16-alpine. Сохраняются лим
 Точные результаты и версии — `review/unit.log`, `review/operational.log`,
 `review/environment.txt`, `review/operational-result.json` и
 `review/backup-restore-result.json`. Архив создаётся только при успешных проверках.
-Семь новых unit проверяют исходный TypeError, EOF/timeout обеих фаз, невалидный
-JSON, корректный протокол, фильтрацию stderr и отказ при неизвестном create/чужом контейнере; запускаются также с Python -O.
+Восемь новых unit проверяют исходный TypeError, EOF/timeout обеих фаз, невалидный
+JSON, корректный протокол, фильтрацию stderr и отказ при неизвестном create/чужом контейнере и завершение CLI при отказе inspect; запускаются также с Python -O.
 
 Настоящий Docker: SIGSEGV до первой / после первой строки; большой stderr;
 невалидная вторая строка; все строки и последующий exit 17; зависание в каждой

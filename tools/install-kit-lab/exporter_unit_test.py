@@ -1,6 +1,6 @@
 """Protocol/diagnostic checks only; real Docker/flock lives in exporter_test.py."""
 import json,sys,tempfile,unittest
-from unittest.mock import patch
+from unittest.mock import patch,Mock
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'migration-kit/scripts'))
 import ops_common as o
@@ -43,6 +43,15 @@ class Protocol(unittest.TestCase):
    with patch.object(o,'inspect',return_value={'Name':'foreign','Config':{'Labels':{}},'Id':e.cid}),patch.object(o,'command') as command,self.assertRaisesRegex(o.Refusal,'EXPORTER_CLEANUP_UNCONFIRMED'):
     e.__exit__(o.Refusal,o.Refusal('SYNTHETIC_ERROR'),None)
    command.assert_not_called()
+   self.assertEqual(json.loads(Path(dest,'exporter-result.json').read_text())['cleanup'],'unknown')
+ def test_inspect_error_still_reaps_cli_without_blocking_reader_close(self):
+  with tempfile.TemporaryDirectory() as dest:
+   e=Exporter(['docker','run'],dest);e.cid='b'*64;e.process=Mock();e.process.poll.return_value=0
+   reader=Mock();reader.is_alive.return_value=True;e.readers=[reader]
+   with patch.object(o,'inspect',side_effect=o.Refusal('COMMAND_UNAVAILABLE_OR_TIMEOUT')),self.assertRaisesRegex(o.Refusal,'EXPORTER_CLEANUP_UNCONFIRMED'):
+    e.__exit__(o.Refusal,o.Refusal('SYNTHETIC_ERROR'),None)
+   e.process.wait.assert_called_once_with(timeout=10);reader.join.assert_called_once_with(timeout=5)
+   e.process.stdout.close.assert_not_called();e.process.stderr.close.assert_not_called()
    self.assertEqual(json.loads(Path(dest,'exporter-result.json').read_text())['cleanup'],'unknown')
 
 if __name__=='__main__':unittest.main(verbosity=2)

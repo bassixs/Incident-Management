@@ -108,26 +108,32 @@ class Exporter:
                     o.command(['docker','stop','-t','15',self.cid],timeout=20)
                     row=self._inspect()
                 o.need(not row['State']['Running'],'EXPORTER_STILL_RUNNING')
-            if self.process:
-                try:self.process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    self.process.terminate();self.process.wait(timeout=5)
-                for t in self.readers:t.join(timeout=5)
-                o.need(not any(t.is_alive() for t in self.readers),'EXPORTER_READER_STILL_RUNNING')
             if self.cid:o.command(['docker','rm',self.cid],timeout=10)
             self.cleanup='confirmed'
         except Exception as exc:
             cleanup_error=exc;self.cleanup='unknown'
         finally:
+            # Reap the local CLI even when inspect/stop failed. Otherwise closing
+            # a pipe whose reader still blocks can itself retain backup.lock.
+            if self.process:
+                try:
+                    try:self.process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        self.process.terminate();self.process.wait(timeout=5)
+                    for t in self.readers:t.join(timeout=5)
+                    o.need(not any(t.is_alive() for t in self.readers),'EXPORTER_READER_STILL_RUNNING')
+                except Exception as exc:
+                    cleanup_error=exc;self.cleanup='unknown'
             diagnostic={'format':'snapshot-export-result-v1','startedAt':self.started,'finishedAt':o.stamp(),
                 'phase':self.phase,'success':self.finished and error is None and cleanup_error is None,
                 'error':self.error,'cliExitCode':self.process.poll() if self.process else None,
                 'containerId':self.cid,'containerName':self.name,'containerState':self.state,
                 'cleanup':self.cleanup,'stderrBytes':self.stderr_bytes,'stderrChunks':self.stderr_lines,
+                'stderrTailTruncated':self.stderr_lines>64,
                 'stderr':clean_stderr(''.join(self.tail))}
             o.save_new(self.dest/'exporter-result.json',diagnostic)
             print('EXPORTER_RESULT:'+json.dumps(diagnostic),flush=True)
-            if self.process:
+            if self.process and not any(t.is_alive() for t in self.readers):
                 for stream in [self.process.stdout,self.process.stderr]:
                     if stream:stream.close()
         if cleanup_error:raise o.Refusal('EXPORTER_CLEANUP_UNCONFIRMED') from None
