@@ -13,6 +13,12 @@ def injected(s,env,network,script,*args):
  if script=='data-snapshot.cjs' and '--export' in args:
   at=cmd.index('--entrypoint');cmd[at:at]=['--mount',f'type=bind,src={Path(fixture).parent},dst=/faults,readonly']
   cmd[cmd.index('/ops/'+script)]='/faults/'+Path(fixture).name
+  if Path(fixture).stem in ['before-first','after-first']:
+   # kill(SIGSEGV) is ignored by a handler-less namespace PID 1. Under the
+   # image's own tini Node is a child and really dies from SIGSEGV; tini returns
+   # 139. This is only fault injection, not a change to the reviewed exporter.
+   cmd[cmd.index('--entrypoint')+1]='/sbin/tini'
+   at=cmd.index('/faults/'+Path(fixture).name);cmd[at:at]=['--','node']
  return cmd
 b.node=injected
 try:b.capture(o.settings(settings),'old',Path(destination))
