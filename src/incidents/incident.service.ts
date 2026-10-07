@@ -168,14 +168,13 @@ export class IncidentService {
     assertNoPersonalData(input.problemLocality ?? '');
     await this.assertNotBanned(input.requester.maxUserId);
 
-    const now = new Date();
-    const { start, end } = dayBoundaries(now, config.APP_TIMEZONE);
-
     const incidentId = randomUUID();
     const stored = await this.media.ingestAll(`incidents/${incidentId}`, (input.media ?? []).filter(m => m.kind === 'IMAGE'));
     let transactionBodyCompleted = false;
     const incident = await this.prisma.$transaction(async (tx) => {
       await acquireAdvisoryLock(tx, 'incident-quota', input.requester.maxUserId.toString());
+      const now = new Date();
+      const { start, end } = dayBoundaries(now, config.APP_TIMEZONE);
       let requesterPhone: string | null = null;
       if (input.draftSessionId) {
         const session = await tx.operatorSession.findFirst({ where: { id: input.draftSessionId, maxUserId: input.requester.maxUserId, type: 'WAITING_INCIDENT_CONFIRMATION', expiresAt: { gt: new Date() } } });

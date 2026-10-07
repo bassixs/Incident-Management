@@ -162,9 +162,9 @@ export class DistributionService {
     const group = await this.groups.requireActiveById(groupId);
     this.groups.requireChatId(group);
 
-    const now = new Date();
     await this.prisma.$transaction(async (tx) => {
       await acquireAdvisoryLock(tx, ...CLAIM_LOCK);
+      const now = new Date();
       assertClaimOwner(await tx.incident.findUniqueOrThrow({ where: { id: incidentId } }), actor.maxUserId);
       const claimed = await this.repository.transition(tx, incidentId, IncidentStatus.DISTRIBUTION, {
         status: IncidentStatus.ASSIGNED,

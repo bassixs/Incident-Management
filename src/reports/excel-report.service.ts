@@ -101,6 +101,7 @@ const COLUMNS: Column[] = [
 const policyColumns = (now: Date): Column[] => [
   { header: 'Версия правил', width: 23, value: i => i.slaPolicy },
   { header: 'Подтверждение доставки актуального ответа MAX', width: 28, value: i => i.slaDeliveredAt ? formatDateTime(i.slaDeliveredAt) : '' },
+  { header: 'Задания доставки (отдельно от подготовки)', width: 55, value: i => (i.deliveryJobs ?? []).map(j => `${j.dedupeKey?.startsWith('rejection:') ? 'Уведомление об отклонении' : 'Ответ'}: ${j.id}; ${j.status}; попытки ${j.attempts}; ${j.sentAt ? formatDateTime(j.sentAt) : 'Нет подтверждения полной доставки'}`).join('\n') },
   { header: 'Этап ответа / отдельная доставка', width: 55, value: i => isWorkingPolicy(i) ? policyDeliveryState(i) : '' },
   { header: 'Нарушение общего срока, рабочие минуты (V1)', width: 28, value: i => !isWorkingPolicy(i) || i.status === 'REJECTED' ? '' : workingMilliseconds(i.deadlineAt, i.slaDeliveredAt ?? now) / 60_000 },
 ];

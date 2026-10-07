@@ -146,11 +146,14 @@ describeIntegration('working hour policy and legacy coexistence', () => {
     vi.spyOn(h.messages, 'send').mockResolvedValue({ state: 'queued', trackingApplied: false });
     await h.services.review.approve(i.id, actor, answer.id);
     set('2026-10-14T14:00:00'); await h.services.sla.sweep();
-    const w = worker({ sendToUser: async () => { throw new MaxError(403, { code: 'error.dialog.suspended', message: 'Synthetic refusal' }); } });
+    const w = worker({ sendToUser: async (_id: bigint, text: string) => {
+      if (text.includes('Prepared project')) throw new MaxError(403, { code: 'error.dialog.suspended', message: 'Synthetic refusal' });
+      return { body: { mid: 'other-notification' } };
+    } });
     await w.flush(); w.stop(); await w.waitForIdle();
     expect((await fresh(i.id)).slaDeliveredAt).toBeNull(); expect((await cycles(i.id))[0]!.firstPreparedAt).toEqual(preparation);
     const job = await db.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: `answer:${answer.id}` } });
-    expect(job.status).toBe('PENDING'); expect(job.sentAt).toBeNull();
+    expect(job.status).toBe('PENDING'); expect(job.sentAt).toBeNull(); expect(job.attempts).toBe(1); expect(job.lastError).toContain('403');
     expect((await fresh(i.id)).answers.at(-1)!.deliveredAt).toBeNull();
     await db.outboundMessage.update({ where: { id: job.id }, data: { nextAttemptAt: new Date(0) } });
     await worker().flush(); expect((await fresh(i.id)).slaDeliveredAt).not.toBeNull();

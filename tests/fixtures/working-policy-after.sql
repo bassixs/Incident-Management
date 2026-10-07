@@ -1,7 +1,7 @@
 DO $$
 DECLARE before_row jsonb; after_row jsonb; history jsonb;
 BEGIN
-  SELECT value->'incident',value->'migrations' INTO before_row,history FROM "SystemSetting" WHERE key='synthetic-policy-migration-control';
+  SELECT value::jsonb->'incident',value::jsonb->'migrations' INTO before_row,history FROM "SystemSetting" WHERE key='synthetic-policy-migration-control';
   SELECT to_jsonb(i) INTO after_row FROM "Incident" i WHERE id='policy-control';
   IF after_row - ARRAY['slaPolicy','slaDeliveredAt','workingDeadlineQueuedAt'] <> before_row THEN RAISE EXCEPTION 'Historical incident changed'; END IF;
   IF after_row->>'slaPolicy' <> 'LEGACY' OR after_row->>'slaDeliveredAt' IS NOT NULL OR after_row->>'workingDeadlineQueuedAt' IS NOT NULL THEN RAISE EXCEPTION 'Incorrect migration policy'; END IF;

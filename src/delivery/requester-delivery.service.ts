@@ -1,4 +1,4 @@
-import { recordPolicyDelivery } from '../sla/policy';
+import { recordPolicyDelivery, isWorkingPolicy } from '../sla/policy';
 import type { PrismaClient } from '@prisma/client';
 
 import { codeLabel } from '../bot/views/cards';
@@ -119,7 +119,7 @@ export class RequesterDeliveryService {
         where: { id: answer.id },
         data: { deliveredAt: new Date() },
       });
-      await this.prisma.$transaction(tx => recordPolicyDelivery(tx, incidentId, new Date()));
+      if (isWorkingPolicy(incident)) await this.prisma.$transaction(tx => recordPolicyDelivery(tx, incidentId, new Date()));
       await this.history.record({
         incidentId,
         action: HistoryAction.ANSWER_SENT,
