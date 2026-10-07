@@ -20,7 +20,7 @@ type State = { token: string; mid: string; incidentId: string; groupId: string; 
 type Context = { services: AppServices; actor: ResolvedActor; chatId: bigint; incidentId: string; messageId?: string;
   privateItemId?: string; checkPrivate?: () => Promise<void>; backPrivate?: (guard: () => Promise<void>) => Promise<void> };
 const stale = () => new ConflictError('Этот экран больше не активен. Откройте «Обращение и доработки» в текущей карточке.');
-export const contextKey = (user: bigint, chat: bigint, item?: string) => `executor-context:${user}:${chat}:${item ?? 'chat'}`;
+export const contextKey = (user: bigint, chat: bigint, item?: string) => `executor-context:${user}:${chat}:${item ? 'private' : 'chat'}`;
 export const isExecutorContext = (action: string) => action === 'context' || action === 'context-page';
 const orderedFiles = (rows: IncidentWithRelations['attachments'] | IncidentWithRelations['answers'][number]['attachments']) => [...rows].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id));
 

@@ -128,7 +128,13 @@ describeIntegration.each(['chat', 'private'] as const)('executor context (%s)', 
     const before = await snapshot(); await open(); await click(btn('Мой незавершённый ввод')); expect(text()).toContain('Незавершённый проект'); await click(btn('Назад')); await click(btn('К текущей рабочей карточке')); expect(await snapshot()).toBe(before);
   });
   it('allows read-only history after reservation expiry without reacquiring it', async () => {
-    await db.actionLock.updateMany({ where: { action: 'sector-queue' }, data: { lockedUntil: new Date(0) } }); const before = await snapshot(); await open(); await version(4); await click(btn('К текущей рабочей карточке')); expect(await snapshot()).toBe(before);
+    await open(); await db.actionLock.updateMany({ where: { action: 'sector-queue' }, data: { lockedUntil: new Date(0) } }); const before = await snapshot(); await version(4); await click(btn('К текущей рабочей карточке')); expect(await snapshot()).toBe(before);
+  });
+  it('does not change a colleagues reservation or responder while allowing authorized read-only access', async () => {
+    await open(); const colleague = await actorFor(db, 9017n, 'Коллега', [UserRole.RESPONDER]);
+    await db.actionLock.updateMany({ where: { action: 'sector-queue' }, data: { maxUserId: colleague.maxUserId } });
+    await db.incident.update({ where: { id: incident.id }, data: { currentResponderId: colleague.userId } });
+    const before = await snapshot(); await version(5); await click(btn('К текущей рабочей карточке')); expect(await snapshot()).toBe(before);
   });
   it('rejects access after reassignment even from an old valid screen', async () => {
     await open(); const old = btn('Исходный текст'); const other = await db.responsibleGroup.findFirstOrThrow({ where: { code: GROUP_CODES.it } }); await db.incident.update({ where: { id: incident.id }, data: { assignedGroupId: other.id } }); const n = h.messages.sent.length, edits = h.messages.edits.length; await click(old); expect(notice()).toMatch(/организац|профильн|доступ/); expect(h.messages.sent).toHaveLength(n); expect(h.messages.edits).toHaveLength(edits);
