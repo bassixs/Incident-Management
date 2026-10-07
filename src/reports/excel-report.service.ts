@@ -123,7 +123,7 @@ function addAssignmentSheet(workbook: ExcelJS.Workbook, incidents: IncidentWithR
       formatDateTime(c.assignedAt), formatDateTime(c.preparationDueAt), c.firstPreparedAt ? formatDateTime(c.firstPreparedAt) : '',
       c.firstPreparedAnswerId ?? '', submissions, workingMilliseconds(c.preparationDueAt, prepEnd) / 60_000,
       formatDateTime(c.returnDueAt), c.returnedAt ? formatDateTime(c.returnedAt) : '', c.returnReason ?? '',
-      c.returnedAt ? c.returnedAt <= c.returnDueAt ? 'В срок' : 'С опозданием' : 'Возврата не было',
+      c.returnedAt ? workingMilliseconds(c.returnDueAt, c.returnedAt) === 0 ? 'В срок' : 'С опозданием' : 'Возврата не было',
       c.returnedAt ? workingMilliseconds(c.returnDueAt, c.returnedAt) / 60_000 : '',
       c.endedAt ? formatDateTime(c.endedAt) : '', c.outcome,
       c.cardDeliveredAt ? formatDateTime(c.cardDeliveredAt) : 'Нет подтверждения; техническая доставка',

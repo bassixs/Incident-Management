@@ -8,6 +8,8 @@ import { recordPolicyDelivery } from '../../src/sla/policy';
 import { MaxMessageService } from '../../src/max/max-message.service';
 import { buildServices } from '../../src/app/container';
 import { FakeMediaService } from '../helpers/fakes';
+import { photoReference } from '../../src/media/max-photo-reference';
+import { showPersonalWork } from '../../src/work-queues/private-workspace';
 import { distributionCard, reviewCard, sectorCard, revisionCard, incidentLookupCard, finalAnswerToRequester } from '../../src/bot/views/cards';
 import { actorFor, createHarness, createTestPrisma, describeIntegration, pushSchemaOnce, resetDatabase, seedCategories, type TestHarness } from '../helpers/integration';
 import { TEST_USERS, TEST_CHATS } from '../helpers/setup-env';
@@ -171,6 +173,65 @@ describeIntegration('working hour policy and legacy coexistence', () => {
     h = await createHarness(db); await h.services.sla.sweep();
     expect(await db.outboundMessage.count({ where: { dedupeKey: { startsWith: `sla-working-v1:${i.id}:` } } })).toBe(2);
     expect((await fresh(i.id)).slaReminder24SentAt).toBeNull();
+  });
+
+  it('uses the actual personal-work context even when the employee has administrator and reviewer roles', async () => {
+    const { i, actor } = await assigned();
+    h.services.max = { api: { getChatMembers: async () => ({ members: [{ user_id: Number(actor.maxUserId), is_bot: false }] }) } } as never;
+    const sector = await db.privateWorkItem.create({ data: { maxUserId: actor.maxUserId, incidentId: i.id, originChatId: TEST_CHATS.sector } });
+    await h.services.sector.takeInWork(i.id, actor);
+    await showPersonalWork(h.services, actor, sector.id, true);
+    const shown = h.messages.toUser(actor.maxUserId).at(-1)!.message.text;
+    expect(shown).not.toMatch(/Общий срок|Проект \(22|рабочих часа|Срок ответа/);
+    expect(shown).toContain(actor.displayName); // Existing temporary reservation remains.
+    await h.services.answers.submit(i.id, actor, 'Project for review');
+    const review = await db.privateWorkItem.create({ data: { maxUserId: actor.maxUserId, incidentId: i.id, originChatId: TEST_CHATS.review } });
+    await showPersonalWork(h.services, actor, review.id, true);
+    expect(h.messages.toUser(actor.maxUserId).at(-1)!.message.text).toContain('Общий срок');
+  });
+
+  it('does not extend assignment clocks when the working card waits for MAX', async () => {
+    const i = await create(); const { actor, group } = await actors();
+    vi.spyOn(h.messages, 'send').mockResolvedValue({ state: 'queued', trackingApplied: false });
+    await h.services.distribution.assign(i.id, group.id, actor);
+    const before = (await cycles(i.id))[0]!;
+    expect((await fresh(i.id)).sectorMessageId).toBeNull(); expect(before.cardDeliveredAt).toBeNull();
+    set('2026-10-12T11:00:00'); await worker().flush();
+    const after = (await cycles(i.id))[0]!;
+    expect(after.cardDeliveredAt).toEqual(new Date()); expect(after.assignedAt).toEqual(before.assignedAt);
+    expect(after.preparationDueAt).toEqual(before.preparationDueAt); expect(after.returnDueAt).toEqual(before.returnDueAt);
+  });
+
+  it('does not complete total SLA after only part of an answer; restart preserves confirmed parts and photographs', async () => {
+    const { i, actor, group } = await assigned();
+    await db.responsibleGroup.update({ where: { id: group.id }, data: { bypassReview: true } });
+    vi.spyOn(h.messages, 'send').mockResolvedValue({ state: 'queued', trackingApplied: false });
+    const { answer } = await h.services.answers.submit(i.id, actor, 'x'.repeat(8000));
+    const job = await db.outboundMessage.findUniqueOrThrow({ where: { dedupeKey: `answer:${answer.id}` } });
+    const photos = Array.from({ length: 5 }, (_, n) => ({ type: 'IMAGE', storageKey: photoReference(`synthetic-${n}`), owned: false }));
+    await db.outboundMessage.update({ where: { id: job.id }, data: { attachments: photos } });
+    await db.outboundMessage.updateMany({ where: { id: { not: job.id } }, data: { nextAttemptAt: time('2026-11-01T00:00:00') } });
+    const received: Array<{ text: string; photos: number }> = []; let calls = 0;
+    const first = worker({ sendToUser: async (_id: bigint, text: string, extra: any) => {
+      if (++calls === 2) throw new MaxError(503, { code: 'unavailable', message: 'Synthetic temporary error' });
+      received.push({ text, photos: extra.attachments?.filter((a: any) => a.type === 'image').length ?? 0 });
+      return { body: { mid: 'confirmed-prefix' } };
+    } });
+    await first.flush(); first.stop(); await first.waitForIdle();
+    expect((await fresh(i.id)).slaDeliveredAt).toBeNull(); expect((await fresh(i.id)).answers.at(-1)!.deliveredAt).toBeNull();
+    const partial = await db.outboundMessage.findUniqueOrThrow({ where: { id: job.id } });
+    expect(partial.payload).toMatchObject({ deliveryProgress: { mids: ['confirmed-prefix'] } });
+    await db.outboundMessage.update({ where: { id: job.id }, data: { nextAttemptAt: new Date(0) } });
+    const next = worker({ sendToUser: async (_id: bigint, text: string, extra: any) => {
+      received.push({ text, photos: extra.attachments?.filter((a: any) => a.type === 'image').length ?? 0 });
+      return { body: { mid: `remaining-${received.length}` } };
+    } });
+    await next.flush(); await next.flush();
+    expect(received.filter(r => r.text === received[0]!.text)).toHaveLength(1);
+    expect(received.reduce((sum, r) => sum + r.photos, 0)).toBe(5);
+    expect((await fresh(i.id)).slaDeliveredAt).not.toBeNull();
+    expect((await db.outboundMessage.findUniqueOrThrow({ where: { id: job.id } })).attachments).toEqual(photos);
+    expect(await db.incidentHistory.count({ where: { incidentId: i.id, action: 'ANSWER_SENT' } })).toBe(1);
   });
 
   it('does not send at night or after rejection, and coincident chats produce one job', async () => {

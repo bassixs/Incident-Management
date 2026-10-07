@@ -115,21 +115,15 @@ export class RequesterDeliveryService {
     );
 
     if (result.state === 'sent' && !result.trackingApplied && !this.messages.persistsDelivery) {
-      await this.prisma.incidentAnswer.update({
-        where: { id: answer.id },
-        data: { deliveredAt: new Date() },
-      });
-      if (isWorkingPolicy(incident)) await this.prisma.$transaction(tx => recordPolicyDelivery(tx, incidentId, new Date()));
-      await this.history.record({
-        incidentId,
-        action: HistoryAction.ANSWER_SENT,
-        metadata: {
-          answerId: answer.id,
-          version: answer.version,
-          recipientMaxUserId: userId.toString(),
-          attachments: attachments.length,
-        },
-      });
+      const deliveredAt = new Date();
+      const persist = async (tx?: import('../database/prisma').Tx) => {
+        await (tx ?? this.prisma).incidentAnswer.update({ where: { id: answer.id }, data: { deliveredAt } });
+        if (tx && isWorkingPolicy(incident)) await recordPolicyDelivery(tx, incidentId, deliveredAt);
+        await this.history.record({ incidentId, action: HistoryAction.ANSWER_SENT,
+          metadata: { answerId: answer.id, version: answer.version, recipientMaxUserId: userId.toString(), attachments: attachments.length } }, tx);
+      };
+      if (isWorkingPolicy(incident)) await this.prisma.$transaction(tx => persist(tx));
+      else await persist();
     }
 
     let outcome: DeliveryOutcome = result.state;

@@ -1,6 +1,6 @@
 import type { Incident, IncidentAssignmentCycle, Prisma } from '@prisma/client';
 import type { Tx } from '../database/prisma';
-import { addWorkingHours } from './working-time';
+import { addWorkingHours, workingMilliseconds } from './working-time';
 import { formatMoscowDateTime } from '../utils/datetime';
 
 export const WORKING_POLICY = 'WORKING_HOURS_V1' as const;
@@ -36,7 +36,7 @@ export async function finishAssignment(tx: Tx, incidentId: string, at: Date, out
 export async function recordPolicyDelivery(tx: Tx, incidentId: string, at: Date): Promise<void> {
   const incident = await tx.incident.findUniqueOrThrow({ where: { id: incidentId } });
   if (!isWorkingPolicy(incident)) return;
-  await tx.incident.update({ where: { id: incidentId }, data: { slaDeliveredAt: at, isOverdue: at > incident.deadlineAt } });
+  await tx.incident.update({ where: { id: incidentId }, data: { slaDeliveredAt: at, isOverdue: workingMilliseconds(incident.deadlineAt, at) > 0 } });
   await finishAssignment(tx, incidentId, at, 'DELIVERED');
 }
 
@@ -54,6 +54,7 @@ export function policyCardLines(incident: Incident & { assignmentCycles?: Incide
   const cycle = incident.assignmentCycles?.at(-1);
   return ['', `Общий срок (24 рабочих часа): ${formatMoscowDateTime(incident.deadlineAt)} МСК`,
     policyDeliveryState(incident), ...(cycle ? [
+      ...(cycle.endedAt ? [`Предыдущий завершённый цикл назначения №${cycle.sequence}: ${cycle.outcome}`] : []),
       `Проект (22 рабочих часа от назначения): ${formatMoscowDateTime(cycle.preparationDueAt)} МСК`,
       ...(cycle.firstPreparedAt ? [`Первая передача проекта: ${formatMoscowDateTime(cycle.firstPreparedAt)} МСК`] : []),
       ...(cycle.preparationDueAt > incident.deadlineAt ? ['⚠️ Срок подготовки проекта позже общего срока ответа. Общий срок не продлевается.'] : []),
