@@ -22,7 +22,14 @@ export async function prepareDistributionChoice(services: AppServices, actor: Re
   let incident = await services.prisma.incident.findUniqueOrThrow({ where: { id: incidentId } });
   if (!incident.distributionMessageId) {
     await services.distribution.publishCard(incidentId); await services.messages.flush();
+    // flush joins the drain, but an immediate publication may still own this
+    // recipient. A synthetic employee cannot click a card before its ACK/tracking.
+    await services.messages.waitForIdle();
     incident = await services.prisma.incident.findUniqueOrThrow({ where: { id: incidentId } });
+  }
+  if (!incident.distributionMessageId) {
+    const publications = await services.prisma.outboundMessage.findMany({ where: { incidentId, trackingType: 'DISTRIBUTION_CARD' }, select: { status: true, firstMessageId: true, trackingApplied: true } });
+    throw new Error(`Fixture has no acknowledged distribution card: ${JSON.stringify(publications)}`);
   }
   await handleIncidentCallback({ services, actor, chatId, messageId: incident.distributionMessageId! }, { kind: 'incident', action: 'assign', incidentId });
   const group = await services.prisma.responsibleGroup.findUniqueOrThrow({ where: { id: groupId } });
