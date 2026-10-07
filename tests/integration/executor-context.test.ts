@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vite
 import { actorFor, createHarness, createTestPrisma, describeIntegration, pushSchemaOnce, resetDatabase, seedCategories, GROUP_CODES, type TestHarness } from '../helpers/integration';
 import { TEST_CHATS, TEST_USERS } from '../helpers/setup-env';
 import { handleCallbackUpdate } from '../../src/bot/callbacks';
-import { enterPersonalWork, invitePersonalWork } from '../../src/work-queues/private-workspace';
+import { enterPersonalWork, invitePersonalWork, showPersonalWork } from '../../src/work-queues/private-workspace';
 import { contextKey } from '../../src/bot/callbacks/executor-context';
 import { buildServices } from '../../src/app/container';
 import type { Button } from '../../src/max/max-types';
@@ -61,6 +61,30 @@ describeIntegration.each(['chat', 'private'] as const)('executor context (%s)', 
     db.privateWorkItem.findMany({ orderBy: { id: 'asc' } }), db.actionLock.findMany({ where: { action: 'sector-queue' } }), db.outboundMessage.findMany({ orderBy: { id: 'asc' } }),
   ]), (_k, v) => typeof v === 'bigint' ? v.toString() : v);
   async function version(n: number) { await click(btn('История версий')); if (n <= 2) await click(btn('Старше')); await click(btn(`Версия ${n} ·`)); }
+  it.each(['+79001234567', null])('shows optional contact on the context home and after history return: %s', async phone => {
+    await db.incident.update({ where: { id: incident.id }, data: { requesterPhone: phone } });
+    const before = await snapshot();
+    const check = () => {
+      if (phone) expect(text().split('Телефон для связи: ' + phone)).toHaveLength(2);
+      else expect(text()).not.toContain('Телефон для связи');
+      expect(rows().some(b => /контакт|телефон/i.test(b.text))).toBe(false);
+    };
+    await open(); check();
+    await version(7); await click(btn('Назад')); await click(btn('Назад')); check();
+    expect(await snapshot()).toBe(before);
+  });
+  if (mode === 'private') it.each(['+79001234567', null])('shows optional contact on the personal card and return from history: %s', async phone => {
+    await db.incident.update({ where: { id: incident.id }, data: { requesterPhone: phone } });
+    const before = await snapshot();
+    const check = () => {
+      if (phone) expect(text().split('Телефон для связи: ' + phone)).toHaveLength(2);
+      else expect(text()).not.toContain('Телефон для связи');
+      expect(rows().some(b => /контакт|телефон/i.test(b.text))).toBe(false);
+    };
+    await showPersonalWork(h.services, actor, itemId!); check();
+    await open(); await version(7); await click(btn('К текущей рабочей карточке')); check();
+    expect(await snapshot()).toBe(before);
+  });
   it('shows compact context and seven revision cycles without changing any business data', async () => {
     const before = await snapshot(); await open(); expect(text()).toContain(incident.publicCode); expect(text()).toContain('Замечание версии 7'); expect(text()).toContain('Ответ версии 8');
     await click(btn('История версий')); expect(rows()[0]!.text).toContain('Версия 8'); await click(btn('Старше')); expect(rows()[0]!.text).toContain('Версия 2');
@@ -138,7 +162,7 @@ describeIntegration.each(['chat', 'private'] as const)('executor context (%s)', 
     const before = await snapshot(); await version(5); await click(btn('К текущей рабочей карточке')); expect(await snapshot()).toBe(before);
   });
   it('rejects access after reassignment even from an old valid screen', async () => {
-    await open(); const old = btn('Исходный текст'); const other = await db.responsibleGroup.findFirstOrThrow({ where: { code: GROUP_CODES.it } }); await db.incident.update({ where: { id: incident.id }, data: { assignedGroupId: other.id } }); const n = h.messages.sent.length, edits = h.messages.edits.length; await click(old); expect(notice()).toMatch(/организац|профильн|доступ/); expect(h.messages.sent).toHaveLength(n); expect(h.messages.edits).toHaveLength(edits);
+    await open(); const old = btn('Исходный текст'); const other = await db.responsibleGroup.findFirstOrThrow({ where: { code: GROUP_CODES.it } }); await db.incident.update({ where: { id: incident.id }, data: { assignedGroupId: other.id } }); const n = h.messages.sent.length, edits = h.messages.edits.length; await click(old); expect(notice()).toMatch(/организац|профильн|доступ/); expect(h.messages.sent).toHaveLength(n); expect(h.messages.edits).toHaveLength(edits); await open(); expect(notice()).toMatch(/организац|профильн|доступ/); expect(h.messages.sent).toHaveLength(n); expect(h.messages.edits).toHaveLength(edits);
   });
   it('keeps historical version fixed when a new answer appears while browsing', async () => {
     await open(); await version(7); const remark = btn('Замечание'); await db.incidentAnswer.create({ data: { incidentId: incident.id, version: 9, text: 'Новый ответ', createdByUserId: actor.userId } }); await click(remark); expect(text()).toContain('Замечание версии 7'); await click(btn('К текущей рабочей карточке')); expect(text()).toContain('Новый ответ');
