@@ -139,9 +139,16 @@ describeIntegration('main -> stopped worker -> reserve -> main, same PostgreSQL'
 
   it('finishes all saved ACKs after a failed final transaction without any repeat answer parts', async () => {
     const f = await answerFixture(); const first = worker('main');
-    const broken = vi.spyOn(prisma, '$transaction').mockRejectedValueOnce(new Error('Simulated final transaction failure'));
-    await first.flush(); broken.mockRestore(); await stop(first);
+    // Fail the final SENT write, not the earlier recipient-claim transaction.
+    await prisma.$executeRawUnsafe(`CREATE FUNCTION reserve_test_completion() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.id='${f.job.id}' AND NEW.status='SENT' THEN RAISE EXCEPTION 'Simulated final transaction failure'; END IF; RETURN NEW; END $$`);
+    await prisma.$executeRawUnsafe('CREATE TRIGGER reserve_test_completion BEFORE UPDATE ON "OutboundMessage" FOR EACH ROW EXECUTE FUNCTION reserve_test_completion()');
+    try { await first.flush(); } finally {
+      await stop(first);
+      await prisma.$executeRawUnsafe('DROP TRIGGER reserve_test_completion ON "OutboundMessage"');
+      await prisma.$executeRawUnsafe('DROP FUNCTION reserve_test_completion()');
+    }
     const row = await prisma.outboundMessage.findUniqueOrThrow({ where: { id: f.job.id } }); expect(row.status).toBe('PENDING');
+    expect(row.lastError).toContain('Simulated final transaction failure');
     expect((row.payload as any).deliveryProgress.mids).toHaveLength(2);
     expect((await prisma.incidentAnswer.findUniqueOrThrow({ where: { id: f.answer.id } })).deliveredAt).toBeNull();
     const n = accepted.filter(a => a.target === TEST_USERS.requesterA).length;

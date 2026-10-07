@@ -12,6 +12,7 @@ def run_restore(docker, sql, helper, check, out, pg, volume):
             result[table]=query(f"SELECT count(*)||':'||md5(coalesce(string_agg(doc,E'\\n' ORDER BY doc),'')) FROM (SELECT row_to_json(t)::text doc FROM \"{table}\" t) s",db).stdout.strip()
         result['sequences']=query("SELECT sequencename||':'||last_value FROM pg_sequences WHERE schemaname='public' ORDER BY 1",db).stdout
         result['guards']=query("SELECT c.relname||':'||t.tgenabled::text||':'||pg_get_triggerdef(t.oid) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid WHERE t.tgname='guard_retired_storage' ORDER BY 1",db).stdout
+        result['enum']=query("SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid=e.enumtypid WHERE t.typname='OutboxStatus' ORDER BY enumsortorder",db).stdout
         result['function']=query("SELECT pg_get_functiondef('guard_retired_storage_reference'::regproc)",db).stdout
         return result
     before=fingerprint('reserve_lab')

@@ -101,6 +101,7 @@ def start(version, bad=False, clock=None):
         wait('health/ready did not become ready within 90s', lambda: ready(APP))
         identity = json.loads(docker('inspect', APP).stdout)[0]
         check('correct immutable app image', identity['Image'] == report['images'][version]['id'])
+        check('policy setting retained on '+version, 'INCIDENT_SLA_POLICY=WORKING_HOURS_V1' in identity['Config']['Env'])
         check('shared attachments mount', any(m.get('Name') == VOLUME and m['Destination'] == '/app/data/uploads' and m['RW'] for m in identity['Mounts']))
         check('app rotation retained', identity['HostConfig']['LogConfig'] == {'Type': 'json-file', 'Config': {'max-file': '5', 'max-size': '20m'}})
         check('unprivileged runtime uid', docker('exec', APP, 'id', '-u').stdout.strip() == '1000')

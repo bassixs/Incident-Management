@@ -10,7 +10,7 @@ const p = new PrismaClient();
 const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 async function run() {
   if (input.op.startsWith('policy-')) return require('./policy-state.cjs')(p,input,req);
-  if (input.op.startsWith('switch-') || input.op === 'benchmark') return require('./switch-state.cjs')(p,input,req);
+  if (input.op.startsWith('switch-')) return require('./switch-state.cjs')(p,input,req);
   if (input.op === 'create') {
     const n = input.n, targetId = BigInt(input.target ?? 10000 + n);
     const payload = { text: input.text ?? String(n % 10).repeat(5000), keyboard: [[{ type: 'callback', text: 'Synthetic action', payload: 'noop' }]] };
