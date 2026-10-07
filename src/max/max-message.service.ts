@@ -25,7 +25,8 @@ import { moduleLogger } from '../utils/logger';
 import { MaxClient } from './max-client';
 import { queueDeliveryStatus, reviewDeliveryNotice } from '../delivery/delivery-status';
 import { INCIDENT_INCLUDE } from '../incidents/incident.repository';
-import { distributionCard, distributionResolvedNotice, distributionStatus, sectorCard } from '../bot/views/cards';
+import { distributionCard, distributionResolvedNotice, distributionStatus, sectorCard, finalAnswerToRequester } from '../bot/views/cards';
+import { omitsRequesterSignature } from '../responsible-groups/answer-signature';
 import { distributionKeyboard } from '../bot/keyboards';
 import { queueDistributionRefresh, queueSectorRefresh, queueStaffRefresh } from '../delivery/workflow-outbox';
 import { workPanelKey, workPanelText, workButtons } from '../work-queues/state';
@@ -194,6 +195,40 @@ export class MaxMessageService {
     if (!incident || incident.status !== 'RESOLVED' || !answer || answer.id !== row.answerId || answer.status !== 'APPROVED'
       || row.targetType !== 'user' || row.targetId !== incident.requesterMaxUserId) throw new StaleDeliveryError('STALE_ANSWER_VERSION');
     if (answer.deliveredAt) throw new StaleDeliveryError('ANSWER_ALREADY_DELIVERED');
+  }
+
+  /** Upgrade only an untouched legacy answer, before its first possible MAX send.
+   * Never reinterpret partial/uncertain delivery, including a manual retry whose
+   * attempts were reset: lastError remains evidence of its earlier attempt.
+   */
+  private async prepareRequesterSignature(row: OutboundMessage, payload: StoredPayload): Promise<void> {
+    if (row.trackingType !== 'ANSWER_TO_REQUESTER' || payload.operation || row.attempts !== 1
+      || row.lastError !== null || row.firstMessageId !== null || row.sentAt !== null
+      || payload.deliveryProgress !== undefined || payload.keyboardMessageId !== undefined) return;
+    const incident = await this.durable!.prisma.incident.findUnique({ where: { id: row.incidentId! },
+      include: { assignedGroup: true, answers: { orderBy: { version: 'desc' }, take: 1 } } });
+    if (!omitsRequesterSignature(incident?.assignedGroup?.code)) return;
+    const answer = incident?.answers[0];
+    if (!incident || incident.status !== 'RESOLVED' || answer?.id !== row.answerId || answer.status !== 'APPROVED'
+      || answer.deliveredAt || row.targetType !== 'user' || row.targetId !== incident.requesterMaxUserId) {
+      throw new StaleDeliveryError('STALE_ANSWER_VERSION');
+    }
+    const at = incident.answeredAt ?? answer.approvedAt;
+    if (!at) throw new StaleDeliveryError('REQUESTER_SIGNATURE_REVIEW_REQUIRED');
+    const text = finalAnswerToRequester(incident, answer, at, incident.assignedGroup?.authorityName, incident.assignedGroup?.code);
+    if (payload.text === text) return;
+    // Compare the entire old rendering, never strip matching phrases from user text.
+    const legacy = finalAnswerToRequester(incident, answer, at, incident.assignedGroup?.authorityName);
+    if (payload.text !== legacy) throw new StaleDeliveryError('REQUESTER_SIGNATURE_REVIEW_REQUIRED');
+    const updated = { ...payload, text };
+    const saved = await this.durable!.prisma.outboundMessage.updateMany({
+      where: { id: row.id, status: 'SENDING', attempts: row.attempts, lockedAt: row.lockedAt,
+        payload: { equals: row.payload! }, firstMessageId: null, sentAt: null, lastError: null },
+      data: { payload: updated as unknown as Prisma.InputJsonValue },
+    });
+    if (!saved.count) throw new StaleDeliveryError('DELIVERY_PROGRESS_OWNERSHIP_LOST');
+    row.payload = updated as unknown as Prisma.JsonValue;
+    payload.text = text;
   }
 
   private async sendNow(target: SendTarget, message: CompositeMessage): Promise<MessageSendResult> {
@@ -501,6 +536,7 @@ export class MaxMessageService {
 
     try {
       await this.assertCurrentAnswer(row);
+      await this.prepareRequesterSignature(row, payload);
       if (payload.operation?.type === 'bot-status') {
         const text = botStatusDeliveryText(payload.operation, payload.text, row.targetId, getConfig(), new Date());
         if (text === undefined) {

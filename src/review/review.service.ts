@@ -93,6 +93,7 @@ export class ReviewService {
         answer,
         incident.answeredAt ?? answer.approvedAt ?? new Date(),
         incident.assignedGroup?.authorityName,
+        incident.assignedGroup?.code,
       ),
       manualRetry,
     );
