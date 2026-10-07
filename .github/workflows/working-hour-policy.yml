@@ -62,6 +62,15 @@ jobs:
           tests/integration/reliable-delivery.test.ts tests/integration/delivery-worker-lifecycle.test.ts
           --reporter=default --reporter=json --outputFile=evidence/integration.json
           2>&1 | tee evidence/integration.txt
+      - name: Related routing, reservations and retention
+        if: success() || failure()
+        run: >-
+          npx vitest run tests/integration/distribution-queue.test.ts tests/integration/incident-lifecycle.test.ts
+          tests/integration/private-workspace.test.ts tests/integration/work-queues.test.ts
+          tests/integration/review-and-delivery.test.ts tests/integration/staff-reservations.test.ts
+          tests/integration/retention.test.ts tests/integration/lease-timezone.test.ts
+          --reporter=default --reporter=json --outputFile=evidence/routing.json
+          2>&1 | tee evidence/routing.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
