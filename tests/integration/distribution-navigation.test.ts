@@ -121,6 +121,7 @@ describeIntegration.each(['chat', 'private'] as const)('distribution navigation 
     await click(button(choice)); await unchanged();
     const oldConfirm = button('Подтвердить'), confirmationMid = current;
     await click(button('Вернуться к выбору организации')); expect(page()).toBe('2 / 3');
+    expect(screens.get(current)!.text).toContain(`Выбрана организация: ${choice}`);
     expect(button(choice)).toBeTruthy(); await unchanged();
     await click(oldConfirm, confirmationMid); await unchanged(); expect(notice()).toMatch(/устарел/);
     await click(button(choice)); const confirm = button('Подтвердить'), mid = current;

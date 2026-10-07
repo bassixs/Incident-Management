@@ -4,6 +4,7 @@ import { handleIncidentCallback } from '../../src/bot/callbacks/incident.callbac
 import { navigationKey } from '../../src/bot/callbacks/distribution-navigation';
 import type { IncidentAction } from '../../src/max/callback-payload';
 import { personalAction } from '../../src/work-queues/private-workspace';
+import { vi } from 'vitest';
 
 /** Follow an action actually offered by the saved current screen, not a fabricated
  * legacy assign-group payload. End-to-end keyboard parsing is covered separately. */
@@ -21,15 +22,18 @@ export async function clickDistributionPicker(services: AppServices, actor: Reso
 export async function prepareDistributionChoice(services: AppServices, actor: ResolvedActor, chatId: bigint, incidentId: string, groupId: string) {
   let incident = await services.prisma.incident.findUniqueOrThrow({ where: { id: incidentId } });
   if (!incident.distributionMessageId) {
-    await services.distribution.publishCard(incidentId); await services.messages.flush();
-    // flush joins the drain, but an immediate publication may still own this
-    // recipient. A synthetic employee cannot click a card before its ACK/tracking.
-    await services.messages.waitForIdle();
-    incident = await services.prisma.incident.findUniqueOrThrow({ where: { id: incidentId } });
-  }
-  if (!incident.distributionMessageId) {
-    const publications = await services.prisma.outboundMessage.findMany({ where: { incidentId, trackingType: 'DISTRIBUTION_CARD' }, select: { status: true, firstMessageId: true, trackingApplied: true } });
-    throw new Error(`Fixture has no acknowledged distribution card: ${JSON.stringify(publications)}`);
+    await services.distribution.publishCard(incidentId);
+    // Concurrent producers can enqueue while a previously started drain is
+    // finishing. Wait on the actual ACK/tracking predicate, not elapsed sleep or
+    // one global drain promise. flush keeps normal FIFO, dedupe and backoff.
+    await vi.waitFor(async () => {
+      await services.messages.flush();
+      incident = await services.prisma.incident.findUniqueOrThrow({ where: { id: incidentId } });
+      if (!incident.distributionMessageId) {
+        const head = await services.prisma.outboundMessage.findFirst({ where: { targetType: 'chat', targetId: chatId, status: { in: ['PENDING', 'SENDING'] } }, orderBy: { sequence: 'asc' }, select: { id: true, status: true, attempts: true, nextAttemptAt: true, lastError: true } });
+        throw new Error(`Fixture is waiting for acknowledged distribution card; head=${JSON.stringify(head)}`);
+      }
+    }, { timeout: 10_000, interval: 20 });
   }
   await handleIncidentCallback({ services, actor, chatId, messageId: incident.distributionMessageId! }, { kind: 'incident', action: 'assign', incidentId });
   const group = await services.prisma.responsibleGroup.findUniqueOrThrow({ where: { id: groupId } });

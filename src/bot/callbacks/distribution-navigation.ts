@@ -13,6 +13,7 @@ type Screen = {
   incidentId: string; token: string; lease: string; topicId: string | null;
   privateExecution: boolean; mid?: string; actions: Route[]; route: Route;
   returnRoute?: Route;
+  selectedGroupId?: string;
 };
 export const isDistributionNavigation = (action: string) =>
   ['distribution-nav', 'topic', 'topic-page', 'topic-set', 'assign', 'assign-branch', 'assign-page', 'assign-group'].includes(action);
@@ -77,6 +78,7 @@ export async function handleDistributionNavigation(context: IncidentCallbackCont
       const held = await services.prisma.actionLock.findUnique({ where: { key: lock } });
       if (held?.action !== owner || held.lockedUntil <= new Date()) throw stale();
     };
+    let selectedGroupId: string | undefined;
     if (route.action === 'assignment-back') {
       if (!previous?.returnRoute) throw stale();
       await withConfirmationLock(services, actor.maxUserId, chatId, async () => {
@@ -85,8 +87,17 @@ export async function handleDistributionNavigation(context: IncidentCallbackCont
         if (!session || session.incidentId !== incident.id || pending?.action !== 'assign-group' || pending.token !== route.argument) throw stale();
         await services.prisma.operatorSession.deleteMany({ where: { id: session.id } });
       });
+      selectedGroupId = previous.route.argument;
       route = previous.returnRoute;
     }
+    const branchOf = (p?: Route) => p?.action === 'assign-branch' ? p.argument : p?.action === 'assign-page' ? p.argument?.split('~')[0] : undefined;
+    const branch = branchOf(route);
+    if (branch && branch === branchOf(previous?.route)) selectedGroupId ??= previous?.selectedGroupId;
+    const selected = selectedGroupId ? await services.prisma.responsibleGroup.findUnique({ where: { id: selectedGroupId } }) : null;
+    const compatible = selected?.isActive && selected.maxChatId !== null && selected.kind ===
+      (branch === 'local' ? 'LOCAL_GOVERNMENT' : branch === 'regional' ? 'REGIONAL' : branch === 'executive' ? 'EXECUTIVE_AUTHORITY' : undefined);
+    if (!compatible) selectedGroupId = undefined;
+    const screenText = (text: string) => compatible ? `${text}\n\nВыбрана организация: ${selected!.name}. Для подтверждения нажмите её кнопку; можно выбрать другую.` : text;
     const returnRoute = route.action === 'assign-group' ? previous?.route : previous?.returnRoute;
     const original = services.messages;
     async function prepare(rows: Button[][]): Promise<{ rows: Button[][]; screen: Screen }> {
@@ -104,7 +115,7 @@ export async function handleDistributionNavigation(context: IncidentCallbackCont
         const index = actions.push({ kind: 'incident', action: 'assignment-back', incidentId: incident.id, argument: confirmation.argument }) - 1;
         wrapped.push([{ type: 'callback', text: 'Вернуться к выбору организации', payload: incidentCallback('distribution-nav', incident.id, `${token}~${index}`) }]);
       }
-      return { rows: wrapped, screen: { incidentId: incident.id, token, ...expected, privateExecution: !!context.privateExecution, actions, route, returnRoute } };
+      return { rows: wrapped, screen: { incidentId: incident.id, token, ...expected, privateExecution: !!context.privateExecution, actions, route, returnRoute, selectedGroupId } };
     }
     async function save(screen: Screen, mid: string | undefined) {
       if (!mid) throw stale();
@@ -118,14 +129,14 @@ export async function handleDistributionNavigation(context: IncidentCallbackCont
         const [destination, message] = args;
         if (!message.keyboard?.length) return original.send(...args);
         const next = await prepare(message.keyboard);
-        const sent = await original.send(destination, { ...message, immediatePreview: true, beforeImmediateSend: guard, keyboard: next.rows });
+        const sent = await original.send(destination, { ...message, text: screenText(message.text), immediatePreview: true, beforeImmediateSend: guard, keyboard: next.rows });
         if (sent.state !== 'sent') throw stale();
         await save(next.screen, sent.keyboardMessageId ?? sent.firstMessageId);
         return sent;
       };
       if (property === 'editCardKeyboard') return async (mid: string, text: string, rows: Button[][]) => {
         const next = await prepare(rows);
-        const edited = await original.editCardKeyboard(mid, text, next.rows);
+        const edited = await original.editCardKeyboard(mid, screenText(text), next.rows);
         if (!edited) throw new ConflictError('Не удалось обновить экран. Заново откройте распределение в карточке сообщения.');
         await save(next.screen, mid); return edited;
       };
