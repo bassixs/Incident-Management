@@ -9,6 +9,8 @@ import ops_common as o
 class ExporterChecks(lab.MigrationKit):
  def test_complete_backup_and_exporter_failures(self):
   seed_volume(self.db)
+  (OUT/'component-versions.json').write_text(json.dumps({'postgres':sql(self.db,'SELECT version();').strip(),'imageNodePrisma':json.loads(run('docker','run','--rm','--network','none','--entrypoint','node',self.images['main'],'-e',"console.log(JSON.stringify({node:process.version,prisma:require('@prisma/client/package.json').version}))").stdout)},indent=2))
+  faults=self.rootcase/'faults';faults.mkdir(mode=0o755)
   # Represent external photographs locally with synthetic bytes only.
   for i in range(207):(self.uploads/f'photo-{i}.bin').write_bytes(b'synthetic-photo-'+str(i).encode())
   sql(self.db,"""INSERT INTO "SystemSetting"(key,value,"updatedAt") VALUES
@@ -26,9 +28,10 @@ class ExporterChecks(lab.MigrationKit):
   results=[]
   for name,(js,expected,exitcode) in cases.items():
    with self.subTest(case=name):
-    fixture=self.rootcase/(name+'.cjs');fixture.write_text(js)
+    fixture=faults/(name+'.cjs');fixture.write_text(js);os.chmod(fixture,0o644)
     dest=self.rootcase/('failed-'+name);started=time.monotonic()
     p=run(sys.executable,SCRIPTS/'locked-session.py','--settings',self.settings,'--',sys.executable,Path(__file__).with_name('exporter_fault_driver.py'),self.settings,dest,fixture,check=False)
+    (OUT/('fault-'+name+'.log')).write_text(p.stdout+p.stderr)
     self.assertEqual(p.returncode,2,p.stdout+p.stderr);self.assertIn(expected,p.stdout+p.stderr)
     self.assertNotIn('SYNTHETIC_SECRET',p.stdout+p.stderr);self.assertNotIn('resident-text',p.stdout+p.stderr)
     diagnostic=json.loads((dest/'exporter-result.json').read_text())
@@ -45,6 +48,7 @@ class ExporterChecks(lab.MigrationKit):
     result={'case':name,'elapsedSeconds':time.monotonic()-started,'diagnostic':diagnostic,'lockReleased':True,'appUnchanged':True,'backupAccepted':False,'temporaryContainersRemaining':0}
     results.append(result);(OUT/('exporter-fault-'+name+'.json')).write_text(json.dumps(result,indent=2))
     print(json.dumps(result),flush=True)
+  self.assertEqual(len(results),len(cases),'Every injected fault must reach its intended assertion')
   # A failed attempt is retained. A new directory is mandatory for success.
   dest=self.rootcase/'fresh-success';started=time.monotonic()
   with o.backup_lock(self.s) as fd:

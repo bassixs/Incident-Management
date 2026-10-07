@@ -33,11 +33,13 @@ class Exporter:
         self.tail=collections.deque(maxlen=64);self.stderr_bytes=0;self.stderr_lines=0
         self.readers=[];self.finished=False;self.state=None;self.cleanup='not-started'
         self.error=None;self.started=o.stamp()
+        self.create_attempted=False
     def __enter__(self):
         try:
             o.need(self.command[:2]==['docker','run'],'EXPORTER_COMMAND_INVALID')
             args=[x for x in self.command[2:] if x!='--rm']
             # Establish a durable, inspectable container identity before attaching.
+            self.create_attempted=True
             created=o.command(['docker','create','--name',self.name,'--label',LABEL+'='+self.name,'--log-driver','none',*args],timeout=30)
             self.cid=created.stdout.strip()
             o.need(bool(re.fullmatch('[0-9a-f]{64}',self.cid)),'EXPORTER_ID_INVALID')
@@ -97,6 +99,9 @@ class Exporter:
             if not self.cid:
                 names=o.output(['docker','ps','-a','--format','{{.Names}}']).splitlines()
                 if self.name in names:self._inspect()
+                # A create timeout can have a late daemon result. One absent
+                # inventory entry does not prove that it can never appear.
+                elif self.create_attempted:raise o.Refusal('EXPORTER_CREATE_RESULT_UNKNOWN')
             if self.cid:
                 row=self._inspect()
                 if row['State']['Running']:

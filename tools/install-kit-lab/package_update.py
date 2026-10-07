@@ -18,7 +18,7 @@ for role in ['main','reserve']:
  rev=json.loads((kit/'IMAGES.json').read_text())[role]['revision']
  subprocess.run(['git','archive','--format=tar.gz','-o',str(kit/'sources'/(role+'.tar.gz')),rev],cwd=ROOT,check=True)
 (kit/'review').mkdir()
-for name in ['operational-result.json','backup-restore-result.json']:
+for name in ['operational-result.json','backup-restore-result.json','component-versions.json']:
  shutil.copyfile(ROOT/'kit-results'/name,kit/'review'/name)
 for name in ['unit.log','operational.log','environment.txt']:shutil.copyfile(ROOT/name,kit/'review'/name)
 shutil.copytree(ROOT/'tools/install-kit-lab/baseline-evidence',kit/'review/baseline-evidence')

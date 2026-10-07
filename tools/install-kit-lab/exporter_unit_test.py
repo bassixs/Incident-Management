@@ -1,5 +1,6 @@
 """Protocol/diagnostic checks only; real Docker/flock lives in exporter_test.py."""
 import json,sys,tempfile,unittest
+from unittest.mock import patch
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'migration-kit/scripts'))
 import ops_common as o
@@ -29,5 +30,19 @@ class Protocol(unittest.TestCase):
   clean=clean_stderr(raw)
   self.assertEqual(clean,{'markers':['SEGMENTATION_FAULT','PRISMA_ENGINE'],'prismaCodes':['P1001'],'nodeVersions':['v22.23.3'],'rawTextOmitted':True})
   self.assertNotIn('SYNTHETIC_SECRET',json.dumps(clean));self.assertNotIn('resident',json.dumps(clean))
+ def test_unknown_create_is_not_confirmed_cleanup(self):
+  with tempfile.TemporaryDirectory() as dest:
+   e=Exporter(['docker','run'],dest);e.create_attempted=True
+   with patch.object(o,'output',return_value=''),self.assertRaisesRegex(o.Refusal,'EXPORTER_CLEANUP_UNCONFIRMED'):
+    e.__exit__(o.Refusal,o.Refusal('COMMAND_UNAVAILABLE_OR_TIMEOUT'),None)
+   result=json.loads(Path(dest,'exporter-result.json').read_text())
+   self.assertEqual(result['cleanup'],'unknown');self.assertFalse(result['success'])
+ def test_foreign_identity_is_not_removed(self):
+  with tempfile.TemporaryDirectory() as dest:
+   e=Exporter(['docker','run'],dest);e.cid='a'*64
+   with patch.object(o,'inspect',return_value={'Name':'foreign','Config':{'Labels':{}},'Id':e.cid}),patch.object(o,'command') as command,self.assertRaisesRegex(o.Refusal,'EXPORTER_CLEANUP_UNCONFIRMED'):
+    e.__exit__(o.Refusal,o.Refusal('SYNTHETIC_ERROR'),None)
+   command.assert_not_called()
+   self.assertEqual(json.loads(Path(dest,'exporter-result.json').read_text())['cleanup'],'unknown')
 
 if __name__=='__main__':unittest.main(verbosity=2)
