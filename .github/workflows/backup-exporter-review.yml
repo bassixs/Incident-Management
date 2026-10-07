@@ -1,0 +1,64 @@
+name: Backup exporter isolated review
+on:
+  push:
+    branches: [codex/backup-exporter-review-20261008]
+    paths:
+      - .github/workflows/backup-exporter-review.yml
+      - tools/migration-kit/**
+      - tools/install-kit-lab/**
+permissions:
+  contents: read
+  actions: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  operations:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Focused offline checks, including optimized Python
+        run: |
+          for opt in '' '-O'; do
+            python3 $opt tools/install-kit-lab/historical_checksums_test.py
+            python3 $opt tools/install-kit-lab/metadata_test.py
+            python3 $opt tools/install-kit-lab/kit_unit_test.py
+          done 2>&1 | tee unit.log
+      - name: Load exact previously reviewed images, no builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test -z "$(docker ps -aq)"
+          gh api repos/bassixs/Incident-Management/actions/artifacts/11447884920/zip > original-kit.zip
+          echo '94a93869d2ee19830168da4c275b8ce98fcfc802be30dc7bc8572d0a0c46ebf9  original-kit.zip' | sha256sum -c -
+          mkdir original-kit
+          unzip -q original-kit.zip -d original-kit
+          (cd original-kit && sha256sum -c SHA256SUMS)
+          docker load -i original-kit/main-and-compatible-reserve.tar.gz
+          docker tag sha256:c8d257430cf3432f4f862863e223e32f07da4bba4a8571a220b53cec5240a65e incident-kit:old
+          gh api repos/bassixs/Incident-Management/actions/artifacts/11510892680/zip > verified-images.zip
+          echo '1f7c00408d24f7d1b928e5580f25b07b4e169acc6847948a75265ed7c576641b  verified-images.zip' | sha256sum -c -
+          mkdir verified-images
+          unzip -q verified-images.zip -d verified-images
+          (cd verified-images && sha256sum -c main-and-reserve.tar.gz.sha256)
+          echo '0bfa90370526dc2f4110b5d6408d68e6fae58fca440eecf6a90511e147b32a83  verified-images/main-and-reserve.tar.gz' | sha256sum -c -
+          docker load -i verified-images/main-and-reserve.tar.gz
+          python3 tools/install-kit-lab/check_loaded_images.py
+          docker pull postgres:16-alpine
+          { docker version; docker compose version; python3 --version; uname -a; } > environment.txt
+      - name: Exact baseline exporter, realistic synthetic volume
+        run: python3 -u tools/install-kit-lab/exporter_baseline_test.py 2>&1 | tee operational.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: backup-exporter-evidence-${{ github.sha }}
+          path: |
+            kit-results/
+            unit.log
+            operational.log
+            environment.txt
+          retention-days: 30
