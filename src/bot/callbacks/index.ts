@@ -1,3 +1,4 @@
+import { isExecutorContext } from './executor-context';
 import { DraftActionError, draftRefusal, DRAFT_BUSY } from '../draft-screen';
 import { isResidentDraft } from '../../sessions/operator-session.service';
 import { reportActionError } from '../../utils/errors';
@@ -184,7 +185,7 @@ function actionLease(
   if (payload.kind === 'incident') {
     // Navigation has a shared in-flight lock plus persisted screen tokens. A
     // successful page visit must not debounce revisiting that page for 120s.
-    if (isDistributionNavigation(payload.action)) return undefined;
+    if (isDistributionNavigation(payload.action) || isExecutorContext(payload.action)) return undefined;
     const globallyExclusive = ['assign-category', 'assign-group', 'take', 'approve'].includes(payload.action);
     return {
       key: [

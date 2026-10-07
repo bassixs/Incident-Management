@@ -1,3 +1,4 @@
+import { executorContextKeyboard } from '../keyboards';
 import { randomUUID } from 'node:crypto';
 import { Prisma, SessionType, type OperatorSession } from '@prisma/client';
 import type { AppServices } from '../../app/container';
@@ -34,6 +35,7 @@ export async function showStaffConfirmation(services: AppServices, session: Oper
   const keyboard: Button[][] = [[{ type: 'callback', text: 'Подтвердить', payload: incidentCallback('action-confirm', incident.id, pending.token) }]];
   if (pending.action === 'input') keyboard[0]!.push({ type: 'callback', text: 'Исправить', payload: incidentCallback('action-edit', incident.id, pending.token) });
   keyboard.push([{ type: 'callback', text: 'Отмена', payload: incidentCallback('action-cancel', incident.id, pending.token) }]);
+  if (session.type === 'WAITING_FOR_ANSWER') keyboard.push(...executorContextKeyboard(incident.id));
   await services.messages.send({ chatId: session.chatId }, { text: `ПРОВЕРЬТЕ ДЕЙСТВИЕ\n${incident.publicCode}\n👤 ${pending.employee}\n\n${pending.title}\n\n${pending.text}\n\nБот ждёт подтверждения. До него действие не выполняется.`, keyboard });
 }
 

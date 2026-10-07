@@ -1,3 +1,4 @@
+import { revisionCard as executorRevisionCard } from '../bot/views/cards';
 import { recordPolicyDelivery, WORKING_POLICY } from '../sla/policy';
 import { nextWorkingInstant, policyWorkingHours } from '../sla/working-time';
 import { workingDeadlineNotification, workingDeadlineTargets } from '../sla/working-notification';
@@ -952,7 +953,7 @@ export class MaxMessageService {
         if (active) buttons = reviewKeyboard(incidentId, answer.id);
       } else if (row.dedupeKey?.startsWith('revision:')) {
         const active = incident.status === 'REVISION_REQUIRED' && row.dedupeKey === `revision:${incidentId}:${latest?.version}`;
-        text = `${active ? leaseText(sectorLease) + '\n\n' : ''}↩️ ${incident.publicCode}: ${active ? 'на доработке' : 'доработка по этой карточке завершена'}.\n\n${incident.revisionReason ?? ''}`;
+        text = active ? `${leaseText(sectorLease)}\n\n${executorRevisionCard(incident, latest!.version, incident.revisionReason ?? '')}` : `↩️ ${incident.publicCode}: доработка по этой карточке завершена.`;
         if (active) buttons = revisionKeyboard(incidentId, !!incident.requesterPhone);
       } else {
         text = sectorCard(incident, incident.assignedGroup!, sectorLease);

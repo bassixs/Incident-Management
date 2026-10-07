@@ -190,7 +190,7 @@ export class SectorService {
     await this.messages.send(
       { chatId },
       {
-        text: revisionCard(incident, answerVersion, reason),
+        text: revisionCard((await this.repository.findById(incident.id)) ?? incident, answerVersion, reason),
         label: codeLabel(incident),
         keyboard: revisionKeyboard(incident.id, !!incident.requesterPhone),
         delivery: { dedupeKey: `revision:${incident.id}:${answerVersion}` },

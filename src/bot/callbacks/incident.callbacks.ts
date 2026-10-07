@@ -1,3 +1,4 @@
+import { isExecutorContext, showExecutorContext } from './executor-context';
 import { SECTOR_LEASE_ACTION } from '../../work-queues/leases';
 import { IncidentStatus, ResponsibleGroupKind, SessionType } from '@prisma/client';
 
@@ -46,6 +47,12 @@ export async function handleIncidentCallback(
   payload: Extract<CallbackPayload, { kind: 'incident' }>,
 ): Promise<string | undefined> {
   const { services, actor, chatId } = context;
+  if (isExecutorContext(payload.action)) {
+    if (chatId === undefined) throw new ForbiddenError('Откройте профильный рабочий чат.');
+    await showExecutorContext({ services, actor, chatId, incidentId: payload.incidentId, messageId: context.messageId }, payload.action === 'context-page' ? payload.argument ?? '' : undefined);
+    return;
+  }
+
 
   if (!context.navigationAuthorized && !context.confirmed && isDistributionNavigation(payload.action)) {
     return handleDistributionNavigation(context, payload);

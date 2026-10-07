@@ -1,3 +1,5 @@
+import { isExecutorContext, showExecutorContext } from '../bot/callbacks/executor-context';
+import { executorSummary, excerpt } from '../bot/views/executor-context';
 import { isDistributionNavigation, navigationKey } from '../bot/callbacks/distribution-navigation';
 import { observeMembership } from '../utils/latency';
 import { randomUUID } from 'node:crypto';
@@ -20,7 +22,7 @@ import type { ResolvedActor } from '../bot/handlers/helpers';
 import { handleIncidentCallback } from '../bot/callbacks/incident.callbacks';
 import { handleOperatorMessage } from '../bot/handlers/operator.handler';
 import { withConfirmationLock } from '../bot/callbacks/staff-confirmation';
-import { distributionKeyboard, sectorKeyboard, reviewKeyboard } from '../bot/keyboards';
+import { distributionKeyboard, sectorKeyboard, reviewKeyboard, executorContextKeyboard } from '../bot/keyboards';
 import { incidentLookupCard, reviewCard } from '../bot/views/cards';
 import { leaseText, SECTOR_LEASE_ACTION } from './leases';
 import { queueMessage } from '../delivery/workflow-outbox';
@@ -209,8 +211,9 @@ function stage(data: WorkData): string {
   return 'Бот пока не ждёт текст. Выберите действие кнопкой.';
 }
 
-export async function showPersonalWork(services: AppServices, actor: ResolvedActor, id: string, details = false) {
+export async function showPersonalWork(services: AppServices, actor: ResolvedActor, id: string, details = false, readOnly = false) {
   const s = await scope(services, actor, id); const data = dataOf(s.item); const owned = await lease(services, s);
+  const sessionForView = () => readOnly ? services.prisma.operatorSession.findFirst({ where: { maxUserId: actor.maxUserId, chatId: s.item.originChatId, incidentId: s.item.incidentId, expiresAt: { gt: new Date() } } }) : services.sessions.find(actor.maxUserId, s.item.originChatId);
   if (!s.active) {
     await services.messages.send({ userId: actor.maxUserId }, { text: `${s.incident.publicCode}: работа на этом этапе завершена. Бот не ждёт от вас сообщения.`, keyboard: navigation() }); return;
   }
@@ -218,35 +221,40 @@ export async function showPersonalWork(services: AppServices, actor: ResolvedAct
   let rows: Button[][] = [];
   let text = `💼 ${s.incident.publicCode}\n${s.kind === 'distribution' ? 'Распределение' : s.kind === 'review' ? 'Согласование' : 'Подготовка ответа'}\n${leaseText(owned)}\n\n${active ? stage(data) : 'Закрепление завершено или сообщение занято коллегой. Сохранённый черновик не отправлен. Для продолжения заново возьмите сообщение.'}`;
   if (data.draft) {
-    text += `\n\nПодготовленный текст:\n${data.draft.text}\nВложений: ${data.draft.attachments?.length ?? 0}`;
+    text += `\n\nПодготовленный текст:\n${s.kind === 'sector' ? excerpt(data.draft.text) : data.draft.text}\nВложений: ${data.draft.attachments?.length ?? 0}`;
     if (active && data.draft.nonce) rows.push([button('Верно — отправить', 'confirm', id, data.draft.nonce), button('Исправить', 'back', id)]);
   } else if (data.pending) {
     text += `\n\n${data.pending.title}`;
     if (active) rows.push([button('Подтвердить', 'confirm', id, data.pending.nonce), button('Назад', 'back', id)]);
   } else if (active && data.session?.data.confirmation) {
     const { showStaffConfirmation } = await import('../bot/callbacks/staff-confirmation');
-    const live = await services.sessions.find(actor.maxUserId, s.item.originChatId);
+    const live = await sessionForView();
     if (live) { await showStaffConfirmation(personalServices(services, s.item, s.incident.publicCode), live); return; }
   } else if (active && data.session?.data.reviewEdit) {
     const { resumeReviewEdit } = await import('../bot/callbacks/review-edit-flow');
-    const live = await services.sessions.find(actor.maxUserId, s.item.originChatId);
+    const live = await sessionForView();
     if (live) { await resumeReviewEdit(personalServices(services, s.item, s.incident.publicCode), live); return; }
   } else if (active && data.session?.type === 'WAITING_REJECTION_REASON') {
     // Reuse the version-bound rejection buttons through the private UI adapter.
     const { resumeRejection } = await import('../bot/callbacks/rejection-flow');
-    const live = await services.sessions.find(actor.maxUserId, s.item.originChatId);
+    const live = await sessionForView();
     if (live) { await resumeRejection(personalServices(services, s.item, s.incident.publicCode), live); return; }
   } else if (active && !data.session) {
     rows = wrapButtons(s.kind === 'distribution' ? distributionKeyboard(s.incident.id, !!s.incident.requesterPhone) : s.kind === 'review'
       ? reviewKeyboard(s.incident.id, s.incident.answers.at(-1)!.id)
       : sectorKeyboard(s.incident.id, { hasPhone: !!s.incident.requesterPhone, status: s.incident.status, hasTemplate: !!s.incident.assignedGroup?.answerTemplate }), s.item);
   }
-  if (details) text += `\n\n${s.kind === 'review' ? reviewCard(s.incident, s.incident.answers.at(-1)!, s.incident.assignedGroup, owned) : incidentLookupCard(s.incident, owned, s.kind === 'distribution', s.kind !== 'sector')}`;
+  if (s.kind === 'sector') {
+    text += `\n\n${executorSummary(s.incident).join('\n')}`;
+    if (s.incident.requesterPhone) text += `\nТелефон для связи: ${s.incident.requesterPhone}`;
+    if (!rows.flat().some(b => b.type === 'callback' && b.payload.endsWith(`incident:context:${s.incident.id}`))) rows.push(...wrapButtons(executorContextKeyboard(s.incident.id), s.item));
+  }
+  else if (details) text += `\n\n${s.kind === 'review' ? reviewCard(s.incident, s.incident.answers.at(-1)!, s.incident.assignedGroup, owned) : incidentLookupCard(s.incident, owned, s.kind === 'distribution', true)}`;
   else text += `\n\nСообщение:\n${s.incident.text}${s.incident.requesterPhone ? `\nТелефон для связи: ${s.incident.requesterPhone}` : ''}`;
-  rows.push([button('Показать сообщение', 'details', id), button('Обновить состояние', 'show', id)]);
+  rows.push(s.kind === 'sector' ? [button('Обновить состояние', 'show', id)] : [button('Показать сообщение', 'details', id), button('Обновить состояние', 'show', id)]);
   rows.push(active ? [button('Освободить', 'release', id), button('Отменить действие', 'cancel', id)] : [button('Взять и продолжить', 'resume', id), button('Отменить старое действие', 'cancel', id)]);
   await services.messages.send({ userId: actor.maxUserId }, { text, keyboard: [...rows, ...navigation()],
-    ...(details ? { attachments: await loadOutboundAttachments(services.media, s.kind === 'review' ? s.incident.answers.at(-1)!.attachments : s.incident.attachments) } : {}) });
+    ...(details && s.kind !== 'sector' ? { attachments: await loadOutboundAttachments(services.media, s.kind === 'review' ? s.incident.answers.at(-1)!.attachments : s.incident.attachments) } : {}) });
 }
 
 export async function personalHome(services: AppServices, actor: ResolvedActor, page = 0) {
@@ -306,6 +314,20 @@ async function run(services: AppServices, s: Scope, raw: string, messageId?: str
 
 export async function personalAction(services: AppServices, actor: ResolvedActor, id: string, action: string, argument?: string, messageId?: string) {
   const s = await scope(services, actor, id);
+  const read = action === 'run' ? parseCallbackPayload(argument) : null;
+  if (read?.kind === 'incident' && isExecutorContext(read.action)) {
+    if (read.incidentId !== s.item.incidentId || s.kind !== 'sector') throw new ForbiddenError('Откройте контекст в профильной рабочей карточке.');
+    await showExecutorContext({ services, actor, chatId: s.item.originChatId, incidentId: s.item.incidentId, messageId,
+      privateItemId: id, checkPrivate: async () => { await scope(services, actor, id); },
+      backPrivate: guard => {
+        const messages = new Proxy(services.messages, { get(target, property) {
+          if (property === 'send') return (destination: Parameters<typeof target.send>[0], message: CompositeMessage) => target.send(destination, { ...message, immediatePreview: true, beforeImmediateSend: guard });
+          const value = Reflect.get(target, property); return typeof value === 'function' ? value.bind(target) : value;
+        } });
+        return showPersonalWork({ ...services, messages }, actor, id, false, true);
+      } }, read.action === 'context-page' ? read.argument ?? '' : undefined);
+    return;
+  }
   if (action === 'open') { await enterPersonalWork(services, actor, id); return; }
   if (!s.item.selected) throw new ConflictError('Сейчас выбрано другое сообщение. Откройте нужное через «Моя работа».');
   if (action === 'show' || action === 'details') { await showPersonalWork(services, actor, id, action === 'details'); return; }
