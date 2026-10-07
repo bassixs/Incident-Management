@@ -61,4 +61,54 @@ jobs:
           name: navigation-${{ github.sha }}
           path: evidence/
           retention-days: 30
-
+  load-baseline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: synthetic
+          POSTGRES_PASSWORD: synthetic-only
+          POSTGRES_DB: incident_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U synthetic -d incident_test"
+          --health-interval 5s --health-timeout 3s --health-retries 15
+    env:
+      TEST_DATABASE_URL: postgresql://synthetic:synthetic-only@127.0.0.1:5432/incident_test
+      DATABASE_URL: postgresql://synthetic:synthetic-only@127.0.0.1:5432/incident_test
+      BOT_TOKEN: synthetic-only
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Keep main runtime unchanged; adapt only the synthetic click driver
+        run: |
+          cp tests/integration/concurrent-staff-load.test.ts /tmp/load.test.ts
+          git checkout --detach 70cac4c7bc31831f96719b17d31b9126d3d9ed65
+          cp /tmp/load.test.ts tests/integration/concurrent-staff-load.test.ts
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('tests/integration/concurrent-staff-load.test.ts')
+          s=p.read_text().replace("import { prepareDistributionChoice } from '../helpers/distribution-picker';\n", '')
+          s=s.replace('await prepareDistributionChoice(services, dispatcher, TEST_CHATS.distribution, id, destination.id);', "await click(dispatcher, TEST_CHATS.distribution, id, 'assign-group', destination.id);")
+          p.write_text(s)
+          PY
+          mkdir -p evidence
+          git rev-parse HEAD > evidence/runtime-sha.txt
+          git diff --exit-code -- src prisma
+          git diff -- tests > evidence/fixture-only.diff
+      - run: npm ci && npx prisma generate && npx prisma migrate deploy
+      - name: Same load with corrected fixture on unchanged main
+        run: npx vitest run tests/integration/concurrent-staff-load.test.ts --reporter=default --reporter=json --outputFile=evidence/load.json 2>&1 | tee evidence/load.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: load-main-corrected-fixture
+          path: evidence/
+          retention-days: 30

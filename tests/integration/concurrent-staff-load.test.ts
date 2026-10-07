@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { UserRole, type PrismaClient } from '@prisma/client';
-import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { buildServices } from '../../src/app/container';
 import { handleIncidentCallback } from '../../src/bot/callbacks/incident.callbacks';
 import { pendingConfirmation } from '../../src/bot/callbacks/staff-confirmation';
@@ -123,6 +123,15 @@ describeIntegration('concurrent employee load with arriving incidents', () => {
             await prepareDistributionChoice(services, dispatcher, TEST_CHATS.distribution, id, destination.id);
           }
           await confirm(dispatcher, TEST_CHATS.distribution, id, branch === 2);
+          // An employee can act on the chat card only after its publication ACK.
+          // Returning before this point fabricates a click on an unseen card and
+          // correctly retires the obsolete queued publication during redistribution.
+          await vi.waitFor(async () => {
+            await messages.flush();
+            const published = await services.repository.findById(id);
+            expect(published!.sectorMessageId).toBeTruthy();
+            expect(sent.get(published!.sectorMessageId!)?.target).toBe(destination.maxChatId);
+          }, { timeout: 10_000, interval: 20 });
           if (branch === 3 && !redistributed.has(id)) {
             await services.sector.takeInWork(id, executor);
             redistributed.add(id);
