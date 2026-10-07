@@ -9,6 +9,7 @@ from pathlib import Path
 import ops_common as o
 import migration_guard as g
 from data_check import compare
+from snapshot_exporter import Exporter
 
 ROOT=Path(__file__).resolve().parent
 def filehash(p):
@@ -42,28 +43,17 @@ def capture(s,kind,dest,runname=None):
     dest.mkdir(mode=0o700);uploads=Path(b['uploads']);before=files(uploads)
     env=Path(s['install'])/'private/runtime.env'
     cmd=node(s,env,s['migration']['network'],'data-snapshot.cjs','--export')
-    # Timeout the whole export process as well as pg_dump; no detached exporter.
-    exporter=subprocess.Popen(cmd,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
-    import threading,queue
-    lines=queue.Queue()
-    def read():
-        for line in exporter.stdout:lines.put(line)
-        lines.put(None)
-    thread=threading.Thread(target=read,daemon=True);thread.start()
-    try:
-        first=json.loads(lines.get(timeout=30));snap=first['snapshot']
-        o.need(bool(re.fullmatch('[0-9A-F-]+',snap)),'INVALID_EXPORTED_SNAPSHOT')
-        fingerprints=json.loads(lines.get(timeout=90))
+    # Preserve reviewed resource/time budgets. Never interpret EOF as JSON.
+    with Exporter(cmd,dest) as exporter:
+        first=exporter.read_json('snapshot',30);snap=first.get('snapshot')
+        o.need(isinstance(snap,str) and bool(re.fullmatch('[0-9A-F-]+',snap)),'INVALID_EXPORTED_SNAPSHOT')
+        fingerprints=exporter.read_json('data',90)
+        o.need(fingerprints.get('format')=='pr14-18-data-v1' and isinstance(fingerprints.get('tables'),dict),'INVALID_DATA_SNAPSHOT')
         with (dest/'database.dump').open('xb') as f:
             os.chmod(f.name,0o600)
             p=subprocess.run(['docker','exec',b['postgres'],'pg_dump','-U',b['user'],'-d',b['database'],'-Fc','--snapshot='+snap],stdout=f,stderr=subprocess.PIPE,timeout=120)
             o.need(p.returncode==0,'PG_DUMP_FAILED')
-        exporter.stdin.write('release\n');exporter.stdin.flush();exporter.stdin.close()
-        o.need(exporter.wait(timeout=15)==0,'SNAPSHOT_EXPORT_FAILED')
-    finally:
-        if exporter.stdin and not exporter.stdin.closed:exporter.stdin.close()
-        try:exporter.wait(timeout=15)
-        except subprocess.TimeoutExpired:exporter.terminate();exporter.wait(timeout=5)
+        exporter.finish()
     with tarfile.open(dest/'uploads.tar.gz','w:gz') as tar:
         for name in before:tar.add(uploads/name,arcname=name,recursive=False)
     o.need(files(uploads)==before,'FILES_CHANGED_DURING_BACKUP')

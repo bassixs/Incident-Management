@@ -27,6 +27,7 @@ jobs:
             python3 $opt tools/install-kit-lab/historical_checksums_test.py
             python3 $opt tools/install-kit-lab/metadata_test.py
             python3 $opt tools/install-kit-lab/kit_unit_test.py
+            python3 $opt tools/install-kit-lab/exporter_unit_test.py
           done 2>&1 | tee unit.log
       - name: Load exact previously reviewed images, no builds
         env:
@@ -50,8 +51,15 @@ jobs:
           python3 tools/install-kit-lab/check_loaded_images.py
           docker pull postgres:16-alpine
           { docker version; docker compose version; python3 --version; uname -a; } > environment.txt
-      - name: Exact baseline exporter, realistic synthetic volume
-        run: python3 -u tools/install-kit-lab/exporter_baseline_test.py 2>&1 | tee operational.log
+      - name: Exporter failures and complete backup with isolated restore
+        run: python3 -u tools/install-kit-lab/exporter_test.py 2>&1 | tee operational.log
+      - name: Package tested correction with unchanged reviewed images
+        run: python3 tools/install-kit-lab/package_update.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: backup-exporter-reviewed-kit
+          path: package-output/
+          retention-days: 30
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
