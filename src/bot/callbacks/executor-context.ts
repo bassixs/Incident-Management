@@ -114,6 +114,7 @@ export async function showExecutorContext(ctx: Context, argument?: string): Prom
     switch (route.view) {
       case 'home': {
         text += '\n\n' + executorSummary(incident).join('\n');
+        if (incident.requesterPhone) text += `\nТелефон для связи: ${incident.requesterPhone}`;
         rows.push([button('Исходный текст', { view: 'original' }), button('Исходные фотографии', { view: 'files' })]);
         const latest = incident.answers.at(-1);
         if (latest) rows.push([button(`Текущий ответ · версия ${latest.version}`, { view: 'answer', answerId: latest.id })]);

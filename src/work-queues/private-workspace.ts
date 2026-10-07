@@ -244,7 +244,11 @@ export async function showPersonalWork(services: AppServices, actor: ResolvedAct
       ? reviewKeyboard(s.incident.id, s.incident.answers.at(-1)!.id)
       : sectorKeyboard(s.incident.id, { hasPhone: !!s.incident.requesterPhone, status: s.incident.status, hasTemplate: !!s.incident.assignedGroup?.answerTemplate }), s.item);
   }
-  if (s.kind === 'sector') { text += `\n\n${executorSummary(s.incident).join('\n')}`; if (!rows.flat().some(b => b.type === 'callback' && b.payload.endsWith(`incident:context:${s.incident.id}`))) rows.push(...wrapButtons(executorContextKeyboard(s.incident.id), s.item)); }
+  if (s.kind === 'sector') {
+    text += `\n\n${executorSummary(s.incident).join('\n')}`;
+    if (s.incident.requesterPhone) text += `\nТелефон для связи: ${s.incident.requesterPhone}`;
+    if (!rows.flat().some(b => b.type === 'callback' && b.payload.endsWith(`incident:context:${s.incident.id}`))) rows.push(...wrapButtons(executorContextKeyboard(s.incident.id), s.item));
+  }
   else if (details) text += `\n\n${s.kind === 'review' ? reviewCard(s.incident, s.incident.answers.at(-1)!, s.incident.assignedGroup, owned) : incidentLookupCard(s.incident, owned, s.kind === 'distribution', true)}`;
   else text += `\n\nСообщение:\n${s.incident.text}${s.incident.requesterPhone ? `\nТелефон для связи: ${s.incident.requesterPhone}` : ''}`;
   rows.push(s.kind === 'sector' ? [button('Обновить состояние', 'show', id)] : [button('Показать сообщение', 'details', id), button('Обновить состояние', 'show', id)]);
