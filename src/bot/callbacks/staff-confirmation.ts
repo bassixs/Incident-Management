@@ -130,6 +130,7 @@ export async function handleStaffConfirmation(services: AppServices, actor: Reso
     } else {
       const { handleIncidentCallback } = await import('./incident.callbacks');
       const navigation = (session.data as { distributionNavigation?: { lease: string; topicId: string | null } } | null)?.distributionNavigation;
+      if (pending.action === 'assign-group' && !navigation) throw new ConflictError('Старое подтверждение распределения. Отмените его и заново откройте «Распределить».');
       result = await handleIncidentCallback({ services, actor, chatId, confirmed: true, messageId: pending.sourceMessageId, navigationAuthorized: navigation }, { kind: 'incident', action: pending.action, incidentId, argument: pending.argument });
       await services.prisma.operatorSession.deleteMany({ where: { id: session.id } });
     }

@@ -102,7 +102,9 @@ async function select(services: AppServices, item: PrivateWorkItem) {
 async function snapshot(services: AppServices, item: PrivateWorkItem) {
   const current = await services.sessions.find(item.maxUserId, item.originChatId);
   if (!current) {
-    const fresh = await services.prisma.privateWorkItem.findUniqueOrThrow({ where: { id: item.id } });
+    if ((dataOf(item).session?.data.confirmation as { action?: string } | undefined)?.action !== 'assign-group') return;
+    const fresh = await services.prisma.privateWorkItem.findUnique({ where: { id: item.id } });
+    if (!fresh) return; // A completed workflow may already have removed its private item.
     const data = dataOf(fresh);
     if ((data.session?.data.confirmation as { action?: string } | undefined)?.action === 'assign-group') {
       delete data.session; await save(services, fresh, data);
@@ -335,6 +337,9 @@ export async function personalAction(services: AppServices, actor: ResolvedActor
   }
   if (action === 'confirm') {
     if (data.pending && data.pending.nonce === argument) {
+      if (parseCallbackPayload(data.pending.raw)?.kind === 'incident' && data.pending.raw.startsWith('incident:assign-group:')) {
+        throw new ConflictError('Старое подтверждение распределения. Нажмите «Назад» и заново откройте «Распределить».');
+      }
       const raw = data.pending.raw; await run(services, s, raw, messageId, true); delete data.pending; await save(services, s.item, data); return;
     }
     if (!data.draft?.nonce || data.draft.nonce !== argument || !data.session) throw new ConflictError('Предварительный просмотр устарел. Откройте актуальный черновик.');

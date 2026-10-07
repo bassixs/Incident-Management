@@ -9,6 +9,7 @@ defaults:
     shell: bash
 jobs:
   baseline:
+    if: github.event.head_commit.message == 'test: reproduce navigation baselines'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -41,7 +42,7 @@ jobs:
       - name: Exact unchanged runtime and new regression expectations
         shell: bash
         run: |
-          cp tests/integration/distribution-navigation.test.ts "$RUNNER_TEMP/navigation.test.ts"
+          git show 5f77951138256a95717e2d380ea4042d9953e2d4:tests/integration/distribution-navigation.test.ts > "$RUNNER_TEMP/navigation.test.ts"
           git checkout --detach '${{ matrix.runtime }}'
           cp "$RUNNER_TEMP/navigation.test.ts" tests/integration/distribution-navigation.test.ts
           mkdir -p evidence
@@ -103,6 +104,7 @@ jobs:
         if: success() || failure()
         run: >-
           npx vitest run tests/integration/distribution-queue.test.ts tests/integration/private-workspace.test.ts
+          tests/integration/distribution-topic.test.ts tests/integration/staff-confirmation.test.ts tests/integration/concurrent-staff-load.test.ts
           tests/integration/incident-lifecycle.test.ts tests/integration/staff-reservations.test.ts
           tests/integration/work-queues.test.ts tests/integration/transactional-workflow.test.ts
           tests/integration/working-policy.test.ts tests/integration/working-deadline-queue.test.ts

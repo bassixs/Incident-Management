@@ -1,3 +1,4 @@
+import { prepareDistributionChoice } from '../helpers/distribution-picker';
 import { randomUUID } from 'node:crypto';
 import { UserRole, type PrismaClient } from '@prisma/client';
 import { beforeAll, afterAll, beforeEach, afterEach, expect, it, vi } from 'vitest';
@@ -90,14 +91,14 @@ describeIntegration('staff action confirmations', () => {
 
   it('confirms assignment and preserves the incident on cancel', async () => {
     const group = (await h.services.responsibleGroups.findByCode(GROUP_CODES.facility))!;
-    await click(TEST_CHATS.distribution, 'assign-group', group.id);
+    await prepareDistributionChoice(h.services, actor, TEST_CHATS.distribution, id, group.id);
     expect((await fresh())!.assignedGroupId).toBeNull();
     const pending = await token(TEST_CHATS.distribution);
     await input(TEST_CHATS.distribution, 'Случайное сообщение');
     expect(await token(TEST_CHATS.distribution)).toBe(pending);
     expect(h.messages.toChat(TEST_CHATS.distribution).at(-1)!.message.text).toContain('ждёт подтверждения');
     await click(TEST_CHATS.distribution, 'action-cancel', await token(TEST_CHATS.distribution));
-    await click(TEST_CHATS.distribution, 'assign-group', group.id);
+    await prepareDistributionChoice(h.services, actor, TEST_CHATS.distribution, id, group.id);
     await click(TEST_CHATS.distribution, 'action-confirm', await token(TEST_CHATS.distribution));
     expect((await fresh())!.assignedGroupId).toBe(group.id);
   });

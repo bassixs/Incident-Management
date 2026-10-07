@@ -205,4 +205,23 @@ describeIntegration.each(['chat', 'private'] as const)('distribution navigation 
     await unchanged();
   });
 
+  it('cancels a confirmation without changing topic, attachments, text or assignment', async () => {
+    await db.incidentAttachment.create({ data: { incidentId: incident.id, type: 'IMAGE', storageKey: 'synthetic-navigation/photo.jpg', size: 7 } });
+    const before = await fresh(), attachments = await db.incidentAttachment.findMany({ where: { incidentId: incident.id } });
+    await groups(); const lease = (await fresh()).distributionClaimUntil;
+    await click(button('Хозяйственная группа')); const confirm = button('Подтвердить'), mid = current;
+    await click(button('Отмена')); await click(confirm, mid);
+    const after = await fresh();
+    expect(after).toMatchObject({ text: before.text, requesterPhone: before.requesterPhone, problemMunicipalityCode: before.problemMunicipalityCode, userSelectedCategoryId: before.userSelectedCategoryId });
+    expect(after.distributionClaimUntil).toEqual(lease);
+    expect(await db.incidentAttachment.findMany({ where: { incidentId: incident.id } })).toEqual(attachments);
+    await unchanged();
+  });
+  it('permission or membership loss cannot be bypassed by an existing navigation button', async () => {
+    await groups(); const next = button('Вперёд ➡️');
+    if (mode === 'private') vi.mocked(h.services.max.api.getChatMembers).mockResolvedValue({ members: [] } as never);
+    else actor = await actorFor(db, 99998n, 'Посторонний', [UserRole.REQUESTER]);
+    await click(next); expect(page()).toBe('1 / 3'); await unchanged();
+  });
+
 });

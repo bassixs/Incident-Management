@@ -17,3 +17,15 @@ export async function clickDistributionPicker(services: AppServices, actor: Reso
   else await handleIncidentCallback({ services, actor, chatId, messageId: screen.mid }, { kind: 'incident', action: 'distribution-nav', incidentId: screen.incidentId, argument: token });
   return screen.mid;
 }
+
+export async function prepareDistributionChoice(services: AppServices, actor: ResolvedActor, chatId: bigint, incidentId: string, groupId: string) {
+  let incident = await services.prisma.incident.findUniqueOrThrow({ where: { id: incidentId } });
+  if (!incident.distributionMessageId) {
+    await services.distribution.publishCard(incidentId); await services.messages.flush();
+    incident = await services.prisma.incident.findUniqueOrThrow({ where: { id: incidentId } });
+  }
+  await handleIncidentCallback({ services, actor, chatId, messageId: incident.distributionMessageId! }, { kind: 'incident', action: 'assign', incidentId });
+  const group = await services.prisma.responsibleGroup.findUniqueOrThrow({ where: { id: groupId } });
+  await clickDistributionPicker(services, actor, chatId, 'assign-branch', group.kind === 'LOCAL_GOVERNMENT' ? 'local' : group.kind === 'REGIONAL' ? 'regional' : 'executive');
+  await clickDistributionPicker(services, actor, chatId, 'assign-group', groupId);
+}

@@ -1,3 +1,4 @@
+import { prepareDistributionChoice } from '../helpers/distribution-picker';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
@@ -106,12 +107,12 @@ describeIntegration('concurrent employee load with arriving incidents', () => {
           await services.distribution.reject(id, `Причина отказа ${n}`, dispatcher);
         } else {
           const destination = group(branch === 7 ? GROUP_CODES.regional : redistributed.has(id) ? GROUP_CODES.it : GROUP_CODES.facility);
-          await click(dispatcher, TEST_CHATS.distribution, id, 'assign-group', destination.id);
+          await prepareDistributionChoice(services, dispatcher, TEST_CHATS.distribution, id, destination.id);
           if (branch === 1) {
             const draft = (await services.sessions.find(dispatcher.maxUserId, TEST_CHATS.distribution))!;
             await click(dispatcher, TEST_CHATS.distribution, id, 'action-cancel', pendingConfirmation(draft)!.token);
             expect((await services.repository.findById(id))!.status).toBe('DISTRIBUTION');
-            await click(dispatcher, TEST_CHATS.distribution, id, 'assign-group', destination.id);
+            await prepareDistributionChoice(services, dispatcher, TEST_CHATS.distribution, id, destination.id);
           }
           await confirm(dispatcher, TEST_CHATS.distribution, id, branch === 2);
           if (branch === 3 && !redistributed.has(id)) {
