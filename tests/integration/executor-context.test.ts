@@ -72,7 +72,8 @@ describeIntegration.each(['chat', 'private'] as const)('executor context (%s)', 
     await db.incident.update({ where: { id: incident.id }, data: { status: 'IN_PROGRESS', revisionReason: null, revisionCount: 0 } });
     const reviewer = await actorFor(db, TEST_USERS.approver, 'Тестовый согласующий', [UserRole.APPROVER]);
     for (let n = 1; n <= 7; n++) {
-      await h.services.sector.takeInWork(incident.id, actor);
+      const own = await db.actionLock.findFirst({ where: { incidentId: incident.id, action: 'sector-queue', maxUserId: actor.maxUserId, lockedUntil: { gt: new Date() } } });
+      if (!own) await h.services.sector.takeInWork(incident.id, actor);
       const result = await h.services.answers.submit(incident.id, actor, `Настоящий цикл ${n}`, []);
       await h.services.workQueues.claimReview(reviewer, TEST_CHATS.review, incident.id);
       await h.services.review.requestRevision(incident.id, `Замечание цикла ${n}`, reviewer, result.answer.id);
