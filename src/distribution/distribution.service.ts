@@ -1,6 +1,7 @@
+import { startAssignment, finishAssignment } from '../sla/policy';
 import { acquireAdvisoryLock, TRANSACTION_OPTIONS } from '../database/prisma';
 import { randomUUID } from 'node:crypto';
-import { assertClaimOwner, CLAIM_LOCK } from './queue-state';
+import { assertClaimOwner, assertNavigationClaim, CLAIM_LOCK } from './queue-state';
 import { queueSector, queueRejection, queueDistributionRefresh } from '../delivery/workflow-outbox';
 import {
   IncidentStatus,
@@ -123,13 +124,14 @@ export class DistributionService {
     return group?.isActive && group.maxChatId !== null ? group : null;
   }
 
-  async changeTopic(incidentId: string, categoryId: string | null, actor: Actor): Promise<IncidentWithRelations> {
+  async changeTopic(incidentId: string, categoryId: string | null, actor: Actor, navigation?: { lease: string; topicId: string | null }): Promise<IncidentWithRelations> {
     await this.prisma.$transaction(async tx => {
       await acquireAdvisoryLock(tx, ...CLAIM_LOCK);
       const incident = await this.repository.findById(incidentId, tx);
       if (!incident) throw new NotFoundError('Сообщение не найдено.');
       if (incident.status !== 'DISTRIBUTION') throw new ConflictError('Тему можно изменить только до распределения сообщения.');
       assertClaimOwner(incident, actor.maxUserId);
+      if (navigation) assertNavigationClaim(incident, actor.maxUserId, navigation);
       const category = categoryId ? await tx.category.findFirst({ where: { id: categoryId, isActive: true } }) : null;
       if (categoryId && !category) throw new NotFoundError('Выбранная тема больше недоступна. Откройте список заново.');
       if (incident.userSelectedCategoryId === categoryId) return;
@@ -149,7 +151,7 @@ export class DistributionService {
    * press the button at the same moment exactly one UPDATE matches a row and
    * the loser is told who won. One incident can never reach two sectors.
    */
-  async assign(incidentId: string, groupId: string, actor: Actor): Promise<IncidentWithRelations> {
+  async assign(incidentId: string, groupId: string, actor: Actor, navigation?: { lease: string; topicId: string | null }): Promise<IncidentWithRelations> {
     const incident = await this.repository.findById(incidentId);
     if (!incident) throw new NotFoundError(`Incident ${incidentId} not found`);
 
@@ -161,10 +163,12 @@ export class DistributionService {
     const group = await this.groups.requireActiveById(groupId);
     this.groups.requireChatId(group);
 
-    const now = new Date();
     await this.prisma.$transaction(async (tx) => {
       await acquireAdvisoryLock(tx, ...CLAIM_LOCK);
-      assertClaimOwner(await tx.incident.findUniqueOrThrow({ where: { id: incidentId } }), actor.maxUserId);
+      const now = new Date();
+      const current = await tx.incident.findUniqueOrThrow({ where: { id: incidentId } });
+      assertClaimOwner(current, actor.maxUserId);
+      if (navigation) assertNavigationClaim(current, actor.maxUserId, navigation);
       const claimed = await this.repository.transition(tx, incidentId, IncidentStatus.DISTRIBUTION, {
         status: IncidentStatus.ASSIGNED,
         assignedGroupId: group.id,
@@ -186,6 +190,7 @@ export class DistributionService {
         actorRole: actor.role,
         metadata: { groupId: group.id, groupCode: group.code, dispatcher: actor.displayName },
       }, tx);
+      await startAssignment(tx, incident, group, now);
       await queueSector(tx, incidentId);
       await queueDistributionRefresh(tx, incidentId, `assigned:${randomUUID()}`);
     }, TRANSACTION_OPTIONS);
@@ -204,7 +209,7 @@ export class DistributionService {
     if (incident.distributionMessageId) {
       await this.messages.finalizeCard(
         incident.distributionMessageId,
-        distributionResolvedNotice(incident, group, actor.displayName),
+        distributionResolvedNotice((await this.repository.findById(incidentId))!, group, actor.displayName),
       );
     }
 
@@ -285,7 +290,15 @@ export class DistributionService {
         const keyboardId = (row.payload as { keyboardMessageId?: unknown } | null)?.keyboardMessageId;
         return [row.firstMessageId!, ...(typeof keyboardId === 'string' ? [keyboardId] : [])];
       });
-      await tx.outboundMessage.deleteMany({ where: { incidentId } });
+      // Deadline reminders contain only the public code/deadline, not resident
+      // content. Preserve their dedupe/audit record; the worker records cancellation
+      // after revalidation (or a real ACK if a request was already in flight).
+      const reminders = await tx.outboundMessage.findMany({ where: { incidentId, trackingType: null,
+        dedupeKey: { startsWith: `sla-working-v1:${incidentId}:` },
+        payload: { path: ['operation', 'type'], equals: 'working-deadline' }, attachments: { equals: [] },
+      }, select: { id: true } });
+      await tx.outboundMessage.deleteMany({ where: { incidentId, id: { notIn: reminders.map(row => row.id) } } });
+      await finishAssignment(tx, incidentId, new Date(), 'REJECTED');
       await queueRejection(tx, incidentId, reason);
       await queueDistributionRefresh(tx, incidentId, 'rejected', true,
         [...new Set(publishedIds)]);

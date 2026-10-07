@@ -14,7 +14,7 @@ import { reviewKeyboard } from '../../src/bot/keyboards';
 import { actorFor, createTestPrisma, describeIntegration, GROUP_CODES, pushSchemaOnce, resetDatabase, seedCategories } from '../helpers/integration';
 import { TEST_CHATS, TEST_USERS } from '../helpers/setup-env';
 
-const MAIN_SHA = '59149006a7b3d30d01218fad84360e7d71e6d79e';
+const MAIN_SHA = 'c41f2d532591ddeb2ce0ea3d217e8a1a2095f38a';
 const gate = () => { let resolve!: () => void; const promise = new Promise<void>(r => { resolve = r; }); return { promise, resolve }; };
 describeIntegration('main -> stopped worker -> reserve -> main, same PostgreSQL', () => {
   let prisma: PrismaClient, MainWorker: typeof MaxMessageService;

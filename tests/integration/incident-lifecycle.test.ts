@@ -1,3 +1,4 @@
+import { clickDistributionPicker } from '../helpers/distribution-picker';
 import { incidentWorkday } from '../../src/utils/work-calendar';
 import { AnswerStatus, IncidentStatus, UserRole, type PrismaClient } from '@prisma/client';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
@@ -6,6 +7,11 @@ import { HistoryAction } from '../../src/incidents/incident-history.service';
 import { handleIncidentCallback } from '../../src/bot/callbacks/incident.callbacks';
 import { clickResidentAction as handleUserCallback } from '../helpers/resident-actions';
 import { handleRequesterMessage } from '../../src/bot/handlers/requester.handler';
+import { showIncidentDraftPreview } from '../../src/bot/requester-draft';
+import { currentResidentAction } from '../helpers/resident-actions';
+import { handleUserCallback as dispatchUserCallback } from '../../src/bot/callbacks/user.callbacks';
+import { UpdateDispatcher } from '../../src/server/update-dispatcher';
+import { handleMessageUpdate } from '../../src/bot/handlers/message.handler';
 import type { Message } from '../../src/max/max-types';
 import { ConflictError, RateLimitError } from '../../src/utils/errors';
 import * as configModule from '../../src/config';
@@ -110,7 +116,7 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     const category = await prisma.category.findUniqueOrThrow({
       where: { code: CATEGORY_CODES.facility },
     });
-    await harness.services.sessions.start({
+    const savedDraft = await harness.services.sessions.start({
       maxUserId: actor.maxUserId,
       chatId: actor.maxUserId,
       type: 'WAITING_INCIDENT_CONFIRMATION',
@@ -134,23 +140,37 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
       callbackId,
     });
 
-    await handleUserCallback(context('edit-name-menu'), { kind: 'user', action: 'draft-edit' });
-    await handleUserCallback(context('edit-name'), {
-      kind: 'user',
-      action: 'draft-field',
-      argument: 'name',
-    });
-    expect(harness.messages.toUser(actor.maxUserId).at(-1)!.message.keyboard).toBeUndefined();
-    await handleRequesterMessage(harness.services, actor, actor.maxUserId, requesterMessage('Петров Пётр'));
-
+    // Production shows and persists a versioned preview before accepting clicks.
+    // Legacy drafts may contain a name, but the current UI never asks for one.
+    await showIncidentDraftPreview(harness.services, actor.maxUserId, actor.maxUserId,
+      harness.services.sessions.readData(savedDraft), savedDraft);
+    const readDraft = async () => harness.services.sessions.readData(
+      (await harness.services.sessions.find(actor.maxUserId, actor.maxUserId))!);
+    expect(await readDraft()).not.toHaveProperty('requesterName');
+    const originalFields = { requesterPhone: '+7 900 111-22-33', selectedCategoryId: null,
+      problemMunicipalityCode: 'BOROVSKY', problemMunicipalityName: 'Боровский округ', problemLocality: 'Боровск',
+      draftText: 'Старый текст', draftMedia: [{ kind: 'IMAGE', token: 'old-photo-token', url: 'https://example.test/old-photo' }] };
+    expect(await readDraft()).toMatchObject(originalFields);
+    const oldConfirm = await currentResidentAction(context('old-confirm'), { kind: 'user', action: 'draft-confirm' });
     await handleUserCallback(context('edit-phone-menu'), { kind: 'user', action: 'draft-edit' });
+    const editing = await readDraft();
+    await expect(dispatchUserCallback(context('old-confirm'), oldConfirm)).rejects.toThrow('Это действие устарело');
+    expect(await readDraft()).toEqual(editing);
+    expect(editing.screenActions).not.toContain('user:draft-field:name');
     await handleUserCallback(context('edit-phone'), {
       kind: 'user',
-      action: 'draft-field',
-      argument: 'phone',
+      action: 'draft-phone-enter',
     });
-    expect(harness.messages.toUser(actor.maxUserId).at(-1)!.message.keyboard?.flat()).toContainEqual({ type: 'request_contact', text: '📱 Поделиться контактом' });
-    await handleRequesterMessage(harness.services, actor, actor.maxUserId, requesterMessage('8 999 000 11 22'));
+    expect((await readDraft()).draftEditField).toBe('phone');
+    // Phone admission binds the input to this screen and removes raw contact data.
+    const inbox = new UpdateDispatcher(prisma, { dispatch: async (update: unknown) =>
+      handleMessageUpdate(harness.services, { update } as never) } as never);
+    await inbox.handle({ update_type: 'message_created', timestamp: Date.now(),
+      message: requesterMessage('8 999 000 11 22') } as never);
+    inbox.stop(); await inbox.waitForIdle();
+    const phoneFields = { ...originalFields, requesterPhone: '+7 999 000-11-22' };
+    expect(await readDraft()).toMatchObject(phoneFields);
+    expect(await prisma.incident.count()).toBe(0);
 
     await handleUserCallback(context('edit-category-menu'), { kind: 'user', action: 'draft-edit' });
     await handleUserCallback(context('edit-category'), {
@@ -163,6 +183,9 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
       action: 'category',
       argument: category.id,
     });
+    const categoryFields = { ...phoneFields, selectedCategoryId: category.id };
+    expect(await readDraft()).toMatchObject(categoryFields);
+    expect(await prisma.incident.count()).toBe(0);
 
     await handleUserCallback(context('edit-location-menu'), { kind: 'user', action: 'draft-edit' });
     await handleUserCallback(context('edit-location'), {
@@ -175,6 +198,10 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
       action: 'municipality',
       argument: `${category.id}~KALUGA_CITY`,
     });
+    const locationFields = { ...categoryFields, problemMunicipalityCode: 'KALUGA_CITY',
+      problemMunicipalityName: 'Город Калуга', problemLocality: null };
+    expect(await readDraft()).toMatchObject(locationFields);
+    expect(await prisma.incident.count()).toBe(0);
 
     await handleUserCallback(context('edit-text-menu'), { kind: 'user', action: 'draft-edit' });
     await handleUserCallback(context('edit-text'), {
@@ -183,6 +210,11 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
       argument: 'text',
     });
     await handleRequesterMessage(harness.services, actor, actor.maxUserId, requesterMessage('Новый текст'));
+    expect(await readDraft()).toMatchObject({ ...locationFields, draftText: 'Новый текст' });
+    expect(harness.messages.toUser(actor.maxUserId).at(-1)!.message.attachments).toEqual([
+      { type: 'IMAGE', maxToken: 'old-photo-token', originalName: undefined },
+    ]);
+    expect(await prisma.incident.count()).toBe(0);
 
     await handleUserCallback(context('edit-photo-menu'), { kind: 'user', action: 'draft-edit' });
     await handleUserCallback(context('edit-photo'), {
@@ -201,7 +233,6 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     const draft = harness.services.sessions.readData(preview!);
     expect(preview?.type).toBe('WAITING_INCIDENT_CONFIRMATION');
     expect(draft).toMatchObject({
-      requesterName: 'Петров Пётр',
       requesterPhone: '+7 999 000-11-22',
       selectedCategoryId: category.id,
       problemMunicipalityCode: 'KALUGA_CITY',
@@ -213,7 +244,7 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
 
     await handleUserCallback(context('confirm-edited'), { kind: 'user', action: 'draft-confirm' });
     const incident = await prisma.incident.findFirstOrThrow({ include: { attachments: true } });
-    expect(incident.requesterName).toBe('Петров Пётр');
+    expect(incident.requesterName).toBe('Житель');
     expect(incident.requesterPhone).toBe('+7 999 000-11-22');
     expect(incident.userSelectedCategoryId).toBe(category.id);
     expect(incident.problemMunicipalityCode).toBe('KALUGA_CITY');
@@ -221,8 +252,11 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     expect(incident.text).toBe('Новый текст');
     expect(incident.attachments).toHaveLength(0);
     const profile = await prisma.user.findUniqueOrThrow({ where: { maxUserId: actor.maxUserId } });
-    expect(profile.requesterName).toBe('Петров Пётр');
-    expect(profile.requesterPhone).toBe('+7 999 000-11-22');
+    // Contact belongs to this incident, not a reusable resident profile.
+    expect(profile.requesterName).toBeNull();
+    expect(profile.requesterPhone).toBeNull();
+    expect(await prisma.incident.count()).toBe(1);
+    expect(await harness.services.sessions.find(actor.maxUserId, actor.maxUserId)).toBeNull();
   });
 
   // --- §11 daily limit -----------------------------------------------------
@@ -397,21 +431,18 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     const dispatcher = await actorFor(prisma, TEST_USERS.dispatcher, 'Диспетчер', [UserRole.DISPATCHER]);
     const category = await facility();
 
-    await handleIncidentCallback(
-      {
-        services: harness.services,
-        actor: dispatcher,
-        chatId: TEST_CHATS.distribution,
-        messageId: 'assignment-picker-mid',
-      },
-      { kind: 'incident', action: 'assign-group', incidentId: incident.id, argument: category.id },
-    );
+    await harness.services.distribution.publishCard(incident.id);
+    const cardMid = (await harness.services.repository.findById(incident.id))!.distributionMessageId!;
+    await handleIncidentCallback({ services: harness.services, actor: dispatcher, chatId: TEST_CHATS.distribution, messageId: cardMid },
+      { kind: 'incident', action: 'assign', incidentId: incident.id });
+    await clickDistributionPicker(harness.services, dispatcher, TEST_CHATS.distribution, 'assign-branch', 'local');
+    const pickerMid = await clickDistributionPicker(harness.services, dispatcher, TEST_CHATS.distribution, 'assign-group', category.id);
 
-    expect(harness.messages.deleted).not.toContain('assignment-picker-mid');
+    expect(harness.messages.deleted).not.toContain(pickerMid);
     const pending = (await harness.services.sessions.find(dispatcher.maxUserId, TEST_CHATS.distribution))!.data as any;
-    await handleIncidentCallback({ services: harness.services, actor: dispatcher, chatId: TEST_CHATS.distribution },
+    await handleIncidentCallback({ services: harness.services, actor: dispatcher, chatId: TEST_CHATS.distribution, messageId: incident.distributionMessageId! },
       { kind: 'incident', action: 'action-confirm', incidentId: incident.id, argument: pending.confirmation.token });
-    expect(harness.messages.deleted).toContain('assignment-picker-mid');
+    expect(harness.messages.deleted).toContain(pickerMid);
   });
 
   it('reuses the same picker message when a distribution branch is opened', async () => {
@@ -421,18 +452,14 @@ describeIntegration('incident lifecycle (PostgreSQL)', () => {
     });
     const dispatcher = await actorFor(prisma, TEST_USERS.dispatcher, 'Диспетчер', [UserRole.DISPATCHER]);
 
-    await handleIncidentCallback(
-      {
-        services: harness.services,
-        actor: dispatcher,
-        chatId: TEST_CHATS.distribution,
-        messageId: 'assignment-picker-mid',
-      },
-      { kind: 'incident', action: 'assign-branch', incidentId: incident.id, argument: 'local' },
-    );
+    await harness.services.distribution.publishCard(incident.id);
+    const cardMid = (await harness.services.repository.findById(incident.id))!.distributionMessageId!;
+    await handleIncidentCallback({ services: harness.services, actor: dispatcher, chatId: TEST_CHATS.distribution, messageId: cardMid },
+      { kind: 'incident', action: 'assign', incidentId: incident.id });
+    const pickerMid = await clickDistributionPicker(harness.services, dispatcher, TEST_CHATS.distribution, 'assign-branch', 'local');
 
     expect(harness.messages.edits).toContainEqual({
-      messageId: 'assignment-picker-mid',
+      messageId: pickerMid,
       text: expect.stringContaining('🔴 НЕ РАСПРЕДЕЛЕНО'),
       mode: 'keyboard',
     });

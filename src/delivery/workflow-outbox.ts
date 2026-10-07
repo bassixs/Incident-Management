@@ -132,7 +132,7 @@ export async function queueAnswer(tx: Tx, incidentId: string, answerId: string, 
   await queueMessage(tx,
     direct ? { userId: incident.requester.maxUserId } : { chatId: requiredChat(getConfig().REVIEW_CHAT_ID) },
     {
-      text: direct ? finalAnswerToRequester(incident, answer, incident.answeredAt ?? answer.approvedAt ?? new Date(), incident.assignedGroup?.authorityName)
+      text: direct ? finalAnswerToRequester(incident, answer, incident.answeredAt ?? answer.approvedAt ?? new Date(), incident.assignedGroup?.authorityName, incident.assignedGroup?.code)
         : reviewCard(incident, answer, incident.assignedGroup),
       label: codeLabel(incident),
       keyboard: direct ? answerRatingKeyboard(incidentId) : reviewKeyboard(incidentId, answerId),

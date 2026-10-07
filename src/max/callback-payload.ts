@@ -8,6 +8,10 @@
  */
 
 export const INCIDENT_ACTIONS = [
+  'context',
+  'context-page',
+  'distribution-nav',
+  'assignment-back',
   'contact',
   'privacy-pass',
   'personal',

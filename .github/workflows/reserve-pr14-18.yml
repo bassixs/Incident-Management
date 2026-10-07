@@ -1,0 +1,100 @@
+name: PR14-18 compatible reserve
+on:
+  push:
+    branches: [codex/reserve-pr14-18]
+permissions:
+  contents: read
+concurrency:
+  group: reserve-pr14-18
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+jobs:
+  regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: synthetic
+          POSTGRES_PASSWORD: synthetic-only
+          POSTGRES_DB: incident_test
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U synthetic -d incident_test" --health-interval 5s --health-timeout 3s --health-retries 15
+    env:
+      DATABASE_URL: postgresql://synthetic:synthetic-only@127.0.0.1:5432/incident_test
+      TEST_DATABASE_URL: postgresql://synthetic:synthetic-only@127.0.0.1:5432/incident_test
+      BOT_TOKEN: synthetic-only
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: mkdir -p evidence && git rev-parse HEAD > evidence/sha.txt
+      - run: npm ci && npx prisma generate && npx prisma migrate deploy
+      - name: Typecheck
+        run: npm run typecheck 2>&1 | tee evidence/typecheck.txt
+      - name: Build
+        if: success() || failure()
+        run: npm run build 2>&1 | tee evidence/build.txt
+      - name: Unit
+        if: success() || failure()
+        run: npx vitest run tests/unit --reporter=default --reporter=json --outputFile=evidence/unit.json 2>&1 | tee evidence/unit.txt
+      - name: Pinned main for existing same-DB progress regressions
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/reference" c41f2d532591ddeb2ce0ea3d217e8a1a2095f38a
+          ln -s "$GITHUB_WORKSPACE/node_modules" "$RUNNER_TEMP/reference/node_modules"
+          (cd "$RUNNER_TEMP/reference" && npm run build)
+          echo "DELIVERY_REFERENCE_ROOT=$RUNNER_TEMP/reference" >> "$GITHUB_ENV"
+      - name: Changed features and shared delivery protections
+        if: success() || failure()
+        run: >-
+          npx vitest run tests/integration/reserve-switch.test.ts tests/integration/working-policy.test.ts
+          tests/integration/working-deadline-queue.test.ts tests/integration/region-signature-outbox.test.ts
+          tests/integration/answer-signature.test.ts tests/integration/staff-reservations.test.ts
+          tests/integration/incident-lifecycle.test.ts tests/integration/distribution-navigation.test.ts
+          tests/integration/executor-context.test.ts tests/integration/private-workspace.test.ts
+          tests/integration/delivery-review-regressions.test.ts tests/integration/delivery-reliability.test.ts
+          tests/integration/transactional-workflow.test.ts tests/integration/failure-boundaries-review.test.ts
+          --reporter=default --reporter=json --outputFile=evidence/integration.json 2>&1 | tee evidence/integration.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: reserve-update-regression-${{ github.sha }}
+          path: evidence/
+          retention-days: 30
+  containers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Whole containers and current DB
+        run: python3 tools/reserve-update-lab/run.py 2>&1 | tee container-console.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: reserve-update-container-evidence-${{ github.sha }}
+          path: |
+            lab-results/*.json
+            lab-results/*.log
+            lab-results/*.txt
+            container-console.txt
+          retention-days: 30
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: success()
+        with:
+          name: main-and-reserve-verified-${{ github.sha }}
+          path: |
+            lab-results/main-and-reserve.tar.gz
+            lab-results/main-and-reserve.tar.gz.sha256
+            lab-results/images.json
+          compression-level: 0
+          retention-days: 30

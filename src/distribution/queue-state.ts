@@ -22,6 +22,15 @@ export function assertClaimOwner(incident: Incident, userId: bigint, now = new D
   }
 }
 
+export function assertNavigationClaim(incident: Incident, userId: bigint, expected?: { lease: string; topicId: string | null }) {
+  if (incident.status !== 'DISTRIBUTION') throw new ConflictError('Распределение уже завершено. Откройте актуальную карточку сообщения.');
+  if (incident.distributionClaimedBy !== userId || !incident.distributionClaimUntil || incident.distributionClaimUntil <= new Date()) {
+    throw new ConflictError('Закрепление завершено или сообщение взял другой сотрудник. Заново откройте сообщение из очереди.');
+  }
+  if (expected && (incident.distributionClaimUntil.toISOString() !== expected.lease || incident.userSelectedCategoryId !== expected.topicId)) throw new ConflictError('Этот экран устарел. Откройте актуальную карточку сообщения.');
+}
+
+
 export async function queueSnapshot(db: PrismaClient | Tx, now: Date) {
   const where = { status: 'DISTRIBUTION' as const };
   const [total, reserved, delayed30, delayed60, delayed120, oldest] = await Promise.all([
@@ -43,7 +52,7 @@ export function queuePanelText(s: QueueSnapshot): string {
     `Свободны: ${s.total - s.reserved} · У операторов: ${s.reserved}`,
     `Более 30 минут: ${s.delayed30} · Более часа: ${s.delayed60}`,
     `Самое старое ожидает: ${waitLabel(s.oldestMinutes)}`, '',
-    '«Следующее сообщение» — самое старое свободное. Закрепление за оператором на 15 минут.',
+    '«Следующее сообщение» — свободное с ближайшим первоначальным сроком. Закрепление за оператором на 15 минут.',
     'Сообщение остаётся в очереди до распределения или отклонения.',
     'Панель обновляется каждую минуту. Напоминания: пн–пт, 08:00–17:00 МСК.',
   ].join('\n');

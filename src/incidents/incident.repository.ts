@@ -1,10 +1,12 @@
-import { type Incident, IncidentStatus, Prisma, type PrismaClient } from '@prisma/client';
+import { legacyOpen, workingOpen } from '../sla/policy';
+import { type Incident, type OutboundMessage, IncidentStatus, Prisma, type PrismaClient } from '@prisma/client';
 
 import type { PrismaLike, Tx } from '../database/prisma';
 import { dayBoundaries } from '../utils/datetime';
 import { ConflictError } from '../utils/errors';
 
 export const INCIDENT_INCLUDE = {
+  assignmentCycles: { orderBy: { sequence: 'asc' } },
   history: { where: { action: 'REDISTRIBUTION_REQUESTED' }, orderBy: { createdAt: 'desc' }, take: 1 },
   requester: true,
   userSelectedCategory: true,
@@ -16,7 +18,7 @@ export const INCIDENT_INCLUDE = {
   answers: { orderBy: { version: 'asc' }, include: { attachments: true, createdBy: true } },
 } satisfies Prisma.IncidentInclude;
 
-export type IncidentWithRelations = Prisma.IncidentGetPayload<{ include: typeof INCIDENT_INCLUDE }>;
+export type IncidentWithRelations = Prisma.IncidentGetPayload<{ include: typeof INCIDENT_INCLUDE }> & { deliveryJobs?: Array<Pick<OutboundMessage, 'id' | 'trackingType' | 'answerId' | 'dedupeKey' | 'status' | 'attempts' | 'sentAt' | 'firstMessageId'>> };
 
 export type RequesterIncident = Incident & { answers: Array<{ id: string; version: number; deliveredAt: Date | null }> };
 
@@ -81,24 +83,37 @@ export class IncidentRepository {
         ...(range.to ? { lt: range.to } : {}),
       };
     }
-    return this.prisma.incident.findMany({
+    const rows = await this.prisma.incident.findMany({
       where,
       orderBy: { createdAt: 'asc' },
-      include: { ...INCIDENT_INCLUDE, history: { where: { action: 'INCIDENT_REJECTED' }, orderBy: { createdAt: 'desc' }, take: 1 } },
+      include: { ...INCIDENT_INCLUDE, history: { where: { action: { in: ['INCIDENT_REJECTED', 'SLA_PROJECT_SUBMITTED'] } }, orderBy: { createdAt: 'desc' } } },
     });
+    return this.withReportDelivery(rows);
   }
 
   /** Current unresolved backlog, independent of the report's creation-date range. */
   async listOverdueForReport(now: Date): Promise<IncidentWithRelations[]> {
-    return this.prisma.incident.findMany({
+    const rows = await this.prisma.incident.findMany({
       where: {
-        status: { notIn: [IncidentStatus.RESOLVED, IncidentStatus.REJECTED] },
-        slaPausedAt: null,
+        OR: [legacyOpen, workingOpen],
         deadlineAt: { lte: now },
       },
       orderBy: [{ deadlineAt: 'asc' }, { publicCode: 'asc' }],
       include: INCIDENT_INCLUDE,
     });
+    return this.withReportDelivery(rows);
+  }
+
+  private async withReportDelivery(rows: IncidentWithRelations[]): Promise<IncidentWithRelations[]> {
+    const ids = rows.filter(i => i.slaPolicy === 'WORKING_HOURS_V1').map(i => i.id);
+    if (!ids.length) return rows;
+    const jobs = await this.prisma.outboundMessage.findMany({ where: { incidentId: { in: ids },
+      OR: [{ trackingType: 'ANSWER_TO_REQUESTER' }, { dedupeKey: { startsWith: 'rejection:' } }] },
+      select: { incidentId: true, id: true, trackingType: true, answerId: true, dedupeKey: true, status: true, attempts: true, sentAt: true, firstMessageId: true } });
+    const byIncident = new Map<string, typeof jobs>();
+    for (const job of jobs) { const list = byIncident.get(job.incidentId!) ?? []; list.push(job); byIncident.set(job.incidentId!, list); }
+    return rows.map(i => ({ ...i, deliveryJobs: (byIncident.get(i.id) ?? []).filter(j => i.status === 'REJECTED'
+      ? j.dedupeKey === `rejection:${i.id}` : j.answerId === i.answers.at(-1)?.id) }));
   }
 
   /**
@@ -131,6 +146,7 @@ export class IncidentRepository {
       where: {
         status: { notIn: [IncidentStatus.RESOLVED, IncidentStatus.REJECTED] },
         slaPausedAt: null,
+        slaPolicy: 'LEGACY',
         createdAt: { lte: firstReminder },
         slaReminder24SentAt: null, slaWarn24SentAt: null, slaWarn6SentAt: null, overdueNotifiedAt: null,
       },

@@ -1,3 +1,5 @@
+import { executorSummary } from './executor-context';
+import { isWorkingPolicy, policyCardLines } from '../../sla/policy';
 import { RESIDENT_PHOTO_LIMIT } from '../../incidents/resident-photo-limit';
 import { OPTIONAL_PHONE_ADDED, OPTIONAL_PHONE_OFFER } from '../../privacy/optional-contact';
 import type { Incident, IncidentAnswer, ResponsibleGroup } from '@prisma/client';
@@ -8,7 +10,7 @@ import { describeStatus } from '../../incidents/incident-state.service';
 import type { IncidentWithRelations } from '../../incidents/incident.repository';
 import type { LegalAccessStatus } from '../../legal/legal-acceptance.service';
 import { formatDate, formatDateTime } from '../../utils/datetime';
-import { answerSignature } from '../../responsible-groups/answer-signature';
+import { answerSignature, omitsRequesterSignature } from '../../responsible-groups/answer-signature';
 
 /** `№ INC-000001` — the label repeated on every fragment of a message. */
 export function codeLabel(incident: Pick<Incident, 'publicCode'>): string {
@@ -79,8 +81,7 @@ export function distributionCard(incident: IncidentWithRelations): string {
     ...(incident.requesterPhone ? [`Телефон для связи: ${incident.requesterPhone}`] : []),
     ...(photoCount > 0 ? ['', ...attachmentLine(photoCount)] : []),
     '',
-    '⏱ Срок:',
-    `до ${formatDateTime(incident.deadlineAt)}`,
+    ...(isWorkingPolicy(incident) ? policyCardLines(incident) : ['⏱ Срок:', `до ${formatDateTime(incident.deadlineAt)}`]),
   ].join('\n');
 }
 
@@ -100,6 +101,7 @@ export function distributionResolvedNotice(
     '',
     'Распределил:',
     dispatcherName,
+    ...policyCardLines(incident),
   ].join('\n');
 }
 
@@ -133,8 +135,7 @@ export function sectorCard(incident: IncidentWithRelations, group: ResponsibleGr
     'Территория проблемы:',
     problemLocationText(incident),
     '',
-    'Сообщение:',
-    incident.text,
+    ...executorSummary(incident),
     ...(incident.requesterPhone ? [`Телефон для связи: ${incident.requesterPhone}`] : []),
     ...(photoCount > 0 ? ['', ...attachmentLine(photoCount)] : []),
     ...(incident.currentResponder && (lease === undefined || lease || !['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)) ? ['', '👤 Исполнитель:', incident.currentResponder.displayName] : []),
@@ -196,8 +197,7 @@ export function reviewCard(
     'Первоначальная дата:',
     formatDateTime(incident.createdAt),
     '',
-    'Срок ответа:',
-    formatDateTime(incident.deadlineAt),
+    ...(isWorkingPolicy(incident) ? policyCardLines(incident) : ['Срок ответа:', formatDateTime(incident.deadlineAt)]),
     ...(incident.isOverdue ? ['', '🚨 Срок ответа истёк.'] : []),
     '',
     'Версия ответа:',
@@ -206,33 +206,26 @@ export function reviewCard(
 }
 
 /** §32 — the "returned for rework" card sent back to the sector chat. */
-export function revisionCard(incident: Incident, answerVersion: number, reason: string): string {
-  return [
-    '↩️ ОТВЕТ ВОЗВРАЩЁН НА ДОРАБОТКУ',
-    '',
-    codeLabel(incident),
-    '',
-    'Причина:',
-    reason,
-    '',
-    'Версия ответа:',
-    String(answerVersion),
-  ].join('\n');
+export function revisionCard(incident: Incident & Partial<Pick<IncidentWithRelations, 'answers' | 'attachments'>>, answerVersion: number, reason: string): string {
+  return ['↩️ ОТВЕТ ВОЗВРАЩЁН НА ДОРАБОТКУ', '', codeLabel(incident),
+    `Возвращена версия ${answerVersion}`, '', ...executorSummary({ ...incident, revisionReason: reason })].join('\n');
 }
 
 /**
  * §31 — the final answer, delivered to the incident's own requester.
  *
  * The signature comes from the actual responsible group's authority, never
- * from the incident topic. Review and delivery use the same formatter.
+ * from the incident topic. The REGION_KALUGA exception affects residents only;
+ * internal cards retain the organization and authorship.
  */
 export function finalAnswerToRequester(
   incident: Incident,
   answer: IncidentAnswer,
   answeredAt: Date,
   authorityName?: string | null,
+  groupCode?: string | null,
 ): string {
-  const signature = answerSignature(authorityName);
+  const signature = omitsRequesterSignature(groupCode) ? null : answerSignature(authorityName);
   return [
     '✅ Получен ответ по вашему сообщению.',
     '',
@@ -267,7 +260,7 @@ export function incidentLookupCard(incident: IncidentWithRelations, lease?: Leas
     'Статус:',
     distribution ? distributionStatus(incident) : incident.slaPausedAt ? 'Ожидаем уточнение от жителя' : `${incident.status} — ${describeStatus(incident.status, showSla && incident.isOverdue)}`,
     ...(showSla ? ['', 'Создано:', formatDateTime(incident.createdAt)] : []),
-    ...(showSla ? ['', 'Срок ответа:', formatDateTime(incident.deadlineAt)] : []),
+    ...(showSla ? isWorkingPolicy(incident) ? policyCardLines(incident) : ['', 'Срок ответа:', formatDateTime(incident.deadlineAt)] : []),
     ...(incident.answeredAt ? ['', 'Отвечено:', formatDateTime(incident.answeredAt)] : []),
     '',
     'Ответственная группа:',

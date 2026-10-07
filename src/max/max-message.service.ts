@@ -1,3 +1,7 @@
+import { revisionCard as executorRevisionCard } from '../bot/views/cards';
+import { recordPolicyDelivery, WORKING_POLICY } from '../sla/policy';
+import { nextWorkingInstant, policyWorkingHours } from '../sla/working-time';
+import { workingDeadlineNotification, workingDeadlineTargets } from '../sla/working-notification';
 import { deliveryTrace, latency, withDeliveryTrace, type DeliveryTrace } from '../utils/latency';
 import { leaseView, leaseText, SECTOR_LEASE_ACTION } from '../work-queues/leases';
 import { AsyncActivity } from '../utils/async-activity';
@@ -20,12 +24,13 @@ import type { AttachmentRequest, Button, Message } from './max-types';
 
 import { HistoryAction } from '../incidents/incident-history.service';
 import type { MediaStorage } from '../media/media-storage.interface';
-import { isUniqueViolation } from '../database/prisma';
+import { acquireAdvisoryLock, isUniqueViolation, TRANSACTION_OPTIONS } from '../database/prisma';
 import { moduleLogger } from '../utils/logger';
 import { MaxClient } from './max-client';
 import { queueDeliveryStatus, reviewDeliveryNotice } from '../delivery/delivery-status';
 import { INCIDENT_INCLUDE } from '../incidents/incident.repository';
-import { distributionCard, distributionResolvedNotice, distributionStatus, sectorCard } from '../bot/views/cards';
+import { distributionCard, distributionResolvedNotice, distributionStatus, sectorCard, finalAnswerToRequester } from '../bot/views/cards';
+import { omitsRequesterSignature } from '../responsible-groups/answer-signature';
 import { distributionKeyboard } from '../bot/keyboards';
 import { queueDistributionRefresh, queueSectorRefresh, queueStaffRefresh } from '../delivery/workflow-outbox';
 import { workPanelKey, workPanelText, workButtons } from '../work-queues/state';
@@ -59,6 +64,7 @@ export type CompositeMessage = {
   beforeImmediateSend?: () => Promise<void>;
   operation?: { type: 'delivery-card'; incidentId: string; answerId: string; card: 'review' | 'distribution' }
     | { type: 'superseded-answer' }
+    | { type: 'working-deadline'; incidentId: string }
     | { type: 'sla-reminder'; incidentId: string; stage: SlaStage }
     | { type: 'clarification-question' | 'clarification-reply'; incidentId: string; clarificationId: string }
     | { type: 'sector-refresh'; incidentId: string; textOnly?: boolean }
@@ -85,7 +91,9 @@ export type CompositeMessage = {
 
 export type MessageSendResult = {
   firstMessageId?: string | undefined;
-  state: 'sent' | 'queued';
+  /** Confirmed part carrying buttons; may differ from the first text part. */
+  keyboardMessageId?: string | undefined;
+  state: 'sent' | 'queued' | 'cancelled';
   trackingApplied: boolean;
 };
 
@@ -118,6 +126,8 @@ const OUTBOX_MAX_ATTEMPTS = 12;
 type OutboxTarget = Pick<OutboundMessage, 'targetType' | 'targetId'>;
 // Local state refusal must not enter MaxClient's network retry loop.
 class StaleDeliveryError extends ValidationError {}
+class WorkingDeadlineCancelled extends ValidationError {}
+class WorkingDeadlineDeferred extends ValidationError {}
 const targetKey = (target: OutboxTarget): string => `${target.targetType}:${target.targetId}`;
 
 /**
@@ -196,6 +206,40 @@ export class MaxMessageService {
     if (answer.deliveredAt) throw new StaleDeliveryError('ANSWER_ALREADY_DELIVERED');
   }
 
+  /** Upgrade only an untouched legacy answer, before its first possible MAX send.
+   * Never reinterpret partial/uncertain delivery, including a manual retry whose
+   * attempts were reset: lastError remains evidence of its earlier attempt.
+   */
+  private async prepareRequesterSignature(row: OutboundMessage, payload: StoredPayload): Promise<void> {
+    if (row.trackingType !== 'ANSWER_TO_REQUESTER' || payload.operation || row.attempts !== 1
+      || row.lastError !== null || row.firstMessageId !== null || row.sentAt !== null
+      || payload.deliveryProgress !== undefined || payload.keyboardMessageId !== undefined) return;
+    const incident = await this.durable!.prisma.incident.findUnique({ where: { id: row.incidentId! },
+      include: { assignedGroup: true, answers: { orderBy: { version: 'desc' }, take: 1 } } });
+    if (!omitsRequesterSignature(incident?.assignedGroup?.code)) return;
+    const answer = incident?.answers[0];
+    if (!incident || incident.status !== 'RESOLVED' || answer?.id !== row.answerId || answer.status !== 'APPROVED'
+      || answer.deliveredAt || row.targetType !== 'user' || row.targetId !== incident.requesterMaxUserId) {
+      throw new StaleDeliveryError('STALE_ANSWER_VERSION');
+    }
+    const at = incident.answeredAt ?? answer.approvedAt;
+    if (!at) throw new StaleDeliveryError('REQUESTER_SIGNATURE_REVIEW_REQUIRED');
+    const text = finalAnswerToRequester(incident, answer, at, incident.assignedGroup?.authorityName, incident.assignedGroup?.code);
+    if (payload.text === text) return;
+    // Compare the entire old rendering, never strip matching phrases from user text.
+    const legacy = finalAnswerToRequester(incident, answer, at, incident.assignedGroup?.authorityName);
+    if (payload.text !== legacy) throw new StaleDeliveryError('REQUESTER_SIGNATURE_REVIEW_REQUIRED');
+    const updated = { ...payload, text };
+    const saved = await this.durable!.prisma.outboundMessage.updateMany({
+      where: { id: row.id, status: 'SENDING', attempts: row.attempts, lockedAt: row.lockedAt,
+        payload: { equals: row.payload! }, firstMessageId: null, sentAt: null, lastError: null },
+      data: { payload: updated as unknown as Prisma.InputJsonValue },
+    });
+    if (!saved.count) throw new StaleDeliveryError('DELIVERY_PROGRESS_OWNERSHIP_LOST');
+    row.payload = updated as unknown as Prisma.JsonValue;
+    payload.text = text;
+  }
+
   private async sendNow(target: SendTarget, message: CompositeMessage): Promise<MessageSendResult> {
     if (!this.durable || message.immediatePreview) {
       const destination = 'chatId' in target ? { targetType: 'chat', targetId: target.chatId } : { targetType: 'user', targetId: target.userId };
@@ -203,12 +247,13 @@ export class MaxMessageService {
       while (this.activeTargets.has(key)) await this.activeTargets.get(key)!.done.catch(() => undefined);
       return this.withTarget(destination, async () => {
         await message.beforeImmediateSend?.();
-        const { firstMessageId } = await this.deliverLogical(target, message);
-        return { firstMessageId, state: 'sent' as const, trackingApplied: false };
+        const result = await this.deliverLogical(target, message);
+        return { ...result, state: 'sent' as const, trackingApplied: false };
       });
     }
 
     const row = await this.enqueue(target, message);
+    if (row.status === OutboxStatus.CANCELLED) return { state: 'cancelled', trackingApplied: false };
     if (row.status === OutboxStatus.SENT) {
       return {
         firstMessageId: row.firstMessageId ?? undefined,
@@ -244,22 +289,12 @@ export class MaxMessageService {
       return { state: 'queued', trackingApplied: false };
     }
     return this.withTarget(row, async () => {
-      const predecessor = await this.durable!.prisma.outboundMessage.findFirst({
-        where: {
-          targetType: row.targetType, targetId: row.targetId, id: { not: row.id },
-          OR: [
-            { status: 'SENDING', OR: [{ sequence: { lt: row.sequence } }, { lockedAt: { gt: new Date(Date.now() - OUTBOX_LEASE_MS) } }] },
-            { status: 'PENDING', sequence: { lt: row.sequence }, OR: [{ nextAttemptAt: { lte: new Date() } }, { attempts: { gt: 0 } }] },
-          ],
-        }, select: { id: true },
-      });
-      if (predecessor) return { state: 'queued', trackingApplied: false };
       if (this.stopping) return { state: 'queued', trackingApplied: false };
       const trace = (row.payload as unknown as StoredPayload).trace ?? {};
       const result = await withDeliveryTrace({ ...trace, outboxId: row.id }, () => this.attempt(row.id));
       // Completion can transactionally create more jobs (tracking/status cards).
       // A successful transition is a finite wake source; a blocked/backoff row is not.
-      if (result.state === 'sent') this.wake();
+      if (result.state === 'sent' || result.state === 'cancelled') this.wake();
       return result;
     });
   }
@@ -475,22 +510,38 @@ export class MaxMessageService {
     const durable = this.durable!;
     const now = new Date();
     const stale = new Date(now.getTime() - OUTBOX_LEASE_MS);
-    const claimed = await durable.prisma.outboundMessage.updateMany({
+    // Serialize the short predecessor-check + claim, including separate workers.
+    // Release the DB lock before HTTP; the SENDING lease then owns the recipient.
+    const claimed = await durable.prisma.$transaction(async tx => {
+      const current = await tx.outboundMessage.findUnique({ where: { id } });
+      if (!current) return { count: 0 };
+      await acquireAdvisoryLock(tx, 'outbox-target', targetKey(current));
+      const predecessor = await tx.outboundMessage.findFirst({ where: {
+        targetType: current.targetType, targetId: current.targetId, id: { not: id }, OR: [
+          { status: 'SENDING', OR: [{ sequence: { lt: current.sequence } }, { lockedAt: { gt: stale } }] },
+          { status: 'PENDING', sequence: { lt: current.sequence }, OR: [{ nextAttemptAt: { lte: now } }, { attempts: { gt: 0 } }] },
+          { status: 'DEFERRED', sequence: { lt: current.sequence }, nextAttemptAt: { lte: now } },
+        ],
+      }, select: { id: true } });
+      if (predecessor) return { count: 0 };
+      return tx.outboundMessage.updateMany({
       where: {
         id,
         OR: [
           { status: OutboxStatus.PENDING, nextAttemptAt: { lte: now } },
+          { status: OutboxStatus.DEFERRED, nextAttemptAt: { lte: now } },
           { status: OutboxStatus.SENDING, lockedAt: { lte: stale } },
         ],
       },
       data: { status: OutboxStatus.SENDING, lockedAt: now, attempts: { increment: 1 } },
-    });
+      });
+    }, TRANSACTION_OPTIONS);
 
     if (claimed.count !== 1) {
       const existing = await durable.prisma.outboundMessage.findUnique({ where: { id } });
       return {
         firstMessageId: existing?.firstMessageId ?? undefined,
-        state: existing?.status === OutboxStatus.SENT ? 'sent' : 'queued',
+        state: existing?.status === OutboxStatus.SENT ? 'sent' : existing?.status === OutboxStatus.CANCELLED ? 'cancelled' : 'queued',
         trackingApplied: existing?.trackingApplied ?? false,
       };
     }
@@ -523,6 +574,7 @@ export class MaxMessageService {
 
     try {
       await this.assertCurrentAnswer(row);
+      await this.prepareRequesterSignature(row, payload);
       if (payload.operation?.type === 'bot-status') {
         const text = botStatusDeliveryText(payload.operation, payload.text, row.targetId, getConfig(), new Date());
         if (text === undefined) {
@@ -610,6 +662,8 @@ export class MaxMessageService {
         ? await this.refreshDistributionCards(payload.operation.incidentId, payload.operation.refreshActive, payload.operation.messageIds)
         : payload.operation?.type === 'distribution-alert'
         ? await this.deliverDistributionAlert(row.targetId, payload.operation)
+        : payload.operation?.type === 'working-deadline'
+        ? await this.deliverWorkingDeadline(row, payload.operation.incidentId)
         : payload.operation?.type === 'sla-reminder'
         ? await this.deliverSlaReminder(payload.operation)
         : payload.operation?.type === 'sector-refresh'
@@ -646,6 +700,22 @@ export class MaxMessageService {
       await this.cleanupAttachments(staged);
       return { firstMessageId: result.firstMessageId, state: 'sent', trackingApplied };
     } catch (error) {
+      if (payload.operation?.type === 'working-deadline' && error instanceof WorkingDeadlineCancelled) {
+        const cancelled = await durable.prisma.outboundMessage.updateMany({
+          where: { id: row.id, status: 'SENDING', attempts: row.attempts, lockedAt: row.lockedAt },
+          data: { status: 'CANCELLED', cancelledAt: new Date(), cancelReason: error.message,
+            lockedAt: null, trackingApplied: false },
+        });
+        if (cancelled.count) log.info({ outboxId: row.id, reason: error.message }, 'working deadline notification cancelled without sending');
+        return { state: cancelled.count ? 'cancelled' : 'queued', trackingApplied: false };
+      }
+      if (payload.operation?.type === 'working-deadline' && error instanceof WorkingDeadlineDeferred) {
+        await durable.prisma.outboundMessage.updateMany({
+          where: { id: row.id, status: 'SENDING', attempts: row.attempts, lockedAt: row.lockedAt },
+          data: { status: 'DEFERRED', lockedAt: null, attempts: { decrement: 1 }, nextAttemptAt: nextWorkingInstant(new Date()) },
+        });
+        return { state: 'queued', trackingApplied: false };
+      }
       const unavailablePhoto = staged.some(item => isPhotoReference(item.storageKey)) && isUnavailablePhoto(error);
       const terminal = error instanceof StaleDeliveryError || unavailablePhoto || row.attempts >= OUTBOX_MAX_ATTEMPTS;
       const detail = unavailablePhoto
@@ -656,10 +726,12 @@ export class MaxMessageService {
       await durable.prisma.outboundMessage.updateMany({
         where: { id: row.id, status: 'SENDING', attempts: row.attempts, lockedAt: row.lockedAt },
         data: {
-          status: terminal ? OutboxStatus.FAILED : OutboxStatus.PENDING,
+          status: terminal ? OutboxStatus.FAILED : payload.operation?.type === 'working-deadline' ? OutboxStatus.DEFERRED : OutboxStatus.PENDING,
           lockedAt: null,
           lastError: detail.slice(0, 4_000),
-          nextAttemptAt: new Date(Date.now() + retryDelayMs(row.attempts)),
+          nextAttemptAt: payload.operation?.type === 'working-deadline'
+            ? nextWorkingInstant(new Date(Date.now() + retryDelayMs(row.attempts)))
+            : new Date(Date.now() + retryDelayMs(row.attempts)),
         },
       });
       if (error instanceof StaleDeliveryError && row.incidentId && row.firstMessageId
@@ -730,6 +802,7 @@ export class MaxMessageService {
             },
           });
         }
+        await recordPolicyDelivery(tx, row.incidentId, deliveredAt);
         await queueDeliveryStatus(tx, row.incidentId, row.answerId, true);
         return;
       }
@@ -772,6 +845,7 @@ export class MaxMessageService {
           },
         });
       } else if (row.trackingType === DeliveryTrackingType.SECTOR_CARD) {
+        await tx.incidentAssignmentCycle.updateMany({ where: { incidentId: row.incidentId, endedAt: null, cardDeliveredAt: null }, data: { cardDeliveredAt: new Date() } });
         // A status can change while the original card is still being delivered.
         await queueSectorRefresh(tx, row.incidentId, `sector-status:${row.id}:published:${firstMessageId}:attempt:${row.attempts}`, true);
         await tx.incidentHistory.create({
@@ -807,6 +881,31 @@ export class MaxMessageService {
     const expected = current && `sector-card:${current.id}${current.history[0] ? ':return:' + current.history[0].id : ''}`;
     return !!current?.assignedGroup && current.assignedGroup.maxChatId === row.targetId
       && await this.sectorPublicationKey(row, db) === expected;
+  }
+
+  private async deliverWorkingDeadline(row: OutboundMessage, incidentId: string): Promise<{ firstMessageId?: string }> {
+    const payload = row.payload as unknown as StoredPayload;
+    if (row.incidentId !== incidentId || row.targetType !== 'chat' || row.trackingType || row.firstMessageId || row.sentAt
+      || payload.deliveryProgress || !Array.isArray(row.attachments) || row.attachments.length) {
+      throw new StaleDeliveryError('WORKING_DEADLINE_INVALID_JOB');
+    }
+    const read = async () => {
+      const incident = await this.durable!.prisma.incident.findUnique({ where: { id: incidentId } });
+      if (!incident) throw new WorkingDeadlineCancelled('INCIDENT_MISSING');
+      if (incident.slaPolicy !== WORKING_POLICY) throw new WorkingDeadlineCancelled('POLICY_CHANGED');
+      if (incident.status === 'REJECTED') throw new WorkingDeadlineCancelled('INCIDENT_REJECTED');
+      if (incident.slaDeliveredAt) throw new WorkingDeadlineCancelled('ANSWER_DELIVERED');
+      if (!workingDeadlineTargets().includes(row.targetId)) throw new WorkingDeadlineCancelled('RECIPIENT_REMOVED');
+      if (incident.deadlineAt > new Date()) throw new WorkingDeadlineCancelled('DEADLINE_NOT_DUE');
+      if (!policyWorkingHours(new Date())) throw new WorkingDeadlineDeferred('OUTSIDE_WORKING_HOURS');
+      return workingDeadlineNotification(incident);
+    };
+    const text = await read();
+    return this.deliverLogical({ chatId: row.targetId }, { text, beforeImmediateSend: async () => {
+      const lease = await this.durable!.prisma.outboundMessage.findFirst({ where: { id: row.id, status: 'SENDING', attempts: row.attempts, lockedAt: row.lockedAt } });
+      if (!lease) throw new StaleDeliveryError('DELIVERY_PROGRESS_OWNERSHIP_LOST');
+      if (await read() !== text) throw new Error('WORKING_DEADLINE_STATE_CHANGED_BEFORE_SEND');
+    } });
   }
 
   private async deliverSlaReminder(operation: Extract<CompositeMessage['operation'], { type: 'sla-reminder' }>): Promise<{ firstMessageId?: string }> {
@@ -877,7 +976,7 @@ export class MaxMessageService {
         if (active) buttons = reviewKeyboard(incidentId, answer.id);
       } else if (row.dedupeKey?.startsWith('revision:')) {
         const active = incident.status === 'REVISION_REQUIRED' && row.dedupeKey === `revision:${incidentId}:${latest?.version}`;
-        text = `${active ? leaseText(sectorLease) + '\n\n' : ''}↩️ ${incident.publicCode}: ${active ? 'на доработке' : 'доработка по этой карточке завершена'}.\n\n${incident.revisionReason ?? ''}`;
+        text = active ? `${leaseText(sectorLease)}\n\n${executorRevisionCard(incident, latest!.version, incident.revisionReason ?? '')}` : `↩️ ${incident.publicCode}: доработка по этой карточке завершена.`;
         if (active) buttons = revisionKeyboard(incidentId, !!incident.requesterPhone);
       } else {
         text = sectorCard(incident, incident.assignedGroup!, sectorLease);
@@ -1042,6 +1141,7 @@ export class MaxMessageService {
               NOT: blocked.map(({ targetType, targetId }) => ({ targetType, targetId })),
               OR: [
                 { status: OutboxStatus.PENDING, nextAttemptAt: { lte: now } },
+                { status: OutboxStatus.DEFERRED, nextAttemptAt: { lte: now } },
                 { status: OutboxStatus.SENDING, lockedAt: { lte: new Date(now.getTime() - OUTBOX_LEASE_MS) } },
               ],
             },
@@ -1061,7 +1161,8 @@ export class MaxMessageService {
             .then(async result => {
               if (result.state !== 'queued' || occupied) return;
               const current = await prisma.outboundMessage.findUnique({ where: { id: candidate.id } });
-              if (!current || current.status === 'SENT' || current.status === 'FAILED') return;
+              if (!current || current.status === 'SENT' || current.status === 'FAILED' || current.status === 'CANCELLED') return;
+              if (current.status === 'DEFERRED' && current.nextAttemptAt > new Date()) return;
               // A business hold (rating/SLA) must let later ready messages pass.
               if (current?.status === 'PENDING' && current.attempts === 0 && current.nextAttemptAt > new Date()) return;
               deferred.set(targetKey(candidate), candidate);

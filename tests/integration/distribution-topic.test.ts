@@ -1,3 +1,4 @@
+import { clickDistributionPicker } from '../helpers/distribution-picker';
 import { type PrismaClient, UserRole } from '@prisma/client';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { buildServices, type AppServices } from '../../src/app/container';
@@ -26,9 +27,18 @@ describeIntegration('topic correction during distribution', () => {
   });
   async function create() {
     const category = await prisma.category.findUniqueOrThrow({ where: { code: CATEGORY_CODES.facility } });
-    return services.incidents.create({ requester: { maxUserId: TEST_USERS.requesterA, name: 'Житель Тест', phone: '+79001112233' }, text: 'Не работает фонарь', userSelectedCategoryId: category.id });
+    const incident = await services.incidents.create({ requester: { maxUserId: TEST_USERS.requesterA, name: 'Житель Тест', phone: '+79001112233' }, text: 'Не работает фонарь', userSelectedCategoryId: category.id });
+    await services.distribution.publishCard(incident.id);
+    await services.messages.flush();
+    return (await services.repository.findById(incident.id))!;
   }
-  const click = (id: string, action: 'topic' | 'topic-page' | 'topic-set', argument?: string, who = actor, chatId = TEST_CHATS.distribution) => handleIncidentCallback({ services, actor: who, chatId }, { kind: 'incident', incidentId: id, action, argument });
+  const click = async (id: string, action: 'topic' | 'topic-page' | 'topic-set', argument?: string, who = actor, chatId = TEST_CHATS.distribution) => {
+    if (action === 'topic') {
+      const incident = (await services.repository.findById(id))!;
+      return handleIncidentCallback({ services, actor: who, chatId, messageId: incident.distributionMessageId! }, { kind: 'incident', incidentId: id, action });
+    }
+    return clickDistributionPicker(services, who, chatId, action, argument);
+  };
   it('changes the topic through staff buttons, updates original and queue copy, and records both values', async () => {
     const i = await create(); await services.distributionQueue.claim(actor, TEST_CHATS.distribution, i.id, true);
     const category = await prisma.category.findUniqueOrThrow({ where: { code: CATEGORY_CODES.it } });
@@ -44,7 +54,7 @@ describeIntegration('topic correction during distribution', () => {
     const history = await services.history.listForIncident(i.id);
     expect(history.find(h => h.action === 'TOPIC_CHANGED')?.metadata).toMatchObject({ previousCategoryId: i.userSelectedCategoryId, categoryId: category.id });
     expect(incidentHistoryText(fresh, history, [], 'Europe/Moscow')).toContain('Тема сообщения изменена');
-    await click(i.id, 'topic-set', category.id);
+    await click(i.id, 'topic'); await click(i.id, 'topic-set', category.id);
     expect(await prisma.incidentHistory.count({ where: { incidentId: i.id, action: 'TOPIC_CHANGED' } })).toBe(1);
   });
   it('rejects another operator, a foreign chat and correction after assignment', async () => {
@@ -53,15 +63,16 @@ describeIntegration('topic correction during distribution', () => {
     await expect(click(i.id, 'topic-set', 'none', actor, TEST_CHATS.sector)).rejects.toThrow();
     const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: GROUP_CODES.facility } });
     await services.distribution.assign(i.id, group.id, actor);
-    await expect(click(i.id, 'topic-set', 'none')).rejects.toThrow('до распределения');
+    await expect(click(i.id, 'topic-set', 'none')).rejects.toThrow('завершено');
     expect((await services.repository.findById(i.id))!.userSelectedCategoryId).toBe(i.userSelectedCategoryId);
   });
   it('supports Иное and refuses inactive topics and malformed selection', async () => {
     const i = await create(); const category = await prisma.category.findUniqueOrThrow({ where: { code: CATEGORY_CODES.it } });
+    await click(i.id, 'topic');
     await prisma.category.update({ where: { id: category.id }, data: { isActive: false } });
     await expect(click(i.id, 'topic-set', category.id)).rejects.toThrow('недоступна');
     await expect(click(i.id, 'topic-set', 'wrong')).rejects.toThrow();
-    await click(i.id, 'topic-set', 'none'); expect((await services.repository.findById(i.id))!.userSelectedCategoryId).toBeNull();
+    await click(i.id, 'topic'); await click(i.id, 'topic-set', 'none'); expect((await services.repository.findById(i.id))!.userSelectedCategoryId).toBeNull();
   });
   it('rolls back the topic and history when the durable card refresh fails', async () => {
     const i = await create();

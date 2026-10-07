@@ -156,32 +156,59 @@ describeIntegration('staff reservations and redistribution', () => {
     expect((await services.repository.findById(i.id))!.status).toBe('DISTRIBUTION');
     expect(await services.sessions.find(actor.maxUserId, TEST_CHATS.sector)).toBeNull();
   });
-  it('does not restore old sector pointers or buttons when an old publication finishes after reassignment', async () => {
+  it.each([GROUP_CODES.facility, GROUP_CODES.it])('does not restore old sector pointers or buttons when an old publication finishes after reassignment to %s', async (nextGroupCode) => {
     const i = await services.incidents.create({ requester: { maxUserId: 7110n, name: 'Иван Иванов', phone: '+79001112233' }, text: 'Дорога' });
     const group = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: GROUP_CODES.facility } });
+    const nextGroup = await prisma.responsibleGroup.findUniqueOrThrow({ where: { code: nextGroupCode } });
+    const legacyPointerWrite = vi.spyOn(services.incidents, 'setSectorMessageId');
     let unblock!: () => void, blocked = false;
     const gate = new Promise<void>(resolve => { unblock = resolve; });
+    let reachedSend!: () => void, reachedSecondPublication!: () => void;
+    const sending = new Promise<void>(resolve => { reachedSend = resolve; });
+    const secondPublication = new Promise<void>(resolve => { reachedSecondPublication = resolve; });
+    const publish = services.sector.publishCard.bind(services.sector);
+    let publicationsStarted = 0;
+    vi.spyOn(services.sector, 'publishCard').mockImplementation(async id => {
+      // assign() calls this only after the assignment transaction has committed.
+      if (++publicationsStarted === 2) reachedSecondPublication();
+      return publish(id);
+    });
     const originalSend = max.sendToChat.getMockImplementation();
     max.sendToChat.mockImplementation(async (...args: any[]) => {
-      if (args[0] === group.maxChatId && !blocked) { blocked = true; await gate; }
+      if (args[0] === group.maxChatId && !blocked) { blocked = true; reachedSend(); await gate; }
       return originalSend(...args);
     });
     const first = services.distribution.assign(i.id, group.id, actor);
-    for (let n = 0; !blocked && n < 400; n++) await new Promise(resolve => setTimeout(resolve, 5));
-    expect(blocked).toBe(true);
-    const returned = services.sector.returnToDistribution(i.id, actor, TEST_CHATS.sector, 'Нужна проверка получателя');
-    for (let n = 0; (await services.repository.findById(i.id))!.status !== 'DISTRIBUTION' && n < 400; n++) await new Promise(resolve => setTimeout(resolve, 5));
-    expect((await services.repository.findById(i.id))!.status).toBe('DISTRIBUTION');
-    const second = services.distribution.assign(i.id, group.id, actor);
-    for (let n = 0; (await services.repository.findById(i.id))!.status !== 'ASSIGNED' && n < 400; n++) await new Promise(resolve => setTimeout(resolve, 5));
-    unblock(); await Promise.all([first, returned, second]); await services.messages.flush();
+    let second: typeof first | undefined;
+    try {
+      await sending;
+      await services.sector.returnToDistribution(i.id, actor, TEST_CHATS.sector, 'Нужна проверка получателя');
+      expect((await services.repository.findById(i.id))!.status).toBe('DISTRIBUTION');
+      second = services.distribution.assign(i.id, nextGroup.id, actor);
+      await secondPublication;
+      expect((await services.repository.findById(i.id))!).toMatchObject({ status: 'ASSIGNED', assignedGroupId: nextGroup.id });
+    } finally {
+      unblock(); await Promise.all([first, second]);
+    }
+    await services.messages.flush(); await services.messages.waitForIdle();
     const publications = await prisma.outboundMessage.findMany({ where: { incidentId: i.id, trackingType: 'SECTOR_CARD' }, orderBy: { createdAt: 'asc' } });
     expect(publications).toHaveLength(2);
     const old = publications.find(p => p.dedupeKey === `sector-card:${i.id}`)!;
     const current = publications.find(p => p.id !== old.id)!;
+    expect(old).toMatchObject({ status: 'SENT', trackingApplied: false });
+    expect(current).toMatchObject({ status: 'SENT', trackingApplied: true, targetId: nextGroup.maxChatId });
     expect((await services.repository.findById(i.id))!.sectorMessageId).toBe(current.firstMessageId);
+    expect(legacyPointerWrite).not.toHaveBeenCalled();
+    const history = await prisma.incidentHistory.findMany({ where: { incidentId: i.id, action: 'SECTOR_CARD_SENT' } });
+    expect(history).toHaveLength(1);
+    expect(history[0]!.metadata).toMatchObject({ messageId: current.firstMessageId, outboxId: current.id });
     expect(lastEdit(old.firstMessageId!)[2]).toEqual([]);
     expect(lastEdit(current.firstMessageId!)[2].length).toBeGreaterThan(0);
+    // A later ownership change must still refresh only the current actionable card.
+    await services.sector.takeInWork(i.id, colleague); await services.messages.flush();
+    expect(lastEdit(old.firstMessageId!)[2]).toEqual([]);
+    expect(lastEdit(current.firstMessageId!)[1]).toContain(colleague.displayName);
+    expect((await services.repository.findById(i.id))!.sectorMessageId).toBe(current.firstMessageId);
   });
 
 });

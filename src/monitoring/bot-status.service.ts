@@ -63,11 +63,11 @@ export async function inspectBotHealth(prisma: PrismaClient, max: Pick<MaxClient
         prisma.inboundUpdate.count({ where: { status: 'FAILED' } }),
         prisma.outboundMessage.count({ where: { status: 'FAILED' } }),
         prisma.inboundUpdate.count({ where: { status: 'PENDING', attempts: { gt: 0 } } }),
-        prisma.outboundMessage.count({ where: { status: 'PENDING', attempts: { gt: 0 } } }),
+        prisma.outboundMessage.count({ where: { status: { in: ['PENDING', 'DEFERRED'] }, attempts: { gt: 0 } } }),
         prisma.inboundUpdate.count({ where: { status: 'PROCESSING', OR: [{ lockedAt: null }, { lockedAt: { lte: stale } }] } }),
         prisma.outboundMessage.count({ where: { status: 'SENDING', OR: [{ lockedAt: null }, { lockedAt: { lte: stale } }] } }),
         prisma.inboundUpdate.count({ where: { status: 'PENDING', attempts: 0, nextAttemptAt: { lte: delayed }, receivedAt: { lte: delayed } } }),
-        prisma.outboundMessage.count({ where: { status: 'PENDING', attempts: 0, nextAttemptAt: { lte: delayed }, createdAt: { lte: delayed } } }),
+        prisma.outboundMessage.count({ where: { status: { in: ['PENDING', 'DEFERRED'] }, attempts: 0, nextAttemptAt: { lte: delayed }, createdAt: { lte: delayed } } }),
       ]);
       return [
         inFailed + outFailed ? `Ошибки очередей: входящих ${inFailed}, исходящих ${outFailed}.` : '',

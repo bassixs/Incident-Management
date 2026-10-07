@@ -1,4 +1,7 @@
 import { AsyncActivity } from '../utils/async-activity';
+import { legacyOpen, workingOpen } from './policy';
+import { policyWorkingHours } from './working-time';
+import { workingDeadlineNotification, workingDeadlineTargets } from './working-notification';
 import { workingHours } from '../utils/work-calendar';
 import type { Incident, PrismaClient } from '@prisma/client';
 import { TRANSACTION_OPTIONS } from '../database/prisma';
@@ -81,9 +84,13 @@ export class SlaService {
     // Expiration is visible in cards/reports immediately, even after closing.
     // Only the notification waits until employees are working again.
     await this.prisma.incident.updateMany({ where: {
-      status: { notIn: ['RESOLVED', 'REJECTED'] }, slaPausedAt: null,
+      OR: [legacyOpen, workingOpen],
       deadlineAt: { lte: now }, isOverdue: false,
     }, data: { isOverdue: true } });
+    if (policyWorkingHours(now)) {
+      const due = await this.prisma.incident.findMany({ where: { ...workingOpen, deadlineAt: { lte: now }, workingDeadlineQueuedAt: null } });
+      for (const incident of due) await this.queueWorkingDeadline(incident, now);
+    }
     if (!workingHours(now)) return result;
 
     const candidates = await this.repository.listActiveForSla(now);
@@ -107,11 +114,29 @@ export class SlaService {
     return result;
   }
 
+  private async queueWorkingDeadline(incident: Incident, now: Date): Promise<void> {
+    const targets = workingDeadlineTargets();
+    if (!targets.length) return;
+    await this.prisma.$transaction(async tx => {
+      const claimed = await tx.incident.updateMany({ where: { ...workingOpen, id: incident.id, deadlineAt: { lte: now }, workingDeadlineQueuedAt: null },
+        data: { workingDeadlineQueuedAt: now } });
+      if (claimed.count !== 1) return;
+      const fresh = await tx.incident.findUniqueOrThrow({ where: { id: incident.id } });
+      for (const chatId of targets) await queueMessage(tx, { chatId }, {
+        text: workingDeadlineNotification(fresh), operation: { type: 'working-deadline', incidentId: incident.id },
+        delivery: { dedupeKey: `sla-working-v1:${incident.id}:${chatId}` },
+      }, incident.id);
+      await this.history.record({ incidentId: incident.id, action: 'SLA_WORKING_DEADLINE_QUEUED',
+        metadata: { deadlineAt: incident.deadlineAt.toISOString(), policy: incident.slaPolicy } }, tx);
+    }, TRANSACTION_OPTIONS);
+    this.messages.wake();
+  }
+
   /** Atomically claim the only reminder together with its history and delivery. */
   private async queueWarning(incident: Incident, stage: 24, now: Date): Promise<boolean> {
     const notification = await this.prisma.$transaction(async tx => {
       const claimed = await tx.incident.updateMany({
-        where: { id: incident.id, slaReminder24SentAt: null, slaWarn24SentAt: null, slaWarn6SentAt: null, overdueNotifiedAt: null, slaPausedAt: null, status: { notIn: ['RESOLVED', 'REJECTED'] } },
+        where: { id: incident.id, slaPolicy: 'LEGACY', slaReminder24SentAt: null, slaWarn24SentAt: null, slaWarn6SentAt: null, overdueNotifiedAt: null, slaPausedAt: null, status: { notIn: ['RESOLVED', 'REJECTED'] } },
         data: { slaReminder24SentAt: now },
       });
       if (claimed.count !== 1) return null;
