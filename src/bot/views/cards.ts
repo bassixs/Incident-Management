@@ -1,3 +1,4 @@
+import { executorSummary } from './executor-context';
 import { isWorkingPolicy, policyCardLines } from '../../sla/policy';
 import { RESIDENT_PHOTO_LIMIT } from '../../incidents/resident-photo-limit';
 import { OPTIONAL_PHONE_ADDED, OPTIONAL_PHONE_OFFER } from '../../privacy/optional-contact';
@@ -134,8 +135,7 @@ export function sectorCard(incident: IncidentWithRelations, group: ResponsibleGr
     'Территория проблемы:',
     problemLocationText(incident),
     '',
-    'Сообщение:',
-    incident.text,
+    ...executorSummary(incident),
     ...(incident.requesterPhone ? [`Телефон для связи: ${incident.requesterPhone}`] : []),
     ...(photoCount > 0 ? ['', ...attachmentLine(photoCount)] : []),
     ...(incident.currentResponder && (lease === undefined || lease || !['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(incident.status)) ? ['', '👤 Исполнитель:', incident.currentResponder.displayName] : []),
@@ -206,18 +206,9 @@ export function reviewCard(
 }
 
 /** §32 — the "returned for rework" card sent back to the sector chat. */
-export function revisionCard(incident: Incident, answerVersion: number, reason: string): string {
-  return [
-    '↩️ ОТВЕТ ВОЗВРАЩЁН НА ДОРАБОТКУ',
-    '',
-    codeLabel(incident),
-    '',
-    'Причина:',
-    reason,
-    '',
-    'Версия ответа:',
-    String(answerVersion),
-  ].join('\n');
+export function revisionCard(incident: Incident & Partial<Pick<IncidentWithRelations, 'answers' | 'attachments'>>, answerVersion: number, reason: string): string {
+  return ['↩️ ОТВЕТ ВОЗВРАЩЁН НА ДОРАБОТКУ', '', codeLabel(incident),
+    `Возвращена версия ${answerVersion}`, '', ...executorSummary({ ...incident, revisionReason: reason })].join('\n');
 }
 
 /**

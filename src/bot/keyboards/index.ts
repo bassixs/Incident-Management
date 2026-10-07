@@ -333,9 +333,9 @@ export function assignmentGroupKeyboard(
 /** Buttons under the sector-chat card (§21). */
 export function sectorKeyboard(incidentId: string, options: { hasTemplate: boolean; status?: string; hasPhone?: boolean }): Button[][] {
   const status = options.status ?? 'ASSIGNED';
-  if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(status)) return [];
+  if (!['ASSIGNED', 'IN_PROGRESS', 'REVISION_REQUIRED'].includes(status)) return executorContextKeyboard(incidentId);
   if (status === 'REVISION_REQUIRED') return revisionKeyboard(incidentId, options.hasPhone);
-  const rows: Button[][] = [];
+  const rows: Button[][] = executorContextKeyboard(incidentId);
   if (status === 'ASSIGNED') rows.push([button.callback('Взять в работу', incidentCallback('take', incidentId), { intent: 'positive' })]);
   rows.push([button.callback('Подготовить ответ', incidentCallback('answer', incidentId))]);
   if (options.hasTemplate) {
@@ -361,7 +361,7 @@ export function reviewKeyboard(incidentId: string, answerId: string): Button[][]
 
 /** Button under the "returned for revision" card in the sector chat (§32). */
 export function revisionKeyboard(incidentId: string, hasPhone = false): Button[][] {
-  return [[button.callback('Исправить ответ', incidentCallback('fix', incidentId), { intent: 'positive' })],
+  return [...executorContextKeyboard(incidentId), [button.callback('Исправить ответ', incidentCallback('fix', incidentId), { intent: 'positive' })],
     [button.callback('Вернуть на перераспределение', incidentCallback('redistribute', incidentId))],
     [button.callback('Освободить сообщение', `work:release:${incidentId}`)],
     [button.callback('Работать лично', incidentCallback('personal', incidentId))]];
@@ -389,4 +389,8 @@ export function sessionConflictKeyboard(): Button[][] {
     [button.callback('Продолжить', sessionCallback('continue'), { intent: 'positive' })],
     [button.callback('Отменить', sessionCallback('cancel'), { intent: 'negative' })],
   ];
+}
+
+export function executorContextKeyboard(incidentId: string): Button[][] {
+  return [[button.callback('Обращение и доработки', incidentCallback('context', incidentId))]];
 }
