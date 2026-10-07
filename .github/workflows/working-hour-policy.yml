@@ -105,6 +105,7 @@ jobs:
           node-version: '22'
       - run: mkdir -p evidence && git rev-parse HEAD > evidence/base-sha.txt
       - run: npm ci && npx prisma generate
+      - run: npx prisma migrate deploy && npm run build
       - name: Identical related tests on unchanged main
         run: >-
           npx vitest run tests/integration/distribution-queue.test.ts tests/integration/incident-lifecycle.test.ts
