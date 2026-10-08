@@ -66,6 +66,34 @@ class StreamingDocker(lab.MigrationKit):
   (OUT/'heavy-baseline-memory.json').write_text(json.dumps(result,indent=2));print(json.dumps(result),flush=True)
   self.assertNotEqual(p.returncode,0,'Heavy original-exporter failure must be reproduced, not presumed')
   self.assertIn('JS_HEAP_OOM',result['stderr']['markers'])
+ def test_stream_matches_v1_and_shared_snapshot(self):
+  from snapshot_exporter import Exporter
+  from data_stream import receive
+  # Small oracle only: proves byte-for-byte compatibility of every field hash.
+  sql(self.db,"""CREATE TABLE "SyntheticHashTypes"(id text primary key, txt text, n numeric, b boolean, j jsonb, ts timestamptz, absent text);
+INSERT INTO "SyntheticHashTypes" VALUES ('one','Unicode пример и \\ slash',123456789.1200,true,'{"x": [null, 1.20, true, "text"]}','2026-10-08T00:00:00Z',null);""")
+  folder=self.rootcase/'oracle';folder.mkdir();script=folder/'data-snapshot.cjs'
+  script.write_bytes(subprocess.check_output(['git','show','fc656d247ae0d8921a606c8dfd97e4684932ea02:tools/migration-kit/scripts/data-snapshot.cjs']))
+  env=self.install/'private/runtime.env'
+  old=json.loads(run('docker','run','--rm','-i','--network',lab.NET,'--env-file',env,'-v',f'{folder}:/ops:ro','--entrypoint','node',self.images['main'],'/ops/data-snapshot.cjs').stdout)
+  d=self.rootcase/'oracle-v2';d.mkdir()
+  cmd=['docker','run','--rm','-i','--network',lab.NET,'--cpus','0.5','--memory','384m','--env-file',str(env),'-v',f'{SCRIPTS}:/ops:ro','--entrypoint','node',self.images['main'],'/ops/data-snapshot.cjs','--export']
+  with Exporter(cmd,d) as exporter:
+   exporter.read_json('snapshot',30);m=receive(exporter,d/'data.sqlite');exporter.finish()
+  o.save_new(d/'data.json',m);c=opened(d/'data.json');count=0
+  for table,key,fields in c.execute('SELECT t,id,fields FROM rows'):
+   self.assertEqual(json.loads(fields),old['tables'][table][key]);count+=1
+  self.assertEqual(count,sum(len(x) for x in old['tables'].values()));c.close()
+  sql(self.db,'DROP TABLE "SyntheticHashTypes";')
+  dest=self.rootcase/'snapshot-fence'
+  with o.backup_lock(self.s) as fd:
+   p=run(sys.executable,Path(__file__).with_name('snapshot_fence_driver.py'),self.settings,dest,check=False,env=dict(os.environ,INCIDENT_OPS_LOCK_FD=str(fd)),pass_fds=(fd,))
+   self.assertEqual(p.returncode,0,p.stdout+p.stderr)
+   self.assertEqual(sql(self.db,"SELECT count(*) FROM \"SystemSetting\" WHERE key='after-export-fence';").strip(),'1')
+   self.cli(fd,'backup-data.py','verify','--output',dest)
+  c=opened(dest/'restored-data/data.json');self.assertIsNone(c.execute("SELECT id FROM rows WHERE t='SystemSetting' AND id='after-export-fence'").fetchone());c.close()
+  self.assertEqual(json.loads((dest/'restore-differences.json').read_text())['differenceCount'],0)
+  (OUT/'snapshot-fence-result.json').write_text(json.dumps({'v1FieldHashesExact':True,'oracleRows':count,'concurrentWriteExcludedFromDumpAndFingerprints':True,'restoredDifferences':0}))
  def test_heavy_old_and_new_backup_restore(self):
   heavy(self.db);self.baseline()
   (self.uploads/'long-photo.bin').write_bytes(b'photo'*300000)
@@ -95,5 +123,5 @@ class StreamingDocker(lab.MigrationKit):
   (OUT/'streaming-result.json').write_text(json.dumps({'passed':True,'measurements':measurements,'oldAndNewExact':True,'lockReleased':True},indent=2))
 
 if __name__=='__main__':
- r=unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite([StreamingDocker('test_heavy_old_and_new_backup_restore')]))
+ r=unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite([StreamingDocker('test_stream_matches_v1_and_shared_snapshot'),StreamingDocker('test_heavy_old_and_new_backup_restore')]))
  sys.exit(not r.wasSuccessful())

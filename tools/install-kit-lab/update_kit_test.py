@@ -4,7 +4,9 @@ from pathlib import Path
 import ops_test as lab
 from ops_test import o,g,run,sql,probe,ROOT,OUT,NET,PG
 sys.path.insert(0,str(lab.SCRIPTS))
-from data_check import compare
+from data_stream import differences,receive
+from snapshot_exporter import Exporter
+def compare(a,b,migrated=False):return list(differences(a,b,migrated))
 
 class UpdateKit(lab.MigrationKit):
  target_policy='WORKING_HOURS_V1'
@@ -25,7 +27,10 @@ class UpdateKit(lab.MigrationKit):
   super().setUp()
 
  def snapshot(self):
-  return json.loads(run('docker','run','--rm','-i','--network',NET,'--env-file',self.install/'private/runtime.env','-v',f'{lab.SCRIPTS}:/ops:ro','--entrypoint','node',self.images['main'],'/ops/data-snapshot.cjs').stdout)
+  dest=self.rootcase/('snapshot-'+os.urandom(5).hex());dest.mkdir()
+  with Exporter(['docker','run','--rm','-i','--network',NET,'--env-file',str(self.install/'private/runtime.env'),'-v',f'{lab.SCRIPTS}:/ops:ro','--entrypoint','node',self.images['main'],'/ops/data-snapshot.cjs','--export'],dest) as exporter:
+   exporter.read_json('snapshot',30);result=receive(exporter,dest/'data.sqlite');exporter.finish()
+  o.save_new(dest/'data.json',result);return dest/'data.json'
  def activate(self,fd):self.cli(fd,'activate-policy.py','activate-WORKING_HOURS_V1-for-new-incidents')
  def migrate(self,fd):super().migrate(fd);self.activate(fd)
  def seed(self):
