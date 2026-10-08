@@ -70,7 +70,7 @@ def exercise(h,conf,root,confirmation,mock):
   if service_result.returncode:
    x=c.inspect(cid);now_hashes={k:hashlib.sha256(json.dumps(x[k],sort_keys=True).encode()).hexdigest() for k in ['Config','HostConfig','Mounts']}
    old_hashes={k:hashlib.sha256(json.dumps(initial[k],sort_keys=True).encode()).hexdigest() for k in ['Config','HostConfig','Mounts']}
-   print(json.dumps({'beforeComponentHashes':old_hashes,'afterComponentHashes':now_hashes,'actualDockerHostIdentity':op.host_identity(),'ownerHostIdentity':state()['host']}),flush=True)
+   print(json.dumps({'beforeComponentHashes':old_hashes,'afterComponentHashes':now_hashes,'actualDockerHostIdentity':op.host_identity(),'ownerHostIdentity':state()['host'],'hostConfigDiff':{k:{'before':initial['HostConfig'].get(k),'after':x['HostConfig'].get(k)} for k in set(initial['HostConfig'])|set(x['HostConfig']) if initial['HostConfig'].get(k)!=x['HostConfig'].get(k)}}),flush=True)
    raise RuntimeError(journal.stdout.decode()+service_result.stderr.decode())
   check('daemon restart systemd restores only same app',c.app(conf)['Id']==cid and availability()['status']=='RECOVERED')
   # Cap/backoff are tested against a truly exited container; no sleep or widened timeout.
