@@ -8,7 +8,9 @@ def owner_path(conf):return pathlib.Path(conf['root'])/'state/operations.json'
 def host_identity():
  return {'machine':c.sha('/etc/machine-id'),'docker':c.run(['docker','info','--format','{{.ID}}'])}
 def container_hash(x):
- return hashlib.sha256(json.dumps({k:x[k] for k in ['Config','HostConfig','Mounts']},sort_keys=True).encode()).hexdigest()
+ # Docker serializes Mounts from a map; order is not a configuration change.
+ value={k:x[k] for k in ['Config','HostConfig']};value['Mounts']=sorted(x['Mounts'],key=lambda m:m['Destination'])
+ return hashlib.sha256(json.dumps(value,sort_keys=True).encode()).hexdigest()
 def code(error):return str(error) if isinstance(error,c.o.Refusal) and re.fullmatch('[A-Z0-9_]+',str(error)) else type(error).__name__
 def write_result(conf,name,value):
  value={'at':c.stamp(),**value};c.save(pathlib.Path(conf['root'])/'state'/name,value);print(json.dumps(value),flush=True);return value

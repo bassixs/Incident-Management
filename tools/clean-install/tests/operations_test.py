@@ -11,6 +11,14 @@ def exercise(h,conf,root,confirmation,mock):
  def state():return c.load(root/'state/operations.json')
  def availability():return c.load(root/'state/availability.json')
  cid=c.app(conf)['Id'];initial=c.inspect(cid)
+ import operations as op
+ samples=[c.inspect(cid) for _ in range(20)]
+ raw={hashlib.sha256(json.dumps({k:x[k] for k in ['Config','HostConfig','Mounts']},sort_keys=True).encode()).hexdigest() for x in samples}
+ normalized={op.container_hash(x) for x in samples}
+ evidence={'rawInspectHashes':len(raw),'normalizedHashes':len(normalized),'mountOrders':[list(v) for v in sorted({tuple(m['Destination'] for m in x['Mounts']) for x in samples})]}
+ check('Docker mount order canonical without ignoring fields',len(normalized)==1,evidence)
+ changed=json.loads(json.dumps(initial));changed['Mounts'].reverse();check('mount reordering is same configuration',op.container_hash(initial)==op.container_hash(changed))
+ changed['Mounts'][0]['Source']+='-changed';check('changed mount still changes identity',op.container_hash(initial)!=op.container_hash(changed))
  ops('supervise');check('operations disabled before handover',availability()['status']=='FENCED_NO_AUTOSTART')
  check('wrong handover cannot arm',ops('enable','--confirm-handover-complete','wrong',ok=False).returncode!=0)
  check('no verified daily backup cannot arm',ops('enable','--confirm-handover-complete',confirmation,ok=False).returncode!=0)

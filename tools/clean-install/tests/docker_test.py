@@ -144,6 +144,8 @@ def main():
  check('changed Caddy refuses preparation',run(sys.executable,S/'prepare-route.py','--config',active,'--sha256','0'*64,'--old','app:3000','--new',alias+':3000','--count','1','--output',OUT/'refused-route',check=False).returncode!=0)
  candidate=route/'Caddyfile.candidate'
  run('docker','run','--rm','--network','none','--mount',f'type=bind,src={candidate},dst=/etc/caddy/Caddyfile,readonly','--entrypoint','caddy',CADDY,'validate','--config','/etc/caddy/Caddyfile')
+ run('docker','exec','-i',proxy,'caddy','validate','--config','/dev/stdin','--adapter','caddyfile',input=candidate.read_bytes())
+ check('candidate validated in existing proxy context',True)
  # Preserve bind mount inode; only confirmed route bytes change, no container restart.
  with active.open('wb') as f:f.write(candidate.read_bytes());f.flush();os.fsync(f.fileno())
  run('docker','exec',proxy,'caddy','reload','--config','/etc/caddy/Caddyfile')
