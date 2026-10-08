@@ -1,5 +1,5 @@
 """Exact-image exporter failures + complete backup/restore, synthetic only."""
-import hashlib,json,os,sys,time,unittest
+import hashlib,json,os,sys,time,unittest,shutil
 from pathlib import Path
 import ops_test as lab
 from ops_test import run,sql,OUT,SCRIPTS
@@ -56,6 +56,12 @@ class ExporterChecks(lab.MigrationKit):
   dest=self.rootcase/'fresh-success';started=time.monotonic()
   with o.backup_lock(self.s) as fd:
    self.cli(fd,'backup-data.py','capture','--schema','old','--output',dest)
+   interrupted=self.rootcase/'restore-interrupted';shutil.copytree(dest,interrupted)
+   p=run(sys.executable,Path(__file__).with_name('exporter_fault_driver.py'),self.settings,interrupted,faults/'middle-stream.cjs','verify',check=False,env=dict(os.environ,INCIDENT_OPS_LOCK_FD=str(fd)),pass_fds=(fd,))
+   self.assertEqual(p.returncode,2,p.stdout+p.stderr);self.assertIn('EXPORTER_DATA_EOF',p.stdout+p.stderr)
+   self.assertFalse((interrupted/'restore-result.json').exists());self.assertFalse((interrupted/'restore.env').exists())
+   self.assertFalse(any(n.startswith(('incident-snapshot-','incident-restore-')) for n in run('docker','ps','-a','--format','{{.Names}}').stdout.splitlines()))
+   (OUT/'restore-interruption.json').write_text(json.dumps({'accepted':False,'temporaryContainersRemaining':0,'diagnostic':json.loads((interrupted/'restored-data/exporter-result.json').read_text())},indent=2))
    self.cli(fd,'backup-data.py','verify','--output',dest)
   restored=json.loads((dest/'restore-result.json').read_text())
   self.assertEqual(restored['databaseRows'],'exact');self.assertEqual(restored['files'],'exact');self.assertEqual(restored['schema'],'exact')

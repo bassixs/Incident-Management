@@ -7,7 +7,8 @@ import ops_common as o
 spec=importlib.util.spec_from_file_location('backup',SCRIPTS/'backup-data.py')
 b=importlib.util.module_from_spec(spec);spec.loader.exec_module(b)
 original=b.node
-settings,destination,fixture=sys.argv[1:]
+settings,destination,fixture=sys.argv[1:4]
+mode=sys.argv[4] if len(sys.argv)>4 else 'capture'
 def injected(s,env,network,script,*args):
  cmd=original(s,env,network,script,*args)
  if script=='data-snapshot.cjs' and '--export' in args:
@@ -21,6 +22,9 @@ def injected(s,env,network,script,*args):
    at=cmd.index('/faults/'+Path(fixture).name);cmd[at:at]=['--','node']
  return cmd
 b.node=injected
-try:b.capture(o.settings(settings),'old',Path(destination))
+try:
+ if mode=='capture':b.capture(o.settings(settings),'old',Path(destination))
+ elif mode=='verify':b.verify(o.settings(settings),Path(destination))
+ else:raise ValueError('Unknown synthetic action')
 except Exception as e:
  print('BACKUP_REFUSED:'+ (str(e) if isinstance(e,o.Refusal) else type(e).__name__),file=sys.stderr);sys.exit(2)

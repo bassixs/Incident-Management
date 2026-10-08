@@ -95,7 +95,12 @@ INSERT INTO "SyntheticHashTypes" VALUES ('one','Unicode пример и \\ slash
   self.assertEqual(json.loads((dest/'restore-differences.json').read_text())['differenceCount'],0)
   (OUT/'snapshot-fence-result.json').write_text(json.dumps({'v1FieldHashesExact':True,'oracleRows':count,'concurrentWriteExcludedFromDumpAndFingerprints':True,'restoredDifferences':0}))
  def test_heavy_old_and_new_backup_restore(self):
-  heavy(self.db);self.baseline()
+  heavy(self.db)
+  sql(self.db,"""INSERT INTO "InboundUpdate"(id,"externalUpdateKey","updateType","partitionKey",payload,status,"nextAttemptAt","lockedAt","processingToken","updatedAt")
+VALUES ('pending-control','pending-control','synthetic','control','{}','PENDING','2099-01-01',NULL,NULL,now()),('processing-control','processing-control','synthetic','control','{}','PROCESSING','2099-01-01','2099-01-01','synthetic-owner',now());
+INSERT INTO "OutboundMessage"(id,"targetType","targetId",payload,attachments,status,"nextAttemptAt","lockedAt","firstMessageId","updatedAt")
+SELECT 'partial-'||s,'chat',-989989,jsonb_build_object('deliveryProgress',jsonb_build_object('version',1,'planHash',repeat('0',64),'totalParts',2,'mids',jsonb_build_array('ack-1'))),'[]',s::"OutboxStatus",'2099-01-01','2099-01-01','ack-1',now() FROM unnest(ARRAY['PENDING','SENDING']) s;""")
+  self.baseline()
   (self.uploads/'long-photo.bin').write_bytes(b'photo'*300000)
   UpdateKit.seed(self)
   self.protected=sql(self.db,self.protected_sql)
@@ -105,6 +110,7 @@ INSERT INTO "SyntheticHashTypes" VALUES ('one','Unicode пример и \\ slash
     if phase=='new':
      self.stop(fd);self.migrate(fd)
      UpdateKit.seed_new(self)
+     sql(self.db,"""INSERT INTO "Incident"(id,"publicCode","requesterId","requesterMaxUserId","requesterName",text,status,"deadlineAt","slaPolicy","workingDeadlineQueuedAt","updatedAt") VALUES ('working-policy-control','INC-WORKING-SYNTH','control-user',88001,'Synthetic','Synthetic working policy','ASSIGNED','2099-01-01','WORKING_HOURS_V1',now(),now());""")
      # Stay stopped during this synthetic backup. No old runtime on new schema.
     dest=self.rootcase/('heavy-'+phase)
     measurements[phase]={action:self.measured(fd,action,phase,dest) for action in ['capture','verify']}
@@ -113,6 +119,8 @@ INSERT INTO "SyntheticHashTypes" VALUES ('one','Unicode пример и \\ slash
     self.assertEqual(list(differences(dest/'data.json',dest/'restored-data/data.json')),[])
     c=opened(dest/'data.json')
     self.assertGreater(c.execute('SELECT count(*) FROM rows').fetchone()[0],65000)
+    for table,keys in [('InboundUpdate',['pending-control','processing-control']),('OutboundMessage',['partial-PENDING','partial-SENDING'])]:
+     for key in keys:self.assertIsNotNone(c.execute('SELECT fields FROM rows WHERE t=? AND id=?',(table,key)).fetchone())
     if phase=='new':
      self.assertIsNotNone(c.execute("SELECT fields FROM rows WHERE t='IncidentAssignmentCycle' AND id='control-cycle'").fetchone())
      for key in ['control-deferred','control-cancelled','control-progress']:self.assertIsNotNone(c.execute("SELECT fields FROM rows WHERE t='OutboundMessage' AND id=?",(key,)).fetchone())

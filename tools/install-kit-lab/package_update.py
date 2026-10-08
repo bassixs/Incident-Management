@@ -26,7 +26,7 @@ shutil.copytree(ROOT/'tools/install-kit-lab',kit/'review/tests',ignore=shutil.ig
 for p in (ROOT/'kit-results').glob('exporter-fault-*.json'):shutil.copyfile(p,kit/'review'/p.name)
 
 for p in (ROOT/'kit-results').glob('*memory.json'):shutil.copyfile(p,kit/'review'/p.name)
-for name in ['streaming-result.json','heavy-volume.json','heavy-old-restore.json','heavy-new-restore.json','snapshot-fence-result.json']:
+for name in ['streaming-result.json','heavy-volume.json','heavy-old-restore.json','heavy-new-restore.json','snapshot-fence-result.json','restore-interruption.json']:
  shutil.copyfile(ROOT/'kit-results'/name,kit/'review'/name)
 shutil.copyfile(ROOT/'streaming.log',kit/'review/streaming.log')
 
