@@ -10,15 +10,24 @@ import ops_common as o
 from data_stream import opened,differences
 
 class Memory:
- def __init__(self):self.stop=threading.Event();self.values={};self.thread=threading.Thread(target=self.loop)
+ def __init__(self):self.stop=threading.Event();self.values={};self.errors=[];self.gone=0;self.thread=threading.Thread(target=self.loop)
  def __enter__(self):self.thread.start();return self
- def __exit__(self,*args):self.stop.set();self.thread.join()
+ def __exit__(self,*args):
+  self.stop.set();self.thread.join()
+  if self.errors:raise RuntimeError('Memory sampler failure: '+repr(self.errors))
  def loop(self):
   while not self.stop.is_set():
    try:
     ids=run('docker','ps','-q').stdout.split()
     if ids:
-     for c in json.loads(run('docker','inspect',*ids).stdout):
+     inspected=run('docker','inspect',*ids,check=False)
+     if inspected.returncode:
+      # --rm schema probes may finish between ps and inspect. Keep valid
+      # remaining rows; never silently lose the sampler thread or all samples.
+      if not all(line.startswith('Error: No such object:') for line in inspected.stderr.splitlines()):
+       raise RuntimeError('Unexpected inspect failure')
+      self.gone+=1
+     for c in json.loads(inspected.stdout):
       name=c['Name'].lstrip('/')
       if not name.startswith(('incident-snapshot-','stream-baseline','incident-restore-')) and name!=PG:continue
       pid=c['State']['Pid'];base=Path('/proc')/str(pid)
@@ -26,7 +35,8 @@ class Memory:
       peak=int((cg/'memory.peak').read_text());rss=next(int(v.split()[1])*1024 for v in (base/'status').read_text().splitlines() if v.startswith('VmRSS:'))
       v=self.values.setdefault(name,{'cgroupPeakBytes':0,'sampledProcessRssBytes':0,'samples':0,'limit':c['HostConfig']['Memory'],'image':c['Image']})
       v['cgroupPeakBytes']=max(v['cgroupPeakBytes'],peak);v['sampledProcessRssBytes']=max(v['sampledProcessRssBytes'],rss);v['samples']+=1
-   except (FileNotFoundError,ProcessLookupError,StopIteration):pass
+   except (FileNotFoundError,ProcessLookupError,StopIteration):self.gone+=1
+   except Exception as e:self.errors.append(type(e).__name__);return
    self.stop.wait(.25)
 
 def heavy(db):
@@ -47,7 +57,7 @@ class StreamingDocker(lab.MigrationKit):
   with Memory() as memory:
    p=run('/usr/bin/time','-f','%M', '-o',rss,*args,check=False,env=dict(os.environ,INCIDENT_OPS_LOCK_FD=str(fd)),pass_fds=(fd,))
   log.write_text(p.stdout+p.stderr)
-  result={'exitCode':p.returncode,'elapsedSeconds':time.monotonic()-started,'pythonPeakRssKiB':int(rss.read_text().splitlines()[-1]),'containers':memory.values}
+  result={'exitCode':p.returncode,'elapsedSeconds':time.monotonic()-started,'pythonPeakRssKiB':int(rss.read_text().splitlines()[-1]),'containers':memory.values,'samplerDisappearedBetweenReads':memory.gone}
   (OUT/f'{phase}-{action}-memory.json').write_text(json.dumps(result,indent=2))
   self.assertEqual(p.returncode,0,p.stdout+p.stderr);self.assertLess(result['pythonPeakRssKiB'],128*1024,'Receiver/comparator must stay bounded, not merely move Node allocation')
   self.assertTrue(any(n.startswith('incident-snapshot-') for n in memory.values),'Exporter memory sampling required')
@@ -62,7 +72,7 @@ class StreamingDocker(lab.MigrationKit):
    p.communicate(b'release\n',timeout=150)
   state=o.inspect('stream-baseline')['State'];run('docker','rm','stream-baseline')
   from snapshot_exporter import clean_stderr
-  result={'exitCode':p.returncode,'state':state,'elapsedSeconds':time.monotonic()-start,'scriptSha256':hashlib.sha256(script.read_bytes()).hexdigest(),'stdoutBytes':out.stat().st_size,'stderr':clean_stderr(err.read_text(errors='replace')),'containers':memory.values}
+  result={'exitCode':p.returncode,'state':state,'elapsedSeconds':time.monotonic()-start,'scriptSha256':hashlib.sha256(script.read_bytes()).hexdigest(),'stdoutBytes':out.stat().st_size,'stderr':clean_stderr(err.read_text(errors='replace')),'containers':memory.values,'samplerDisappearedBetweenReads':memory.gone}
   (OUT/'heavy-baseline-memory.json').write_text(json.dumps(result,indent=2));print(json.dumps(result),flush=True)
   self.assertNotEqual(p.returncode,0,'Heavy original-exporter failure must be reproduced, not presumed')
   self.assertTrue('JS_HEAP_OOM' in result['stderr']['markers'] or (state['OOMKilled'] and p.returncode==137), 'Require positive memory-exhaustion evidence, not just any nonzero exit')
