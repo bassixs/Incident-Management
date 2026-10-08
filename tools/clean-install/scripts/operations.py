@@ -9,7 +9,11 @@ def host_identity():
  return {'machine':c.sha('/etc/machine-id'),'docker':c.run(['docker','info','--format','{{.ID}}'])}
 def container_hash(x):
  # Docker serializes Mounts from a map; order is not a configuration change.
- value={k:x[k] for k in ['Config','HostConfig']};value['Mounts']=sorted(x['Mounts'],key=lambda m:m['Destination'])
+ value={'Config':x['Config'],'HostConfig':dict(x['HostConfig'])};value['Mounts']=sorted(x['Mounts'],key=lambda m:m['Destination'])
+ # Moby readHostConfig -> InitDNSHostConfig converts only these nil slices to [].
+ # Keep actual DNS entries/order and every other field exact.
+ for key in ['Dns','DnsSearch','DnsOptions']:
+  if key in value['HostConfig'] and value['HostConfig'][key] is None:value['HostConfig'][key]=[]
  return hashlib.sha256(json.dumps(value,sort_keys=True).encode()).hexdigest()
 def code(error):return str(error) if isinstance(error,c.o.Refusal) and re.fullmatch('[A-Z0-9_]+',str(error)) else type(error).__name__
 def write_result(conf,name,value):

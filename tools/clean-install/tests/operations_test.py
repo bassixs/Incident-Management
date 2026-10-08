@@ -19,6 +19,10 @@ def exercise(h,conf,root,confirmation,mock):
  check('Docker mount order canonical without ignoring fields',len(normalized)==1,evidence)
  changed=json.loads(json.dumps(initial));changed['Mounts'].reverse();check('mount reordering is same configuration',op.container_hash(initial)==op.container_hash(changed))
  changed['Mounts'][0]['Source']+='-changed';check('changed mount still changes identity',op.container_hash(initial)!=op.container_hash(changed))
+ for key in ['Dns','DnsSearch','DnsOptions']:
+  nil=json.loads(json.dumps(initial));empty=json.loads(json.dumps(initial));nil['HostConfig'][key]=None;empty['HostConfig'][key]=[]
+  check('Docker nil versus empty '+key,op.container_hash(nil)==op.container_hash(empty))
+  empty['HostConfig'][key]=['changed'];check('actual '+key+' change refuses',op.container_hash(nil)!=op.container_hash(empty))
  ops('supervise');check('operations disabled before handover',availability()['status']=='FENCED_NO_AUTOSTART')
  check('wrong handover cannot arm',ops('enable','--confirm-handover-complete','wrong',ok=False).returncode!=0)
  check('no verified daily backup cannot arm',ops('enable','--confirm-handover-complete',confirmation,ok=False).returncode!=0)

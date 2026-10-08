@@ -153,6 +153,8 @@ def main():
  def curl(path):return run('curl','--silent','--show-error','--fail','--noproxy','*','--cacert',ca,'--resolve','synthetic.localhost:23102:127.0.0.1','https://synthetic.localhost:23102'+path).stdout
  check('existing Caddy reaches returned app',curl('/ready') and curl('/health'))
  check('existing unrelated Caddy route preserved',curl('/documents/control')==b'other-service-preserved')
+ bad=run('docker','exec','-i',proxy,'caddy','reload','--config','/dev/stdin','--adapter','caddyfile',input=b'{ unknown_invalid_directive }',check=False)
+ check('refused proxy reload preserves active app and other route',bad.returncode!=0 and bool(curl('/ready')) and curl('/documents/control')==b'other-service-preserved')
  proxy_after=c.inspect(proxy);check('Caddy ID start and restart count unchanged',all(proxy_before[k]==proxy_after[k] for k in ['Id','RestartCount']) and proxy_before['State']['StartedAt']==proxy_after['State']['StartedAt'])
  # External checker runs outside app container and uses independently trusted TLS.
  hosts=pathlib.Path('/etc/hosts');saved=hosts.read_bytes()
