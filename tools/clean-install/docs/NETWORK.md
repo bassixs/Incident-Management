@@ -1,0 +1,15 @@
+# Проверки сети до остановки источника
+
+1. С двух независимых внешних подключений: `dig A DOMAIN`, `dig AAAA DOMAIN`, `curl --fail --show-error https://DOMAIN/handover-check` (без -k), `openssl s_client -connect DOMAIN:443 -servername DOMAIN -verify_return_error </dev/null`. Ожидаются правильные адреса, полная публично доверенная цепочка, имя/срок сертификата и точный challenge из settings.json. Неверный AAAA тоже мешает доставке. Порты80/443 и исходящий ACME должны работать; Caddy data/config должны сохраняться. Локальный CA стенда НЕ годится MAX.
+2. Проверить DNS/исходящий TCP443/TLS к platform-api2.max.ru из front-сети контейнера. Использовать ТОЛЬКО entrypoint node со standalone network-probe.cjs, не dist/index.js. Перед первым использованием прочитать скрипт. Без токена 401 доказывает доступность сети/TLS, но не авторизацию. После защищённого получения настроек GET /me должен быть успешным. NODE_EXTRA_CA_CERTS указывает на включённый доверенный CA, не отключать проверку TLS.
+
+```bash
+# MAINID и PROJECT берутся из приватного settings.json. ROOT/KIT абсолютные.
+printf '{"attachments":[],"publicDomain":"%s"}' "$DOMAIN" | docker run --rm -i --network "${PROJECT}_front" --cpus .5 --memory 384m --pids-limit 128 --mount "type=bind,src=$KIT/scripts,dst=/check,readonly" --mount "type=bind,src=$ROOT/private/russian-trusted-ca.pem,dst=/etc/ssl/max/russian-trusted-ca.pem,readonly" -e NODE_EXTRA_CA_CERTS=/etc/ssl/max/russian-trusted-ca.pem --entrypoint node "$MAINID" /check/network-probe.cjs
+```
+
+После restore повторить с `--env-file "$ROOT/private/runtime.env"`. Это одноразовый GET-процесс, не второй бот. Для проверки вложений администратор готовит закрытый JSON stdin с несколькими действующими одобренными ссылками MAX CDN (предпочтительно синтетическими; рабочие — только с разрешения). Передавать файл через stdin, не URL в shell; не публиковать URL/token/query. Скрипт скачивает поток до25MiB в никуда и сообщает только host/status/bytes/hash пути. redirects отказные — отдельно выяснить утверждённый конечный хост, не пересылать Authorization на CDN. attachments=[] означает «получение вложений не проверено», а не успешную проверку фото. Исторические max-photo сохраняются как MAX tokens/refs, не превращаются в локальные файлы; срок доступности CDN вне контроля копирования.
+3. Если собственный публичный DOMAIN недоступен из front-сети, сохранить DNS/TCP/TLS-код ошибки и проверить hairpin/NAT с администратором. Это не единственный критерий вебхука: внешний доверенный HTTPS, MAX subscription и реальные входящие события после согласованного запуска проверяются отдельно. Отказ собственного домена не скрывать, но не чинить вслепую и не подставлять неизвестный внутренний адрес.
+4. Astra: фактически проверить bind mounts/chown для UID1000 app и PostgreSQL, разрешения MAC/контейнеров, Docker/ComposeJSON, IP forwarding, firewall и контейнерный DNS. Изолированный Ubuntu-прогон эти особенности не сертифицирует.
+
+Источники: https://docs.docker.com/engine/daemon/ ; https://docs.docker.com/engine/storage/containerd/ ; https://caddyserver.com/docs/automatic-https ; https://dev.max.ru/docs-api/methods/GET/subscriptions

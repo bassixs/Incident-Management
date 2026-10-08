@@ -45,7 +45,7 @@ def none_running(c,allowed=None):
  token=envread(pathlib.Path(c['root'])/'private/runtime.env').get('BOT_TOKEN') if (pathlib.Path(c['root'])/'private/runtime.env').exists() else None
  for cid in run(['docker','ps','-q']).split():
   x=inspect(cid);e=dict(v.split('=',1) for v in x['Config'].get('Env',[]) if '=' in v)
-  if x['Name'].lstrip('/')==c['project']+'-app' or (token and e.get('BOT_TOKEN')==token):need(cid==allowed,'ANOTHER_APP_RUNNING')
+  if x['Name'].lstrip('/')==c['project']+'-app' or (token and e.get('BOT_TOKEN')==token):need(x['Id']==allowed,'ANOTHER_APP_RUNNING')
 def checked_image(role,iid):
  x=inspect(iid);need(x['Id'] in IMAGES[role][:2] and x['Config'].get('Labels',{}).get('org.opencontainers.image.revision')==IMAGES[role][2] and x['Architecture']=='amd64' and x['Os']=='linux','WRONG_APPLICATION_IMAGE');return x['Id']
 def pg(c):return c['project']+'-postgres'
@@ -126,7 +126,7 @@ def context(root):
   finally:fcntl.flock(f,fcntl.LOCK_UN)
 def state(c,s,phase,**kw):s.update(phase=phase,at=stamp(),**kw);save(pathlib.Path(c['root'])/'state/state.json',s)
 def inventory(c,s):
- none_running(c,s.get('appId') if s['phase']=='running' else None)
+ none_running(c,s.get('appId') if s['phase'] in ['running','start-intent'] else None)
  if 'pgId' in s:need(inspect(pg(c))['Id']==s['pgId'],'POSTGRES_CHANGED')
 def infra(c,s):
  need(s['phase']=='prepared','PHASE_INVALID');none_running(c);state(c,s,'infra-intent')
@@ -141,7 +141,7 @@ def restore(c,s,backup,envelope):
  need(s['phase']=='infra-ready','RESTORE_PHASE');inventory(c,s);need(app(c) is None,'APP_EXISTS');b=pathlib.Path(backup);e=load(envelope)
  for n,h in load(b/'checksums.json').items():need(pathlib.Path(n).name==n and sha(b/n)==h,'BACKUP_CHECKSUM_MISMATCH')
  v=load(b/'restore-result.json');need(v.get('databaseRows')==v.get('schema')==v.get('files')=='exact' and load(b/'restore-differences.json')['differenceCount']==0 and v['backupChecksumsSha256']==sha(b/'checksums.json'),'SOURCE_RESTORE_UNVERIFIED')
- meta=load(b/'backup.json');need(e.get('format')=='source-fence-v1' and e.get('backupChecksums')==sha(b/'checksums.json') and e.get('sourceStopped') is True and e['sourceIdentity']==meta['application'] and e['sourceIdentity']['image'] in IMAGES['main'][:2] and meta.get('finalRun'),'SOURCE_FENCE_REQUIRED')
+ meta=load(b/'backup.json');need(e.get('format')=='source-fence-v1' and e.get('backupChecksums')==sha(b/'checksums.json') and e.get('sourceStopped') is True and e['sourceIdentity']==meta['application'] and e['sourceIdentity']['image'] in (*IMAGES['main'][:2],*IMAGES['reserve'][:2]) and meta.get('finalRun'),'SOURCE_FENCE_REQUIRED')
  need(mg.schema_matches(meta['schema'],load(ROOT/'schema-expectations.json')['new']),'BACKUP_SCHEMA_NOT_NEW')
  need(psql(c,"BEGIN READ ONLY;SET LOCAL statement_timeout='5s';SELECT count(*) FROM information_schema.tables WHERE table_schema='public';COMMIT;")=='0','TARGET_DATABASE_NOT_EMPTY')
  state(c,s,'restore-intent',sourceFence=e,backupChecksums=sha(b/'checksums.json'))
@@ -170,7 +170,7 @@ def start(c,s,role,confirm):
  if x:
   need(x['Id']==s.get('appId') and not x['State']['Running'] and x['Config'].get('Labels',{}).get('onlink40.handover')==c['project'],'UNRECOGNIZED_APP');need(s['phase'] in ['stopped','start-failed'],'UNEXPECTED_CONTAINER');run(['docker','rm',x['Id']])
  if not s['everStartAttempted']:
-  before=fingerprint(c,pathlib.Path(c['root'])/'state/prestart');need(report(pathlib.Path(c['root'])/'state/restored/data.json',before,pathlib.Path(c['root'])/'state/prestart-differences.json')==0,'DATA_CHANGED_BEFORE_FIRST_START');verify_files(pathlib.Path(c['root'])/'uploads',s['files'])
+  pre=pathlib.Path(c['root'])/('state/prestart-'+secrets.token_hex(8));before=fingerprint(c,pre);need(report(pathlib.Path(c['root'])/'state/restored/data.json',before,pre/'differences.json')==0,'DATA_CHANGED_BEFORE_FIRST_START');verify_files(pathlib.Path(c['root'])/'uploads',s['files'])
  state(c,s,'create-intent',role=role,appId=None)
  try:
   compose(c,role,['create','--no-build','--pull','never','app']);x=app(c);need(x and x['Image']==c['images'][role],'CREATED_IMAGE_MISMATCH');state(c,s,'start-intent',appId=x['Id'],everStartAttempted=True)
@@ -187,9 +187,9 @@ def stop(c,s):
   y=inspect(x['Id'])
   if not y['State']['Running']:break
   need(time.monotonic()<deadline,'STOP_TIMEOUT_NO_SIGKILL');time.sleep(.3)
- need(y['State']['ExitCode']==0 and not y['State']['OOMKilled'],'UNCLEAN_STOP');r=subprocess.run(['docker','logs','--since',at,y['Id']],capture_output=True,timeout=10);need(r.returncode==0 and b'graceful shutdown completed' in r.stdout+r.stderr,'GRACEFUL_STOP_NOT_CONFIRMED');state(c,s,'stopped',stopAt=stamp());none_running(c);print('STOPPED_NO_SIGKILL')
+ need(y['State']['ExitCode']==0 and not y['State']['OOMKilled'],'UNCLEAN_STOP');r=subprocess.run(['docker','logs','--since',at,y['Id']],capture_output=True,timeout=10);need(r.returncode==0 and b'graceful shutdown completed' in r.stdout+r.stderr,'GRACEFUL_STOP_NOT_CONFIRMED');save(pathlib.Path(c['root'])/'state/stop-receipt.json',{'clean':True,'identity':o.identity(y),'finishedAt':y['State']['FinishedAt']});state(c,s,'stopped',stopAt=stamp());none_running(c);print('STOPPED_NO_SIGKILL')
 def abandon(c,s):
- need(not s['everStartAttempted'] and s['phase'] in ['verified','start-failed'],'TARGET_MAY_HAVE_NEW_DATA');inventory(c,s);x=app(c);need(x is None or (not x['State']['Running'] and x['State']['Status']=='created'),'TARGET_MAY_HAVE_RUN');state(c,s,'abandoned');print('TARGET_ABANDONED_SOURCE_RESUME_REQUIRES_OWNER_CONFIRMATION')
+ need(not s['everStartAttempted'] and s['phase'] in ['verified','start-failed'],'TARGET_MAY_HAVE_NEW_DATA');inventory(c,s);x=app(c);need(x is None or (not x['State']['Running'] and x['State']['Status']=='created'),'TARGET_MAY_HAVE_RUN');state(c,s,'abandoned');save(pathlib.Path(c['root'])/'state/abandon-proof.json',{'format':'clean-host-abandon-v1','at':stamp(),'sourceFence':s['sourceFence'],'everStartAttempted':False,'targetAppRunning':False});print('TARGET_ABANDONED_SOURCE_RESUME_REQUIRES_OWNER_CONFIRMATION')
 def main():
  os.umask(0o077);a=argparse.ArgumentParser();a.add_argument('--root',required=True);a.add_argument('action',choices=['init','infra','restore','start','stop','abandon','status']);a.add_argument('--domain');a.add_argument('--pg-image');a.add_argument('--caddy-image');a.add_argument('--port',type=int,default=3001);a.add_argument('--http-port',type=int,default=80);a.add_argument('--https-port',type=int,default=443);a.add_argument('--backup');a.add_argument('--envelope');a.add_argument('--role',choices=['main','reserve'],default='main');a.add_argument('--confirm-source-stopped');v=a.parse_args()
  if v.action=='init':init(v);return

@@ -53,6 +53,7 @@ def source_backup(conf,root,container):
  with Exporter(cmd,d) as e:e.read_json('snapshot',30);v=receive(e,d/'data.sqlite');e.finish()
  c.save(d/'data.json',v);check('source genuine restore data exact',report(b/'data.json',d/'data.json',b/'restore-differences.json')==0)
  restored=json.loads(c.run(c.node(conf,'schema-probe.cjs',env='verify.env',network='container:'+cid)));check('source genuine restore schema exact',c.mg.schema_matches(restored['schema'],c.load(S/'schema-expectations.json')['new']))
+ extracted=b/'verify-files';extracted.mkdir();c.untar(b/'uploads.tar.gz',extracted,files)
  c.save(b/'restore-result.json',{'databaseRows':'exact','schema':'exact','files':'exact','backupChecksumsSha256':c.sha(b/'checksums.json')})
  # Source receipt models the existing reviewed graceful stop receipt, from actual Docker state.
  x=c.inspect(container);c.save(root/'source-stop.json',{'clean':True,'identity':identity,'finishedAt':x['State']['FinishedAt']})
@@ -81,14 +82,23 @@ def main():
  wait(lambda:len(row(sc)['payload'].get('deliveryProgress',{}).get('mids',[]))==1)
  run('docker','kill','--signal=TERM',app);wait(lambda:not c.inspect(app)['State']['Running'],75);check('real source graceful stop',c.inspect(app)['State']['ExitCode']==0 and b'graceful shutdown completed' in run('docker','logs',app).stdout)
  partial=row(sc)['payload']['deliveryProgress'];check('actual first ACK saved',len(partial['mids'])==1)
+ # Same-container return before transfer, then a NEW final backup.
+ run('docker','start',app);c.ready(sc,app);check('source same-container resume before handover',c.app(sc)['Id']==app)
+ run('docker','kill','--signal=TERM',app);wait(lambda:not c.inspect(app)['State']['Running'],75)
  backup,envelope=source_backup(sc,source,app);code=c.load(envelope)['handoffCode']
- target=OUT/'target';tc=init(target,23101);run('docker','network','connect','--alias','mock',tc['project']+'_front',mock)
+ cancel=OUT/'cancel';cc=init(cancel,25001);invoke(cancel,'restore','--backup',backup,'--envelope',envelope);invoke(cancel,'abandon');check('abandon before first start',c.load(cancel/'state/abandon-proof.json')['everStartAttempted'] is False);check('cannot start abandoned target',invoke(cancel,'start','--confirm-source-stopped',code,ok=False).returncode!=0);check('cannot repeat abandon',invoke(cancel,'abandon',ok=False).returncode!=0)
+ target=OUT/'target';tc=init(target,24001);run('docker','network','connect','--alias','mock',tc['project']+'_front',mock)
  check('preparation never starts target app',c.app(tc) is None)
  invoke(target,'restore','--backup',backup,'--envelope',envelope);check('new identity, exact new schema',c.schema(tc)!=c.schema(sc))
  before=c.psql(tc,"SELECT md5(string_agg(row_to_json(t)::text,'' ORDER BY id)) FROM \"Incident\" t;");failed=c.psql(tc,"SELECT row_to_json(t) FROM \"OutboundMessage\" t WHERE id IN ('FAILED','CANCELLED','DEFERRED') ORDER BY id;")
+ # Actual Caddy TLS with synthetic local CA, not public ACME attestation.
+ wait(lambda:(target/'caddy-data/caddy/pki/authorities/local/root.crt').is_file())
+ tls=run('curl','--silent','--show-error','--noproxy','*','--cacert',target/'caddy-data/caddy/pki/authorities/local/root.crt','--resolve','synthetic.localhost:24102:127.0.0.1','https://synthetic.localhost:24102/handover-check');check('Caddy HTTPS challenge with trusted synthetic CA',tls.stdout.decode()==tc['challenge'])
+ original=(target/'main.compose.json').read_bytes();(target/'main.compose.json').write_bytes(original+b' ');check('changed configuration refuses',invoke(target,'status',ok=False).returncode!=0);(target/'main.compose.json').write_bytes(original)
  check('restored partial ACK unchanged',row(tc)['payload']['deliveryProgress']==partial)
  check('duplicate restore refuses',invoke(target,'restore','--backup',backup,'--envelope',envelope,ok=False).returncode!=0)
  check('wrong source confirmation refuses',invoke(target,'start','--confirm-source-stopped','wrong',ok=False).returncode!=0)
+ dummy='clean-second-instance';owned.append(dummy);run('docker','run','-d','--name',dummy,'--network','none','-e','BOT_TOKEN=synthetic-container-token','--entrypoint','node',tc['images']['main'],'-e','setInterval(()=>{},1000)');check('second token instance refuses before create',invoke(target,'start','--confirm-source-stopped',code,ok=False).returncode!=0);run('docker','stop',dummy);run('docker','rm',dummy)
  # Actual Docker create failure through disappearing bind source, no weakened guard.
  wrapper=OUT/'wrapper';wrapper.mkdir();docker=shutil.which('docker');flag=OUT/'fail-create-once';flag.touch();script=wrapper/'docker'
  script.write_text('#!/usr/bin/env python3\nimport os,sys,pathlib\na=sys.argv[1:]\nif "compose" in a and "create" in a and pathlib.Path('+repr(str(flag))+').exists():\n pathlib.Path('+repr(str(flag))+').unlink();pathlib.Path('+repr(str(target/'uploads'))+').rename('+repr(str(target/'uploads-held'))+')\nos.execv('+repr(docker)+',['+repr(docker)+']+a)\n');script.chmod(0o755)
@@ -98,9 +108,24 @@ def main():
  check('FAILED CANCELLED DEFERRED preserved',failed==c.psql(tc,"SELECT row_to_json(t) FROM \"OutboundMessage\" t WHERE id IN ('FAILED','CANCELLED','DEFERRED') ORDER BY id;"))
  for role in ['main','reserve','main']:
   started=time.monotonic();invoke(target,'stop');elapsed=time.monotonic()-started;check('actual SIGTERM '+role,elapsed<75,{'seconds':elapsed});invoke(target,'start','--role',role,'--confirm-source-stopped',code);check('ready '+role,c.app(tc)['State']['Running'] and c.app(tc)['Image']==tc['images'][role])
+ # Genuine failed start: occupied loopback port, then reserve on unchanged DB.
+ invoke(target,'stop')
+ holder=subprocess.Popen([sys.executable,'-m','http.server','24001','--bind','127.0.0.1'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+ try:
+  wait(lambda: __import__('socket').socket().connect_ex(('127.0.0.1',24001))==0)
+  r=invoke(target,'start','--role','main','--confirm-source-stopped',code,ok=False);check('real start port bind failure',r.returncode!=0 and c.load(target/'state/state.json')['phase']=='start-failed')
+ finally:holder.terminate();holder.wait(5)
+ invoke(target,'start','--role','reserve','--confirm-source-stopped',code)
+ check('reserve after failed start ready',c.app(tc)['State']['Running'])
  check('incident data preserved after switches',before==c.psql(tc,"SELECT md5(string_agg(row_to_json(t)::text,'' ORDER BY id)) FROM \"Incident\" t;"))
  check('policy retained',c.envread(target/'private/runtime.env')['INCIDENT_SLA_POLICY']=='WORKING_HOURS_V1')
- invoke(target,'stop');check('cannot abandon after any target start',invoke(target,'abandon',ok=False).returncode!=0)
+ c.psql(tc,"UPDATE \"Incident\" SET text=text||' after-target-start' WHERE id='new';");current=c.psql(tc,"SELECT md5(string_agg(row_to_json(t)::text,'' ORDER BY id)) FROM \"Incident\" t;")
+ invoke(target,'stop')
+ run(sys.executable,S/'snapshot.py','--root',target,'--output',target/'current-final','--final')
+ check('new target backup restored exactly',c.load(target/'current-final/restore-differences.json')['differenceCount']==0)
+ run(sys.executable,S/'seal-source.py','--backup',target/'current-final','--stop-receipt',target/'state/stop-receipt.json','--output',target/'reverse-envelope.json')
+ reverse=OUT/'reverse';rc=init(reverse,26001);run('docker','network','connect','--alias','mock',rc['project']+'_front',mock);invoke(reverse,'restore','--backup',target/'current-final','--envelope',target/'reverse-envelope.json');invoke(reverse,'start','--confirm-source-stopped',c.load(target/'reverse-envelope.json')['handoffCode']);check('reverse transfer uses CURRENT target data',current==c.psql(rc,"SELECT md5(string_agg(row_to_json(t)::text,'' ORDER BY id)) FROM \"Incident\" t;"));invoke(reverse,'stop')
+ check('cannot abandon after any target start',invoke(target,'abandon',ok=False).returncode!=0)
  # Lock ownership and release on refusal.
  with (target/'backup.lock').open('rb') as f:
   fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB);check('busy backup lock refuses',invoke(target,'status',ok=False).returncode!=0);fcntl.flock(f,fcntl.LOCK_UN)

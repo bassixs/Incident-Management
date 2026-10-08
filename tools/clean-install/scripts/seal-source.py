@@ -8,7 +8,7 @@ def seal(backup,receipt,dest):
  need(not d.exists(),'NEW_ENVELOPE_REQUIRED')
  for n,h in load(b/'checksums.json').items():need(pathlib.Path(n).name==n and sha(b/n)==h,'BACKUP_CHECKSUM_MISMATCH')
  need(r.get('clean') is True and r['identity']==m['application'] and m.get('finalRun'),'STOP_RECEIPT_MISMATCH')
- need(m['application']['image'] in IMAGES['main'][:2],'SOURCE_IMAGE_NOT_MAIN')
+ need(m['application']['image'] in (*IMAGES['main'][:2],*IMAGES['reserve'][:2]),'SOURCE_IMAGE_NOT_REVIEWED')
  x=inspect(r['identity']['id']);need(not x['State']['Running'] and x['State']['Status']=='exited' and x['State']['ExitCode']==0 and not x['State']['OOMKilled'],'SOURCE_NOT_CLEANLY_STOPPED')
  need(o.identity(x)==r['identity'],'SOURCE_CONTAINER_CHANGED')
  need(datetime.datetime.fromisoformat(m['createdAt'])>=datetime.datetime.fromisoformat(r['finishedAt'].replace('Z','+00:00')),'BACKUP_PRECEDES_STOP')
