@@ -1,7 +1,7 @@
-name: Clean host handover review
+name: Clean host operations review
 on:
   push:
-    branches: [codex/clean-handover-20261008]
+    branches: [codex/clean-operations-20261008]
     paths: ['tools/clean-install/**', '.github/workflows/clean-handover.yml']
 permissions:
   contents: read
@@ -15,7 +15,7 @@ defaults:
 jobs:
   docker:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -26,14 +26,15 @@ jobs:
         run: |
           set -euo pipefail
           test -z "$(docker ps -aq)"
-          gh api repos/bassixs/Incident-Management/actions/artifacts/11510892680/zip > verified-images.zip
-          echo '1f7c00408d24f7d1b928e5580f25b07b4e169acc6847948a75265ed7c576641b  verified-images.zip' | sha256sum -c -
+          gh api repos/bassixs/Incident-Management/actions/artifacts/11557056133/zip > previous-kit.zip
+          echo '548d3294f28946a24a3ee57572f47ed82066f1793210b6fbdfd9475787971ee9  previous-kit.zip' | sha256sum -c -
+          unzip -q previous-kit.zip -d previous-package
+          echo 'f5613be1a1c062fe0e9b38fc2bc22ee307f21dd824e6b654c6e46676cbe8d2fc  previous-package/clean-install-reviewed.zip' | sha256sum -c -
           mkdir verified-images
-          unzip -q verified-images.zip -d verified-images
-          echo '0bfa90370526dc2f4110b5d6408d68e6fae58fca440eecf6a90511e147b32a83  verified-images/main-and-reserve.tar.gz' | sha256sum -c -
+          unzip -q previous-package/clean-install-reviewed.zip -d verified-images
+          (cd verified-images && sha256sum -c SHA256SUMS)
           docker load -i verified-images/main-and-reserve.tar.gz
-          docker pull --platform linux/amd64 postgres:16.15-alpine
-          docker pull --platform linux/amd64 caddy:2-alpine
+          docker load -i verified-images/postgres-and-caddy.tar.gz
       - name: Check Python syntax
         run: python3 -m compileall -q tools/clean-install
       - name: Actual handover containers
@@ -43,13 +44,13 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: success()
         with:
-          name: clean-handover-reviewed-kit
+          name: clean-operations-reviewed-kit
           path: clean-package/
           retention-days: 30
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: clean-handover-evidence-${{ github.sha }}
+          name: clean-operations-evidence-${{ github.sha }}
           path: |
             clean-results/report.json
             clean-results/commands.log
@@ -57,5 +58,7 @@ jobs:
             clean-results/image-ids.json
             clean-results/cleanup.txt
             clean-results/*-caddy.log
+            clean-results/operations.log
+            clean-results/systemd.txt
             docker-handover.log
           retention-days: 30

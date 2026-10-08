@@ -100,15 +100,22 @@ def init(args):
  text(root/'private/app-db.env','DATABASE_URL=postgresql://onlink_app:'+app_pw+'@postgres:5432/onlink40\n')
  text(root/'private/bootstrap.sql',"CREATE ROLE onlink_app LOGIN NOSUPERUSER PASSWORD '"+app_pw+"';\nALTER DATABASE onlink40 OWNER TO onlink_app;\nALTER SCHEMA public OWNER TO onlink_app;\n")
  shutil.copyfile(ROOT/'russian-trusted-ca.pem',root/'private/russian-trusted-ca.pem');os.chmod(root/'private/russian-trusted-ca.pem',0o644)
+ edge=getattr(args,'edge_network',None);alias=getattr(args,'edge_alias',None)
+ need(bool(edge)==bool(alias),'EDGE_PAIR_REQUIRED')
+ if edge:
+  need(re.fullmatch('[a-zA-Z0-9_.-]+',edge) and re.fullmatch('[a-zA-Z0-9_.-]+',alias),'EDGE_INVALID');run(['docker','network','inspect',edge]);c['edgeNetwork']=edge;c['edgeAlias']=alias
  log={'driver':'json-file','options':{'max-size':'20m','max-file':'5'}}
  def bind(src,target,ro=False):return {'type':'bind','source':str(root/src),'target':target,'read_only':ro,'bind':{'create_host_path':False}}
  net={'db':{'name':c['project']+'_db','internal':True},'front':{'name':c['project']+'_front'}}
  infra={'services':{'postgres':{'image':c['postgresImage'],'container_name':pg(c),'pull_policy':'never','restart':'unless-stopped','env_file':[str(root/'private/postgres.env')],'networks':{'db':{'aliases':['postgres']}},'volumes':[bind('pgdata','/var/lib/postgresql/data')],'logging':log},'caddy':{'image':c['caddyImage'],'container_name':c['project']+'-caddy','pull_policy':'never','restart':'unless-stopped','networks':['front'],'ports':[f'{args.http_port}:80',f'{args.https_port}:443'],'volumes':[bind('Caddyfile','/etc/caddy/Caddyfile',True),bind('caddy-data','/data'),bind('caddy-config','/config')],'logging':log}},'networks':net}
  text(root/'Caddyfile',c['domain']+' {\n handle /handover-check {\n  respond "'+c['challenge']+'" 200\n }\n handle {\n  reverse_proxy app:3000\n }\n}\n')
+ if edge:del infra['services']['caddy']
  save(root/'infra.compose.json',infra)
  for role in IMAGES:
   service={'image':images[role],'container_name':c['project']+'-app','pull_policy':'never','restart':'no','entrypoint':['node','dist/index.js'],'working_dir':'/app','env_file':[{'path':str(root/'private/runtime.env'),'format':'raw'}],'networks':{'db':{},'front':{'aliases':['app']}},'ports':[f'127.0.0.1:{args.port}:3000'],'volumes':[bind('uploads','/app/data/uploads'),bind('private/russian-trusted-ca.pem','/etc/ssl/max/russian-trusted-ca.pem',True)],'logging':log,'labels':{'onlink40.handover':c['project']}}
-  save(root/(role+'.compose.json'),{'services':{'app':service},'networks':{k:{'external':True,'name':v['name']} for k,v in net.items()}})
+  nets={k:{'external':True,'name':v['name']} for k,v in net.items()}
+  if edge:service['networks']['edge']={'aliases':[alias]};nets['edge']={'external':True,'name':edge}
+  save(root/(role+'.compose.json'),{'services':{'app':service},'networks':nets})
  c['hashes']={str(f.relative_to(root)):sha(f) for f in [root/'infra.compose.json',root/'main.compose.json',root/'reserve.compose.json',root/'Caddyfile',root/'private/probe.env',root/'private/app-db.env',root/'private/postgres.env',root/'private/bootstrap.sql',root/'private/russian-trusted-ca.pem']}
  save(root/'settings.json',c);save(root/'state/state.json',{'phase':'prepared','everStartAttempted':False,'settingsHash':sha(root/'settings.json')});print('PREPARED_NO_APP')
 @contextlib.contextmanager
@@ -131,7 +138,8 @@ def inventory(c,s):
 def infra(c,s):
  need(s['phase']=='prepared','PHASE_INVALID');none_running(c);state(c,s,'infra-intent')
  run(['docker','run','--rm','--network','none','--mount',f'type=bind,src={pathlib.Path(c["root"])/"Caddyfile"},dst=/etc/caddy/Caddyfile,readonly','--entrypoint','caddy',c['caddyImage'],'validate','--config','/etc/caddy/Caddyfile'])
- compose(c,'infra',['up','-d','--no-build','--pull','never','postgres','caddy'])
+ compose(c,'infra',['up','-d','--no-build','--pull','never','postgres']+([] if c.get('edgeNetwork') else ['caddy']))
+ if c.get('edgeNetwork'):run(['docker','network','create','--label','onlink40.handover='+c['project'],c['project']+'_front'])
  deadline=time.monotonic()+60
  while True:
   r=subprocess.run(['docker','exec',pg(c),'pg_isready','-h','127.0.0.1','-U','onlink_admin'],capture_output=True)
@@ -167,8 +175,13 @@ def ready(c,cid):
   if ok:return
   time.sleep(.5)
  raise o.Refusal('READINESS_TIMEOUT_DIAGNOSE_FIRST')
+def disarm(c,reason):
+ p=pathlib.Path(c['root'])/'state/operations.json'
+ if p.exists():
+  v=load(p);v.update(enabled=False,reason=reason,disabledAt=stamp());save(p,v)
+
 def start(c,s,role,confirm):
- need(s['phase'] in ['verified','stopped','start-failed'],'START_PHASE');need(confirm==s['sourceFence']['handoffCode'],'SOURCE_STOP_RECONFIRM_REQUIRED');inventory(c,s);need(schema(c)==s['identity'],'TARGET_IDENTITY_CHANGED');checked_image(role,c['images'][role]);x=app(c)
+ need(s['phase'] in ['verified','stopped','start-failed'],'START_PHASE');need(confirm==s['sourceFence']['handoffCode'],'SOURCE_STOP_RECONFIRM_REQUIRED');disarm(c,'manual-start');inventory(c,s);need(schema(c)==s['identity'],'TARGET_IDENTITY_CHANGED');checked_image(role,c['images'][role]);x=app(c)
  if x:
   need(x['Id']==s.get('appId') and not x['State']['Running'] and x['Config'].get('Labels',{}).get('onlink40.handover')==c['project'],'UNRECOGNIZED_APP');need(s['phase'] in ['stopped','start-failed'],'UNEXPECTED_CONTAINER');run(['docker','rm',x['Id']])
  if not s['everStartAttempted']:
@@ -184,16 +197,16 @@ def start(c,s,role,confirm):
   raise
 
 def stop(c,s):
- need(s['phase'] in ['running','start-intent'],'STOP_PHASE');inventory(c,s);x=app(c);need(x and x['Id']==s['appId'] and x['State']['Running'],'APP_ID_CHANGED');state(c,s,'stop-intent');at=stamp();run(['docker','kill','--signal=TERM',x['Id']]);deadline=time.monotonic()+75
+ need(s['phase'] in ['running','start-intent'],'STOP_PHASE');disarm(c,'manual-stop');inventory(c,s);x=app(c);need(x and x['Id']==s['appId'] and x['State']['Running'],'APP_ID_CHANGED');state(c,s,'stop-intent');at=stamp();run(['docker','kill','--signal=TERM',x['Id']]);deadline=time.monotonic()+75
  while True:
   y=inspect(x['Id'])
   if not y['State']['Running']:break
   need(time.monotonic()<deadline,'STOP_TIMEOUT_NO_SIGKILL');time.sleep(.3)
  need(y['State']['ExitCode']==0 and not y['State']['OOMKilled'],'UNCLEAN_STOP');r=subprocess.run(['docker','logs','--since',at,y['Id']],capture_output=True,timeout=10);need(r.returncode==0 and b'graceful shutdown completed' in r.stdout+r.stderr,'GRACEFUL_STOP_NOT_CONFIRMED');save(pathlib.Path(c['root'])/'state/stop-receipt.json',{'clean':True,'identity':o.identity(y),'finishedAt':y['State']['FinishedAt']});state(c,s,'stopped',stopAt=stamp());none_running(c);print('STOPPED_NO_SIGKILL')
 def abandon(c,s):
- need(not s['everStartAttempted'] and s['phase'] in ['verified','start-failed'],'TARGET_MAY_HAVE_NEW_DATA');inventory(c,s);x=app(c);need(x is None or (not x['State']['Running'] and x['State']['Status']=='created'),'TARGET_MAY_HAVE_RUN');state(c,s,'abandoned');save(pathlib.Path(c['root'])/'state/abandon-proof.json',{'format':'clean-host-abandon-v1','at':stamp(),'sourceFence':s['sourceFence'],'everStartAttempted':False,'targetAppRunning':False});print('TARGET_ABANDONED_SOURCE_RESUME_REQUIRES_OWNER_CONFIRMATION')
+ need(not s['everStartAttempted'] and s['phase'] in ['verified','start-failed'],'TARGET_MAY_HAVE_NEW_DATA');disarm(c,'abandoned');inventory(c,s);x=app(c);need(x is None or (not x['State']['Running'] and x['State']['Status']=='created'),'TARGET_MAY_HAVE_RUN');state(c,s,'abandoned');save(pathlib.Path(c['root'])/'state/abandon-proof.json',{'format':'clean-host-abandon-v1','at':stamp(),'sourceFence':s['sourceFence'],'everStartAttempted':False,'targetAppRunning':False});print('TARGET_ABANDONED_SOURCE_RESUME_REQUIRES_OWNER_CONFIRMATION')
 def main():
- os.umask(0o077);a=argparse.ArgumentParser();a.add_argument('--root',required=True);a.add_argument('action',choices=['init','infra','restore','start','stop','abandon','status']);a.add_argument('--domain');a.add_argument('--pg-image');a.add_argument('--caddy-image');a.add_argument('--port',type=int,default=3001);a.add_argument('--http-port',type=int,default=80);a.add_argument('--https-port',type=int,default=443);a.add_argument('--backup');a.add_argument('--envelope');a.add_argument('--role',choices=['main','reserve'],default='main');a.add_argument('--confirm-source-stopped');v=a.parse_args()
+ os.umask(0o077);a=argparse.ArgumentParser();a.add_argument('--root',required=True);a.add_argument('action',choices=['init','infra','restore','start','stop','abandon','status']);a.add_argument('--domain');a.add_argument('--pg-image');a.add_argument('--caddy-image');a.add_argument('--port',type=int,default=3001);a.add_argument('--http-port',type=int,default=80);a.add_argument('--https-port',type=int,default=443);a.add_argument('--edge-network');a.add_argument('--edge-alias');a.add_argument('--backup');a.add_argument('--envelope');a.add_argument('--role',choices=['main','reserve'],default='main');a.add_argument('--confirm-source-stopped');v=a.parse_args()
  if v.action=='init':init(v);return
  with context(v.root) as (c,s):
   if v.action=='infra':infra(c,s)

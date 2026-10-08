@@ -38,3 +38,12 @@ The source seal also captures the actual stopped container effective environment
 0600 effective-runtime.env, bound by SHA256 in the envelope. This preserves Compose overrides
 without guessing from runtime.env alone. It is PRIVATE FINAL DATA, never part of the program ZIP.
 The target only replaces documented infrastructure settings; no shell sourcing/interpolation.
+
+
+## Дополнение эксплуатационного комплекта
+
+Новая редакция добавляет только операции хоста: проверенный ежедневный архив (без внешней выдачи), явно разрешаемое восстановление того же CID, systemd шаблоны, внешний GET-контроль и подключение обратного переноса к существующей сети Caddy. Runtime, SQL/миграции, образы и девять reviewed-зависимостей 40967e2 неизменны. Старый программный ZIP и исходный протокол сохраняются отдельно.
+
+Смотрите новый review/report.json и environment.txt: заявлять успешность только при passed=true. Новые проверки используют настоящие Docker/PostgreSQL, synthetic MAX, системный flock и systemd. Управляемая ошибка pg_dump и изменение recovery-clock — тестовые инъекции; не выдаются за реальные производственные отказы. Проверка restart Docker daemon не заменяет физическую перезагрузку Astra; публичный ACME, реальный DNS/сеть MAX и MAC Astra остаются принимающему специалисту. Доставка уведомлений внешнему дежурному не настроена: предоставлен checker, канал и интеграция отдельно.
+
+Закрытый архив ежедневной копии не зашифрован и содержит конфигурацию/секреты. Это намеренно отдельный этап от шифрования и выдачи: без общего доступа, без HTTP, без автоудаления. Root/sudo остаётся границей доверия. Межсерверное отсутствие второго экземпляра обеспечивается согласованными действиями двух операторов, а не переносимым разрешением из архива.

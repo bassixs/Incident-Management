@@ -13,11 +13,9 @@ for p in sorted((K/'scripts/reviewed').iterdir()):
 for n in ['scripts','docs']:shutil.copytree(K/n,D/n,ignore=shutil.ignore_patterns('__pycache__'))
 shutil.copyfile(ROOT/'verified-images/main-and-reserve.tar.gz',D/'main-and-reserve.tar.gz')
 infra=ROOT/'clean-results/image-ids.json';meta=json.loads(infra.read_text());shutil.copyfile(infra,D/'IMAGE-IDS.json')
-raw=OUT/'infrastructure.tar';subprocess.run(['docker','save','-o',str(raw),'postgres:16.15-alpine','caddy:2-alpine'],check=True)
-with raw.open('rb') as src,gzip.open(D/'postgres-and-caddy.tar.gz','wb') as dst:shutil.copyfileobj(src,dst)
-raw.unlink()
+shutil.copyfile(ROOT/'verified-images/postgres-and-caddy.tar.gz',D/'postgres-and-caddy.tar.gz')
 (D/'review').mkdir()
-for n in ['report.json','environment.txt','image-ids.json','cleanup.txt']:shutil.copyfile(ROOT/'clean-results'/n,D/'review'/n)
+for n in ['report.json','environment.txt','image-ids.json','cleanup.txt','operations.log','systemd.txt']:shutil.copyfile(ROOT/'clean-results'/n,D/'review'/n)
 sha=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip();(D/'VERSION.json').write_text(json.dumps({'toolCommit':sha,'applicationBuilds':0,'main':'c41f2d532591ddeb2ce0ea3d217e8a1a2095f38a','reserve':'3c5c38b0f6477d5124593406f09f3af4c2db0c12','reviewedDependencies':'40967e269d1cd60db58a142ac0c979e444ae67eb','run':__import__('os').environ.get('GITHUB_RUN_ID')},indent=2))
 lines=[]
 for p in sorted(D.rglob('*')):

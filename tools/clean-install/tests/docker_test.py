@@ -23,8 +23,8 @@ def invoke(root,action,*args,ok=True,env=None):
  if ok and r.returncode:raise RuntimeError(r.stdout.decode()+r.stderr.decode())
  return r
 
-def init(root,port):
- invoke(root,'init','--domain','synthetic.localhost','--pg-image',PGIMAGE,'--caddy-image',CADDY,'--port',port,'--http-port',port+100,'--https-port',port+101)
+def init(root,port,*extra):
+ invoke(root,'init','--domain','synthetic.localhost','--pg-image',PGIMAGE,'--caddy-image',CADDY,'--port',port,'--http-port',port+100,'--https-port',port+101,*extra)
  conf=c.load(root/'settings.json');owned.extend([conf['project']+'-postgres',conf['project']+'-caddy',conf['project']+'-app']);networks.extend([conf['project']+'_db',conf['project']+'_front'])
  invoke(root,'infra');return conf
 
@@ -121,12 +121,48 @@ def main():
  check('reserve after failed start ready',c.app(tc)['State']['Running']);check('effective dollar/hash/quotes preserved in container',dict(v.split('=',1) for v in c.app(tc)['Config']['Env'] if '=' in v)['SYNTHETIC_SPECIAL']=='literal-$NEVER_SET-#-"quoted"')
  check('incident data preserved after switches',before==c.psql(tc,"SELECT md5(string_agg(row_to_json(t)::text,'' ORDER BY id)) FROM \"Incident\" t;"))
  check('policy retained',c.envread(target/'private/runtime.env')['INCIDENT_SLA_POLICY']=='WORKING_HOURS_V1')
+ from operations_test import exercise
+ exercise(globals(),tc,target,code,mock)
  c.psql(tc,"UPDATE \"Incident\" SET text=text||' after-target-start' WHERE id='new';");current=c.psql(tc,"SELECT md5(string_agg(row_to_json(t)::text,'' ORDER BY id)) FROM \"Incident\" t;")
  invoke(target,'stop')
  run(sys.executable,S/'snapshot.py','--root',target,'--output',target/'current-final','--final')
  check('new target backup restored exactly',c.load(target/'current-final/restore-differences.json')['differenceCount']==0)
  run(sys.executable,S/'seal-source.py','--backup',target/'current-final','--stop-receipt',target/'state/stop-receipt.json','--output',target/'reverse-envelope.json')
- reverse=OUT/'reverse';rc=init(reverse,26001);run('docker','network','connect','--alias','mock',rc['project']+'_front',mock);invoke(reverse,'restore','--backup',target/'current-final','--envelope',target/'reverse-envelope.json');invoke(reverse,'start','--confirm-source-stopped',c.load(target/'reverse-envelope.json')['handoffCode']);check('reverse transfer uses CURRENT target data',current==c.psql(rc,"SELECT md5(string_agg(row_to_json(t)::text,'' ORDER BY id)) FROM \"Incident\" t;"));invoke(reverse,'stop')
+ # Return uses a NEW DB and the pre-existing edge Caddy, not a second proxy.
+ edge=sc['project']+'_front';alias='synthetic-return-app'
+ reverse=OUT/'reverse';rc=init(reverse,26001,'--edge-network',edge,'--edge-alias',alias)
+ check('return preparation creates no second Caddy',run('docker','ps','-aq','--filter','name=^/'+rc['project']+'-caddy$',check=False).stdout.strip()==b'')
+ run('docker','network','connect','--alias','mock',rc['project']+'_front',mock)
+ invoke(reverse,'restore','--backup',target/'current-final','--envelope',target/'reverse-envelope.json')
+ invoke(reverse,'start','--confirm-source-stopped',c.load(target/'reverse-envelope.json')['handoffCode'])
+ check('reverse transfer uses CURRENT target data',current==c.psql(rc,"SELECT md5(string_agg(row_to_json(t)::text,'' ORDER BY id)) FROM \"Incident\" t;"))
+ proxy=sc['project']+'-caddy';proxy_before=c.inspect(proxy);active=source/'Caddyfile'
+ # Fixture-only unrelated route, established before testing replacement.
+ original=active.read_text().replace(' handle {',' handle /documents/control {\n  respond "other-service-preserved" 200\n }\n handle {')
+ active.write_text(original);run('docker','exec',proxy,'caddy','reload','--config','/etc/caddy/Caddyfile')
+ route=OUT/'route-review';run(sys.executable,S/'prepare-route.py','--config',active,'--sha256',c.sha(active),'--old','app:3000','--new',alias+':3000','--count','1','--output',route)
+ check('changed Caddy refuses preparation',run(sys.executable,S/'prepare-route.py','--config',active,'--sha256','0'*64,'--old','app:3000','--new',alias+':3000','--count','1','--output',OUT/'refused-route',check=False).returncode!=0)
+ candidate=route/'Caddyfile.candidate'
+ run('docker','run','--rm','--network','none','--mount',f'type=bind,src={candidate},dst=/etc/caddy/Caddyfile,readonly','--entrypoint','caddy',CADDY,'validate','--config','/etc/caddy/Caddyfile')
+ # Preserve bind mount inode; only confirmed route bytes change, no container restart.
+ with active.open('wb') as f:f.write(candidate.read_bytes());f.flush();os.fsync(f.fileno())
+ run('docker','exec',proxy,'caddy','reload','--config','/etc/caddy/Caddyfile')
+ ca=source/'caddy-data/caddy/pki/authorities/local/root.crt'
+ def curl(path):return run('curl','--silent','--show-error','--fail','--noproxy','*','--cacert',ca,'--resolve','synthetic.localhost:23102:127.0.0.1','https://synthetic.localhost:23102'+path).stdout
+ check('existing Caddy reaches returned app',curl('/ready') and curl('/health'))
+ check('existing unrelated Caddy route preserved',curl('/documents/control')==b'other-service-preserved')
+ proxy_after=c.inspect(proxy);check('Caddy ID start and restart count unchanged',all(proxy_before[k]==proxy_after[k] for k in ['Id','RestartCount']) and proxy_before['State']['StartedAt']==proxy_after['State']['StartedAt'])
+ # External checker runs outside app container and uses independently trusted TLS.
+ hosts=pathlib.Path('/etc/hosts');saved=hosts.read_bytes()
+ try:
+  with hosts.open('ab') as f:f.write(b'\n127.0.0.1 synthetic.localhost\n')
+  ev=dict(os.environ,NO_PROXY='synthetic.localhost',no_proxy='synthetic.localhost')
+  r=subprocess.run([sys.executable,str(S/'check-external.py'),'--url','https://synthetic.localhost:23102','--ca',str(ca)],env=ev,capture_output=True,timeout=30)
+  check('external HTTPS checker observes readiness',r.returncode==0,r.stdout.decode())
+  invoke(reverse,'stop')
+  r=subprocess.run([sys.executable,str(S/'check-external.py'),'--url','https://synthetic.localhost:23102','--ca',str(ca)],env=ev,capture_output=True,timeout=30)
+  check('external checker detects stopped returned app',r.returncode!=0)
+ finally:hosts.write_bytes(saved)
  check('cannot abandon after any target start',invoke(target,'abandon',ok=False).returncode!=0)
  # Lock ownership and release on refusal.
  with (target/'backup.lock').open('rb') as f:
