@@ -4,6 +4,7 @@ from pathlib import Path
 import ops_test as lab
 from ops_test import run,sql,OUT,SCRIPTS
 from exporter_baseline_test import seed_volume
+from data_stream import opened
 import ops_common as o
 
 class ExporterChecks(lab.MigrationKit):
@@ -22,6 +23,8 @@ class ExporterChecks(lab.MigrationKit):
    'stderr-flood':("process.stderr.write('SYNTHETIC_SECRET resident-text '.repeat(20000),()=>process.exit(2));",'EXPORTER_SNAPSHOT_EOF',2),
    'invalid-second':("console.log(JSON.stringify({snapshot:'000-FFF-1'}));console.log('SYNTHETIC_SECRET invalid-json');",'EXPORTER_DATA_INVALID_JSON',0),
    'after-data':("require('/ops/data-snapshot.cjs');process.exitCode=17;",'EXPORTER_EXIT_FAILED',17),
+   'middle-stream':("console.log(JSON.stringify({snapshot:'000-FFF-1'}));console.log(JSON.stringify({format:'pr14-18-data-v2',type:'begin'}));console.log(JSON.stringify({type:'table',table:'Synthetic',columns:['id']}));console.log(JSON.stringify({type:'row',table:'Synthetic',id:'one',fields:{id:'a'.repeat(64)}}));process.exitCode=17;",'EXPORTER_DATA_EOF',17),
+   'queue-full':("console.log(JSON.stringify({snapshot:'000-FFF-1'}));process.stdout.write(('{}\\n').repeat(100000));setInterval(()=>{},1000);",'INVALID_DATA_SNAPSHOT',None),
    'timeout-first':("setInterval(()=>{},1000);",'EXPORTER_SNAPSHOT_TIMEOUT',None),
    'timeout-second':("console.log(JSON.stringify({snapshot:'000-FFF-1'}));setInterval(()=>{},1000);",'EXPORTER_DATA_TIMEOUT',None),
   }
@@ -64,7 +67,7 @@ class ExporterChecks(lab.MigrationKit):
   self.assertEqual(sql(self.db,self.protected_sql),self.protected)
   self.assertFalse(any(x.startswith(('incident-snapshot-','incident-restore-')) for x in run('docker','ps','-a','--format','{{.Names}}').stdout.splitlines()))
   fingerprint=json.loads((dest/'data.json').read_text())
-  result={'passed':True,'faults':len(results),'elapsedSeconds':time.monotonic()-started,'restore':restored,'exporter':diagnostic,'rows':{t:len(v) for t,v in fingerprint['tables'].items()},'files':len(json.loads((dest/'files.json').read_text())),'limits':{'exporterCpu':0.5,'exporterMemoryMiB':384,'pids':128,'restoreCpu':0.5,'restoreMemoryMiB':768},'appUnchanged':True,'lockReleased':True}
+  result={'passed':True,'faults':len(results),'elapsedSeconds':time.monotonic()-started,'restore':restored,'exporter':diagnostic,'rows':fingerprint['rows'],'files':len(json.loads((dest/'files.json').read_text())),'limits':{'exporterCpu':0.5,'exporterMemoryMiB':384,'pids':128,'restoreCpu':0.5,'restoreMemoryMiB':768},'appUnchanged':True,'lockReleased':True}
   (OUT/'backup-restore-result.json').write_text(json.dumps(result,indent=2))
   (OUT/'operational-result.json').write_text(json.dumps({'passed':True,'scope':'exporter only; lifecycle/migrations unchanged','faults':results,'fullBackupRestore':True},indent=2))
   print(json.dumps(result),flush=True)

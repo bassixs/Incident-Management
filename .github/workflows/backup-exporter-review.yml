@@ -1,7 +1,7 @@
-name: Backup exporter isolated review
+name: Streaming backup exporter isolated review
 on:
   push:
-    branches: [codex/backup-exporter-review-20261008]
+    branches: [codex/backup-streaming-review-20261008]
     paths:
       - .github/workflows/backup-exporter-review.yml
       - tools/migration-kit/**
@@ -28,6 +28,7 @@ jobs:
             python3 $opt tools/install-kit-lab/metadata_test.py
             python3 $opt tools/install-kit-lab/kit_unit_test.py
             python3 $opt tools/install-kit-lab/exporter_unit_test.py
+            python3 $opt tools/install-kit-lab/stream_unit_test.py
           done 2>&1 | tee unit.log
       - name: Load exact previously reviewed images, no builds
         env:
@@ -53,20 +54,23 @@ jobs:
           { docker version; docker compose version; python3 --version; uname -a; } > environment.txt
       - name: Exporter failures and complete backup with isolated restore
         run: python3 -u tools/install-kit-lab/exporter_test.py 2>&1 | tee operational.log
+      - name: Heavy old and new schema backups, memory before and after
+        run: python3 -u tools/install-kit-lab/streaming_test.py 2>&1 | tee streaming.log
       - name: Package tested correction with unchanged reviewed images
         run: python3 tools/install-kit-lab/package_update.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: backup-exporter-reviewed-kit
+          name: backup-streaming-reviewed-kit
           path: package-output/
           retention-days: 30
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: backup-exporter-evidence-${{ github.sha }}
+          name: backup-streaming-evidence-${{ github.sha }}
           path: |
             kit-results/
             unit.log
             operational.log
+            streaming.log
             environment.txt
           retention-days: 30

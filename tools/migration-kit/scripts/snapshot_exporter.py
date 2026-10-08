@@ -29,7 +29,8 @@ def clean_stderr(text):
 class Exporter:
     def __init__(self,command,dest):
         self.command=command;self.dest=Path(dest);self.name='incident-snapshot-'+os.urandom(12).hex()
-        self.cid=None;self.process=None;self.phase='create';self.lines=queue.Queue()
+        self.cid=None;self.process=None;self.phase='create';self.lines=queue.Queue(maxsize=8)
+        self.stop_reader=threading.Event();self.last_line=None
         self.tail=collections.deque(maxlen=64);self.stderr_bytes=0;self.stderr_lines=0
         self.readers=[];self.finished=False;self.state=None;self.cleanup='not-started'
         self.error=None;self.started=o.stamp()
@@ -47,9 +48,18 @@ class Exporter:
             self.process=subprocess.Popen(['docker','start','--attach','--interactive',self.cid],
                 stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf-8',errors='replace')
             def stdout():
+                def put(value):
+                    while not self.stop_reader.is_set():
+                        try:self.lines.put(value,timeout=.1);return
+                        except queue.Full:pass
                 try:
-                    for line in self.process.stdout:self.lines.put(line)
-                finally:self.lines.put(None)
+                    while not self.stop_reader.is_set():
+                        line=self.process.stdout.readline(65537)
+                        if not line:break
+                        if len(line.encode('utf-8'))>65536:
+                            put('FRAME_TOO_LARGE');break
+                        put(line)
+                finally:put(None)
             def stderr():
                 # Bounded chunks also handle a huge stderr line without a newline.
                 while True:
@@ -74,6 +84,8 @@ class Exporter:
         try:line=self.lines.get(timeout=timeout)
         except queue.Empty:raise o.Refusal('EXPORTER_'+phase.upper()+'_TIMEOUT') from None
         o.need(line is not None,'EXPORTER_'+phase.upper()+'_EOF')
+        o.need(line!='FRAME_TOO_LARGE','EXPORTER_FRAME_TOO_LARGE')
+        self.last_line=line
         try:result=json.loads(line)
         except (ValueError,TypeError):raise o.Refusal('EXPORTER_'+phase.upper()+'_INVALID_JSON') from None
         o.need(isinstance(result,dict),'EXPORTER_'+phase.upper()+'_INVALID_OBJECT')
@@ -87,9 +99,13 @@ class Exporter:
         except subprocess.TimeoutExpired:raise o.Refusal('EXPORTER_RELEASE_TIMEOUT') from None
         row=self._inspect()
         o.need(rc==0 and not row['State']['Running'] and row['State']['ExitCode']==0 and not row['State']['OOMKilled'],'EXPORTER_EXIT_FAILED')
+        try:extra=self.lines.get(timeout=5)
+        except queue.Empty:raise o.Refusal('EXPORTER_EOF_TIMEOUT') from None
+        o.need(extra is None,'EXPORTER_TRAILING_DATA')
         self.finished=True
     def __exit__(self,kind,error,trace):
         self.error=str(error) if isinstance(error,o.Refusal) else (type(error).__name__ if error else None)
+        self.stop_reader.set()
         cleanup_error=None
         try:
             if self.process and self.process.stdin and not self.process.stdin.closed:

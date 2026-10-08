@@ -8,7 +8,7 @@ import argparse,hashlib,json,os,re,subprocess,sys,tarfile,time
 from pathlib import Path
 import ops_common as o
 import migration_guard as g
-from data_check import compare
+from data_stream import receive,report
 from snapshot_exporter import Exporter
 
 ROOT=Path(__file__).resolve().parent
@@ -47,8 +47,7 @@ def capture(s,kind,dest,runname=None):
     with Exporter(cmd,dest) as exporter:
         first=exporter.read_json('snapshot',30);snap=first.get('snapshot')
         o.need(isinstance(snap,str) and bool(re.fullmatch('[0-9A-F-]+',snap)),'INVALID_EXPORTED_SNAPSHOT')
-        fingerprints=exporter.read_json('data',90)
-        o.need(fingerprints.get('format')=='pr14-18-data-v1' and isinstance(fingerprints.get('tables'),dict),'INVALID_DATA_SNAPSHOT')
+        fingerprints=receive(exporter,dest/'data.sqlite')
         with (dest/'database.dump').open('xb') as f:
             os.chmod(f.name,0o600)
             p=subprocess.run(['docker','exec',b['postgres'],'pg_dump','-U',b['user'],'-d',b['database'],'-Fc','--snapshot='+snap],stdout=f,stderr=subprocess.PIPE,timeout=120)
@@ -94,8 +93,14 @@ def verify(s,dest):
         print('RESTORE_STEP:schema-and-data',flush=True)
         schema=json.loads(o.output(node(s,env,'container:'+cid,'schema-probe.cjs'),30))['schema']
         o.need(g.schema_matches(schema,manifest[meta['phase']]),'RESTORED_SCHEMA_MISMATCH')
-        data=json.loads(o.output(node(s,env,'container:'+cid,'data-snapshot.cjs'),90))
-        o.need(not compare(o.read_json(dest/'data.json'),data),'RESTORED_DATA_MISMATCH')
+        restored=dest/'restored-data';restored.mkdir(mode=0o700)
+        with Exporter(node(s,env,'container:'+cid,'data-snapshot.cjs','--export'),restored) as exporter:
+            first=exporter.read_json('snapshot',30)
+            o.need(isinstance(first.get('snapshot'),str) and bool(re.fullmatch('[0-9A-F-]+',first['snapshot'])),'INVALID_EXPORTED_SNAPSHOT')
+            data=receive(exporter,restored/'data.sqlite');exporter.finish()
+        private_json(restored/'data.json',data)
+        differences=report(dest/'data.json',restored/'data.json',dest/'restore-differences.json')
+        o.need(differences==0,'RESTORED_DATA_MISMATCH')
         expected=o.read_json(dest/'files.json');seen={}
         with tarfile.open(dest/'uploads.tar.gz','r:gz') as tar:
             for m in tar:
