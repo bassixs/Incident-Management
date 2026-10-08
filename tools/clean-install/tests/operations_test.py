@@ -64,7 +64,14 @@ def exercise(h,conf,root,confirmation,mock):
   run('docker','kill','--signal=TERM',cid);wait(lambda:not c.inspect(cid)['State']['Running'],75)
   run('systemctl','restart','docker',timeout=120);wait(lambda:run('docker','info',check=False).returncode==0)
   wait(lambda:run('docker','exec',c.pg(conf),'pg_isready','-h','127.0.0.1','-U','onlink_admin',check=False).returncode==0)
-  run('systemctl','start',prefix+'-supervise.service',timeout=180)
+  service_result=run('systemctl','start',prefix+'-supervise.service',timeout=180,check=False)
+  journal=run('journalctl','-u',prefix+'-supervise.service','--no-pager',check=False)
+  with (OUT/'systemd.txt').open('ab') as f:f.write(service_result.stdout+service_result.stderr+journal.stdout+journal.stderr)
+  if service_result.returncode:
+   x=c.inspect(cid);now_hashes={k:hashlib.sha256(json.dumps(x[k],sort_keys=True).encode()).hexdigest() for k in ['Config','HostConfig','Mounts']}
+   old_hashes={k:hashlib.sha256(json.dumps(initial[k],sort_keys=True).encode()).hexdigest() for k in ['Config','HostConfig','Mounts']}
+   print(json.dumps({'beforeComponentHashes':old_hashes,'afterComponentHashes':now_hashes,'actualDockerHostIdentity':op.host_identity(),'ownerHostIdentity':state()['host']}),flush=True)
+   raise RuntimeError(journal.stdout.decode()+service_result.stderr.decode())
   check('daemon restart systemd restores only same app',c.app(conf)['Id']==cid and availability()['status']=='RECOVERED')
   # Cap/backoff are tested against a truly exited container; no sleep or widened timeout.
   run('docker','kill','--signal=TERM',cid);wait(lambda:not c.inspect(cid)['State']['Running'],75)
@@ -76,6 +83,7 @@ def exercise(h,conf,root,confirmation,mock):
   run('systemctl','start',prefix+'-supervise.service');check('boot service cannot undo handover stop',availability()['status']=='FENCED_NO_AUTOSTART' and not c.inspect(cid)['State']['Running'])
   invoke(root,'start','--role','reserve','--confirm-source-stopped',confirmation);ops('supervise');check('manual restart does not silently rearm ownership',availability()['status']=='FENCED_NO_AUTOSTART')
  finally:
+  with (OUT/'systemd.txt').open('ab') as f:f.write(run('journalctl','-u',prefix+'-supervise.service','--no-pager',check=False).stdout)
   for p in installed:
    if p.suffix=='.timer':run('systemctl','stop',p.name,check=False)
   for p in installed:p.unlink()
