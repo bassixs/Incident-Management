@@ -104,7 +104,7 @@ def init(args):
  def bind(src,target,ro=False):return {'type':'bind','source':str(root/src),'target':target,'read_only':ro,'bind':{'create_host_path':False}}
  net={'db':{'name':c['project']+'_db','internal':True},'front':{'name':c['project']+'_front'}}
  infra={'services':{'postgres':{'image':c['postgresImage'],'container_name':pg(c),'pull_policy':'never','restart':'unless-stopped','env_file':[str(root/'private/postgres.env')],'networks':{'db':{'aliases':['postgres']}},'volumes':[bind('pgdata','/var/lib/postgresql/data')],'logging':log},'caddy':{'image':c['caddyImage'],'container_name':c['project']+'-caddy','pull_policy':'never','restart':'unless-stopped','networks':['front'],'ports':[f'{args.http_port}:80',f'{args.https_port}:443'],'volumes':[bind('Caddyfile','/etc/caddy/Caddyfile',True),bind('caddy-data','/data'),bind('caddy-config','/config')],'logging':log}},'networks':net}
- text(root/'Caddyfile',c['domain']+' {\n handle /handover-check { respond "'+c['challenge']+'" 200 }\n handle { reverse_proxy app:3000 }\n}\n')
+ text(root/'Caddyfile',c['domain']+' {\n handle /handover-check {\n  respond "'+c['challenge']+'" 200\n }\n handle {\n  reverse_proxy app:3000\n }\n}\n')
  save(root/'infra.compose.json',infra)
  for role in IMAGES:
   service={'image':images[role],'container_name':c['project']+'-app','pull_policy':'never','restart':'no','entrypoint':['node','dist/index.js'],'working_dir':'/app','env_file':[str(root/'private/runtime.env')],'networks':{'db':{},'front':{'aliases':['app']}},'ports':[f'127.0.0.1:{args.port}:3000'],'volumes':[bind('uploads','/app/data/uploads'),bind('private/russian-trusted-ca.pem','/etc/ssl/max/russian-trusted-ca.pem',True)],'logging':log,'labels':{'onlink40.handover':c['project']}}
@@ -130,6 +130,7 @@ def inventory(c,s):
  if 'pgId' in s:need(inspect(pg(c))['Id']==s['pgId'],'POSTGRES_CHANGED')
 def infra(c,s):
  need(s['phase']=='prepared','PHASE_INVALID');none_running(c);state(c,s,'infra-intent')
+ run(['docker','run','--rm','--network','none','--mount',f'type=bind,src={pathlib.Path(c["root"])/"Caddyfile"},dst=/etc/caddy/Caddyfile,readonly','--entrypoint','caddy',c['caddyImage'],'validate','--config','/etc/caddy/Caddyfile'])
  compose(c,'infra',['up','-d','--no-build','--pull','never','postgres','caddy'])
  deadline=time.monotonic()+60
  while True:

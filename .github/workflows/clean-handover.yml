@@ -56,5 +56,6 @@ jobs:
             clean-results/environment.txt
             clean-results/image-ids.json
             clean-results/cleanup.txt
+            clean-results/*-caddy.log
             docker-handover.log
           retention-days: 30

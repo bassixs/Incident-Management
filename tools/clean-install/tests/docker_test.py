@@ -140,6 +140,7 @@ finally:
   r=run('docker','inspect',n,check=False)
   if r.returncode:continue
   x=json.loads(r.stdout)[0]
+  if n.endswith('-caddy'):(OUT/(n+'-caddy.log')).write_bytes(run('docker','logs',x['Id'],check=False).stdout+run('docker','logs',x['Id'],check=False).stderr)
   if x['State']['Running']:run('docker','stop','-t','30',x['Id'],check=False)
   run('docker','rm','-v',x['Id'],check=False)
  for n in reversed(networks):run('docker','network','rm',n,check=False)
