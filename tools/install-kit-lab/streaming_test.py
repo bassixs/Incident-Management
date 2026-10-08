@@ -65,7 +65,7 @@ class StreamingDocker(lab.MigrationKit):
   result={'exitCode':p.returncode,'state':state,'elapsedSeconds':time.monotonic()-start,'scriptSha256':hashlib.sha256(script.read_bytes()).hexdigest(),'stdoutBytes':out.stat().st_size,'stderr':clean_stderr(err.read_text(errors='replace')),'containers':memory.values}
   (OUT/'heavy-baseline-memory.json').write_text(json.dumps(result,indent=2));print(json.dumps(result),flush=True)
   self.assertNotEqual(p.returncode,0,'Heavy original-exporter failure must be reproduced, not presumed')
-  self.assertIn('JS_HEAP_OOM',result['stderr']['markers'])
+  self.assertTrue('JS_HEAP_OOM' in result['stderr']['markers'] or (state['OOMKilled'] and p.returncode==137), 'Require positive memory-exhaustion evidence, not just any nonzero exit')
  def test_stream_matches_v1_and_shared_snapshot(self):
   from snapshot_exporter import Exporter
   from data_stream import receive
