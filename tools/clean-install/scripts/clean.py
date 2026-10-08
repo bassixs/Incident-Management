@@ -76,10 +76,10 @@ def untar(archive,dest,expected=None):
    p=dest/rel;p.parent.mkdir(parents=True,exist_ok=True)
    with t.extractfile(m) as src,p.open('xb') as out:os.chmod(p,0o600);shutil.copyfileobj(src,out)
  if expected is not None:verify_files(dest,expected)
-def environment(c,b):
+def environment(c,b,effective):
  root=pathlib.Path(c['root']);cfg=root/'imported-config';cfg.mkdir(mode=0o700);untar(b/'configuration.tar.gz',cfg)
  need(set(x.name for x in cfg.iterdir())=={'runtime.env','compose.yml'},'CONFIG_ARCHIVE_SET')
- e=envread(cfg/'runtime.env');need(e.get('BOT_TOKEN') and e.get('MEDIA_STORAGE','local')=='local','LOCAL_STORAGE_TOKEN_REQUIRED')
+ e=envread(effective);need(e.get('BOT_TOKEN') and e.get('MEDIA_STORAGE','local')=='local','LOCAL_STORAGE_TOKEN_REQUIRED')
  # Actual source policy can be a Compose override, not runtime.env.
  before=load(b/'backup.json');need(before['phase']=='new','NEW_SCHEMA_BACKUP_REQUIRED')
  e.update(DATABASE_URL=envread(root/'private/app-db.env')['DATABASE_URL'],WEBHOOK_URL='https://'+c['domain']+e.get('WEBHOOK_PATH','/webhook/max'),WEBHOOK_AUTO_REGISTER='false',INCIDENT_SLA_POLICY='WORKING_HOURS_V1',MEDIA_LOCAL_PATH='/app/data/uploads',NODE_EXTRA_CA_CERTS='/etc/ssl/max/russian-trusted-ca.pem',BOT_MODE='webhook',HTTP_HOST='0.0.0.0',HTTP_PORT='3000')
@@ -141,6 +141,7 @@ def infra(c,s):
 def restore(c,s,backup,envelope):
  need(s['phase']=='infra-ready','RESTORE_PHASE');inventory(c,s);need(app(c) is None,'APP_EXISTS');b=pathlib.Path(backup);e=load(envelope)
  for n,h in load(b/'checksums.json').items():need(pathlib.Path(n).name==n and sha(b/n)==h,'BACKUP_CHECKSUM_MISMATCH')
+ effective=pathlib.Path(envelope).parent/'effective-runtime.env';need(e.get('effectiveEnvSha256')==sha(effective),'EFFECTIVE_ENV_MISMATCH')
  v=load(b/'restore-result.json');need(v.get('databaseRows')==v.get('schema')==v.get('files')=='exact' and load(b/'restore-differences.json')['differenceCount']==0 and v['backupChecksumsSha256']==sha(b/'checksums.json'),'SOURCE_RESTORE_UNVERIFIED')
  meta=load(b/'backup.json');need(e.get('format')=='source-fence-v1' and e.get('backupChecksums')==sha(b/'checksums.json') and e.get('sourceStopped') is True and e['sourceIdentity']==meta['application'] and e['sourceIdentity']['image'] in (*IMAGES['main'][:2],*IMAGES['reserve'][:2]) and meta.get('finalRun'),'SOURCE_FENCE_REQUIRED')
  need(mg.schema_matches(meta['schema'],load(ROOT/'schema-expectations.json')['new']),'BACKUP_SCHEMA_NOT_NEW')
@@ -155,7 +156,7 @@ def restore(c,s,backup,envelope):
  os.chown(pathlib.Path(c['root'])/'uploads',1000,1000)
  snap=fingerprint(c,pathlib.Path(c['root'])/'state/restored')
  need(report(b/'data.json',snap,pathlib.Path(c['root'])/'state/restore-differences.json')==0,'TARGET_DATA_MISMATCH')
- environment(c,b);state(c,s,'verified',identity=identity,runtimeHash=sha(pathlib.Path(c['root'])/'private/runtime.env'),files=expected);print('TARGET_RESTORE_VERIFIED_NO_APP')
+ environment(c,b,effective);state(c,s,'verified',identity=identity,runtimeHash=sha(pathlib.Path(c['root'])/'private/runtime.env'),files=expected);print('TARGET_RESTORE_VERIFIED_NO_APP')
 def ready(c,cid):
  deadline=time.monotonic()+120
  while time.monotonic()<deadline:

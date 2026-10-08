@@ -33,3 +33,8 @@ No global prune, no docker compose down -v, no direct containerd file changes.
 
 Evidence is synthetic Docker/Linux, not certification of Astra patches, MAC labels, external ACME,
 public DNS, MAX TLS/media egress or NAT hairpin. Those are mandatory on-site preflight checks.
+
+The source seal also captures the actual stopped container effective environment into a separate
+0600 effective-runtime.env, bound by SHA256 in the envelope. This preserves Compose overrides
+without guessing from runtime.env alone. It is PRIVATE FINAL DATA, never part of the program ZIP.
+The target only replaces documented infrastructure settings; no shell sourcing/interpolation.

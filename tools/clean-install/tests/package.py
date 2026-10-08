@@ -2,6 +2,14 @@ import gzip,hashlib,json,pathlib,shutil,subprocess,zipfile
 ROOT=pathlib.Path(__file__).resolve().parents[3];K=ROOT/'tools/clean-install';OUT=ROOT/'clean-package';OUT.mkdir();D=OUT/'kit';D.mkdir()
 report=json.loads((ROOT/'clean-results/report.json').read_text());
 if not report['passed']:raise RuntimeError('NO_PACKAGE_FROM_FAILED_RUN')
+# Assert copied dependencies stayed byte-for-byte at the reviewed commit.
+checks=[]
+for p in sorted((K/'scripts/reviewed').iterdir()):
+ if not p.is_file():continue
+ original=(ROOT/'tools/migration-kit/scripts'/p.name).read_bytes()
+ if p.read_bytes()!=original:raise RuntimeError('REVIEWED_DEPENDENCY_CHANGED:'+p.name)
+ checks.append({'file':p.name,'sha256':hashlib.sha256(original).hexdigest()})
+(D/'REVIEWED-DEPENDENCIES.json').write_text(json.dumps(checks,indent=2))
 for n in ['scripts','docs']:shutil.copytree(K/n,D/n,ignore=shutil.ignore_patterns('__pycache__'))
 shutil.copyfile(ROOT/'verified-images/main-and-reserve.tar.gz',D/'main-and-reserve.tar.gz')
 infra=ROOT/'clean-results/image-ids.json';meta=json.loads(infra.read_text());shutil.copyfile(infra,D/'IMAGE-IDS.json')

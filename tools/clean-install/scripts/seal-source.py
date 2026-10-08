@@ -1,7 +1,7 @@
 """Seal a verified stopped-source final backup; never captures, stops or writes the source DB."""
 import argparse,json,pathlib,subprocess,sys,datetime,secrets
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parent))
-from clean import need,load,sha,inspect,save,IMAGES,o,stamp
+from clean import need,load,sha,inspect,save,IMAGES,o,stamp,text
 
 def seal(backup,receipt,dest):
  b=pathlib.Path(backup);r=load(receipt);m=load(b/'backup.json');v=load(b/'restore-result.json');d=pathlib.Path(dest)
@@ -17,7 +17,8 @@ def seal(backup,receipt,dest):
  token=dict(i.split('=',1) for i in x['Config']['Env'] if '=' in i).get('BOT_TOKEN');need(bool(token),'BOT_IDENTITY_MISSING')
  from clean import run
  for cid in run(['docker','ps','-q']).split():need(dict(i.split('=',1) for i in inspect(cid)['Config'].get('Env',[]) if '=' in i).get('BOT_TOKEN')!=token,'SOURCE_SECOND_APP_RUNNING')
- save(d,{'format':'source-fence-v1','at':stamp(),'sourceStopped':True,'sourceIdentity':r['identity'],'sourceFinishedAt':r['finishedAt'],'backupChecksums':sha(b/'checksums.json'),'stopReceiptHash':sha(receipt),'handoffCode':secrets.token_hex(16),'contract':'Source must remain stopped. A fresh confirmation from source operator is required immediately before first target start.'});print('SOURCE_FENCE_SEALED_KEEP_SOURCE_STOPPED')
+ effective=d.parent/'effective-runtime.env';need(not effective.exists(),'NEW_EFFECTIVE_ENV_REQUIRED');need(all('\n' not in v and '\r' not in v for v in x['Config']['Env']),'MULTILINE_EFFECTIVE_ENV_REVIEW');text(effective,'\n'.join(x['Config']['Env'])+'\n')
+ save(d,{'effectiveEnvSha256':sha(effective),'format':'source-fence-v1','at':stamp(),'sourceStopped':True,'sourceIdentity':r['identity'],'sourceFinishedAt':r['finishedAt'],'backupChecksums':sha(b/'checksums.json'),'stopReceiptHash':sha(receipt),'handoffCode':secrets.token_hex(16),'contract':'Source must remain stopped. A fresh confirmation from source operator is required immediately before first target start.'});print('SOURCE_FENCE_SEALED_KEEP_SOURCE_STOPPED')
 if __name__=='__main__':
  try:
   a=argparse.ArgumentParser();a.add_argument('--backup',required=True);a.add_argument('--stop-receipt',required=True);a.add_argument('--output',required=True);v=a.parse_args();seal(v.backup,v.stop_receipt,v.output)

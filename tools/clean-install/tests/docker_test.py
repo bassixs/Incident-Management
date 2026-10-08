@@ -76,6 +76,7 @@ def main():
  c.text(source/'private/runtime.env',''.join(k+'='+v+'\n' for k,v in env.items()))
  run('docker','run','--rm','--network',sc['project']+'_db','--env-file',source/'private/runtime.env','--entrypoint','npx',sc['images']['main'],'prisma','migrate','deploy')
  run('docker','run','--rm','--network',sc['project']+'_db','--env-file',source/'private/runtime.env','--mount',f'type=bind,src={T},dst=/tests,readonly','--mount',f'type=bind,src={source / "uploads"},dst=/app/data/uploads','--entrypoint','node',sc['images']['main'],'/tests/seed.cjs')
+ source_compose=c.load(source/'main.compose.json');source_compose['services']['app']['environment']={'SYNTHETIC_COMPOSE_ONLY':'preserved'};c.save(source/'main.compose.json',source_compose)
  control({'op':'rule','target':'user:10001','mode':'error','from':2,'status':503})
  c.compose(sc,'main',['create','--no-build','--pull','never','app']);app=c.app(sc)['Id'];run('docker','start',app);c.ready(sc,app)
  def row(conf):return json.loads(c.psql(conf,"SELECT row_to_json(t) FROM (SELECT status,payload,\"firstMessageId\" FROM \"OutboundMessage\" WHERE id='partial') t;"))
@@ -95,6 +96,7 @@ def main():
  wait(lambda:(target/'caddy-data/caddy/pki/authorities/local/root.crt').is_file())
  tls=run('curl','--silent','--show-error','--noproxy','*','--cacert',target/'caddy-data/caddy/pki/authorities/local/root.crt','--resolve','synthetic.localhost:24102:127.0.0.1','https://synthetic.localhost:24102/handover-check');check('Caddy HTTPS challenge with trusted synthetic CA',tls.stdout.decode()==tc['challenge'])
  original=(target/'main.compose.json').read_bytes();(target/'main.compose.json').write_bytes(original+b' ');check('changed configuration refuses',invoke(target,'status',ok=False).returncode!=0);(target/'main.compose.json').write_bytes(original)
+ check('effective Compose override preserved',c.envread(target/'private/runtime.env').get('SYNTHETIC_COMPOSE_ONLY')=='preserved')
  check('restored partial ACK unchanged',row(tc)['payload']['deliveryProgress']==partial)
  check('duplicate restore refuses',invoke(target,'restore','--backup',backup,'--envelope',envelope,ok=False).returncode!=0)
  check('wrong source confirmation refuses',invoke(target,'start','--confirm-source-stopped','wrong',ok=False).returncode!=0)
@@ -132,6 +134,12 @@ def main():
  with (target/'backup.lock').open('rb') as f:fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB);check('lock free after all errors',True)
  # Existing target contains current writes; no old DB restore is permitted.
  check('restoration over used DB forbidden',invoke(target,'restore','--backup',backup,'--envelope',envelope,ok=False).returncode!=0)
+ # Encryption roundtrip uses only a synthetic fixture/passphrase, never production data.
+ gd=OUT/'gpg';gd.mkdir(mode=0o700);plain=gd/'plain';plain.write_bytes(b'synthetic-final-package');enc=gd/'data.gpg';dec=gd/'restored';base=['gpg','--homedir',str(gd),'--batch','--yes','--pinentry-mode','loopback','--passphrase-fd','0'];pw=b'synthetic-test-only\n'
+ try:
+  run(*base,'--symmetric','--cipher-algo','AES256','--output',enc,plain,input=pw);run(*base,'--output',dec,'--decrypt',enc,input=pw);check('encrypted synthetic package roundtrip',plain.read_bytes()==dec.read_bytes());damaged=bytearray(enc.read_bytes());damaged[-10]^=1;(gd/'damaged.gpg').write_bytes(damaged);check('damaged encrypted package rejected',run(*base,'--output',gd/'invalid','--decrypt',gd/'damaged.gpg',input=pw,check=False).returncode!=0)
+ finally:run('gpgconf','--homedir',gd,'--kill','all',check=False)
+ check('no unexpected webhook mutations',not control()['unexpected'])
  (OUT/'image-ids.json').write_text(json.dumps({'application':tc['images'],'postgres':PGIMAGE,'caddy':CADDY},indent=2))
 finally_status=False
 try:main();finally_status=True
